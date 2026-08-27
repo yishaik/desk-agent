@@ -1,14 +1,16 @@
 import {
   createAgentSession,
   SessionManager,
+  ModelRuntime,
   type AgentSession,
   type ToolDefinition,
 } from '@earendil-works/pi-coding-agent';
 import { Type, type Static, type TObject, type TString, type TOptional, type TRecord, type TBoolean, type TUnknown } from 'typebox';
 import { createChildLogger } from '../core/logger.ts';
-import { loadSettings, getActiveConnectorToken } from '../core/settings.ts';
+import { loadSettings, getActiveConnectorToken, updateSettings } from '../core/settings.ts';
 import { config } from '../core/config.ts';
 import { OpenConnectorClient } from '../open-connector/client.ts';
+import { join } from 'node:path';
 
 const log = createChildLogger('pi-session');
 
@@ -16,22 +18,105 @@ interface ProjectSession {
   session: AgentSession;
   projectId: string;
   cwd: string;
+  modelRuntime: ModelRuntime;
 }
 
 const activeSessions = new Map<string, ProjectSession>();
 
-const CONFIRMATION_PATTERNS = [
-  /\.send_/i,
-  /\.create_/i,
-  /\.update_/i,
-  /\.delete_/i,
-  /\.remove_/i,
-  /\.post_/i,
-  /\.publish_/i,
+let sharedModelRuntime: ModelRuntime | null = null;
+
+const pendingConfirmations = new Map<string, {
+  actionId: string;
+  input: Record<string, unknown>;
+  connectionName?: string;
+  createdAt: number;
+}>();
+
+const MUTATING_ACTION_PATTERNS = [
+  /\.send[A-Z_]/i,
+  /\.create[A-Z_]/i,
+  /\.update[A-Z_]/i,
+  /\.delete[A-Z_]/i,
+  /\.remove[A-Z_]/i,
+  /\.post[A-Z_]/i,
+  /\.publish[A-Z_]/i,
+  /send[A-Z]/i,
+  /create[A-Z]/i,
+  /update[A-Z]/i,
+  /delete[A-Z]/i,
+  /remove[A-Z]/i,
+  /post[A-Z]/i,
+  /publish[A-Z]/i,
 ];
 
 function requiresConfirmation(actionId: string): boolean {
-  return CONFIRMATION_PATTERNS.some((pattern) => pattern.test(actionId));
+  return MUTATING_ACTION_PATTERNS.some((pattern) => pattern.test(actionId));
+}
+
+function generateConfirmationId(): string {
+  return `confirm_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+}
+
+export function getPendingConfirmation(confirmationId: string) {
+  return pendingConfirmations.get(confirmationId);
+}
+
+export function confirmAction(confirmationId: string): boolean {
+  const pending = pendingConfirmations.get(confirmationId);
+  if (pending) {
+    pendingConfirmations.delete(confirmationId);
+    return true;
+  }
+  return false;
+}
+
+export function cancelConfirmation(confirmationId: string): boolean {
+  return pendingConfirmations.delete(confirmationId);
+}
+
+export function cleanupOldConfirmations(): void {
+  const MAX_AGE_MS = 10 * 60 * 1000;
+  const now = Date.now();
+  for (const [id, pending] of pendingConfirmations) {
+    if (now - pending.createdAt > MAX_AGE_MS) {
+      pendingConfirmations.delete(id);
+    }
+  }
+}
+
+async function getOrCreateModelRuntime(): Promise<ModelRuntime> {
+  if (sharedModelRuntime) {
+    return sharedModelRuntime;
+  }
+
+  const piAgentDir = join(config.dataDir, 'pi-agent');
+  const { existsSync, mkdirSync } = await import('node:fs');
+  if (!existsSync(piAgentDir)) {
+    mkdirSync(piAgentDir, { recursive: true });
+  }
+
+  const authPath = join(piAgentDir, 'auth.json');
+  const modelsPath = join(piAgentDir, 'models.json');
+
+  log.info({ piAgentDir, authPath }, 'Creating ModelRuntime');
+
+  const runtime = await ModelRuntime.create({
+    authPath,
+    modelsPath,
+    allowModelNetwork: true,
+  });
+
+  if (config.modelApiKey) {
+    try {
+      await runtime.setRuntimeApiKey('anthropic', config.modelApiKey);
+      log.info('Set Anthropic API key from MODEL_API_KEY env var');
+    } catch (err) {
+      log.warn({ err }, 'Failed to set runtime API key - will use stored credentials or ANTHROPIC_API_KEY env var');
+    }
+  }
+
+  sharedModelRuntime = runtime;
+  return runtime;
 }
 
 const SearchActionsSchema = Type.Object({
@@ -124,17 +209,42 @@ function createOpenConnectorTools(projectId: string): ToolDefinition[] {
   const executeActionTool: ToolDefinition<typeof ExecuteActionSchema> = {
     name: 'oc_execute_action',
     label: 'Execute Action',
-    description: 'Execute an Open Connector action. For send/create/delete actions, you MUST ask for user confirmation first.',
+    description: 'Execute an Open Connector action. For send/create/delete actions, user must reply to confirm the action first.',
     parameters: ExecuteActionSchema,
     async execute(toolCallId, params: ExecuteActionParams, signal, onUpdate, ctx) {
-      if (requiresConfirmation(params.actionId) && !params.confirmed) {
-        return {
-          content: [{
-            type: 'text' as const,
-            text: `⚠️ Action "${params.actionId}" requires confirmation before execution.\n\nPlanned action:\n- Action: ${params.actionId}\n- Input: ${JSON.stringify(params.input, null, 2)}\n\nPlease ask the user to confirm before calling this tool again with confirmed: true.`,
-          }],
-          details: { needsConfirmation: true, actionId: params.actionId },
-        };
+      if (requiresConfirmation(params.actionId)) {
+        if (!params.confirmed) {
+          const confirmationId = generateConfirmationId();
+          pendingConfirmations.set(confirmationId, {
+            actionId: params.actionId,
+            input: params.input as Record<string, unknown>,
+            connectionName: params.connectionName,
+            createdAt: Date.now(),
+          });
+
+          return {
+            content: [{
+              type: 'text' as const,
+              text: `⚠️ Action "${params.actionId}" requires your confirmation.\n\n**Planned action:**\n- Action: ${params.actionId}\n- Input: ${JSON.stringify(params.input, null, 2)}\n\n**To approve:** Reply "yes" or "אשר" or "confirm"\n**To cancel:** Reply "no" or "בטל" or "cancel"\n\n_Confirmation ID: ${confirmationId}_`,
+            }],
+            details: { 
+              needsConfirmation: true, 
+              actionId: params.actionId,
+              confirmationId,
+            },
+          };
+        }
+
+        const confirmationIdMatch = String(params.confirmed).match(/confirm_\d+_[a-z0-9]+/);
+        if (!confirmationIdMatch) {
+          return {
+            content: [{
+              type: 'text' as const,
+              text: `❌ Invalid confirmation. The model cannot self-confirm actions. User must reply with "yes" or "confirm" to the confirmation message.`,
+            }],
+            details: { error: true, actionId: params.actionId, reason: 'invalid_confirmation' },
+          };
+        }
       }
 
       const client = getClient();
@@ -236,19 +346,33 @@ ${settings.timezone}
 Use the oc_* tools to interact with connected services:
 - oc_search_actions: Find available actions
 - oc_get_action_guide: Get action documentation  
-- oc_execute_action: Execute (confirm first for send/create/delete)
+- oc_execute_action: Execute (requires user confirmation for mutating actions)
 - oc_list_connections: List connected services
 
-Always confirm before sending, creating, or deleting anything.
+For send/create/update/delete actions, always wait for the user to confirm before executing.
 `);
   }
 
   log.info({ projectId, cwd: projectCwd }, 'Creating Pi session');
 
+  const modelRuntime = await getOrCreateModelRuntime();
   const customTools = createOpenConnectorTools(projectId);
+
+  const piAgentDir = join(config.dataDir, 'pi-agent');
+
+  let model;
+  if (settings.model) {
+    const [providerId, ...modelParts] = settings.model.split('/');
+    const modelId = modelParts.join('/') || settings.model;
+    model = modelRuntime.getModel(providerId ?? 'anthropic', modelId) ?? 
+            modelRuntime.getModel('anthropic', settings.model);
+  }
 
   const { session } = await createAgentSession({
     cwd: projectCwd,
+    agentDir: piAgentDir,
+    modelRuntime,
+    model,
     sessionManager: SessionManager.inMemory(projectCwd),
     customTools,
     tools: ['read', 'oc_search_actions', 'oc_get_action_guide', 'oc_execute_action', 'oc_list_connections'],
@@ -258,12 +382,30 @@ Always confirm before sending, creating, or deleting anything.
     session,
     projectId,
     cwd: projectCwd,
+    modelRuntime,
   };
 
   activeSessions.set(projectId, projectSession);
   log.info({ projectId }, 'Pi session created');
 
   return projectSession;
+}
+
+export async function setSessionModel(projectId: string, modelName: string): Promise<boolean> {
+  const existing = activeSessions.get(projectId);
+  if (!existing) {
+    log.warn({ projectId }, 'No session found to change model');
+    return false;
+  }
+
+  clearSession(projectId);
+  
+  updateSettings({ model: modelName });
+  
+  await getOrCreateSession(projectId);
+  
+  log.info({ projectId, model: modelName }, 'Model changed, session recreated');
+  return true;
 }
 
 export function clearSession(projectId: string): void {

@@ -163,9 +163,13 @@ addRoute('POST', '/auth', async (req, res) => {
   const token = body.token;
 
   if (token === config.pairToken) {
+    const isHttps = req.headers['x-forwarded-proto'] === 'https' || 
+                    req.headers.host?.startsWith('https') ||
+                    config.isProduction;
+    const securePart = isHttps ? '; Secure' : '';
     res.setHeader(
       'Set-Cookie',
-      `PAIR_TOKEN=${token}; Path=/; HttpOnly; SameSite=Strict; Max-Age=31536000`
+      `PAIR_TOKEN=${token}; Path=/; HttpOnly; SameSite=Strict; Max-Age=31536000${securePart}`
     );
     sendJson(res, { success: true });
   } else {
@@ -681,7 +685,7 @@ function getWizardHtml(settings: ReturnType<typeof loadSettings>, pairingState: 
       <div id="services">טוען...</div>
       <div class="btn-group">
         <button onclick="completeSetup()">סיום הגדרה</button>
-        <a href="${config.openConnectorUrl}" target="_blank">
+        <a href="/connector/" target="_blank">
           <button type="button" class="secondary">פתח Open Connector</button>
         </a>
       </div>
@@ -967,7 +971,7 @@ function getDashboardHtml(settings: ReturnType<typeof loadSettings>, pairingStat
         <h2>🔌 שירותים מחוברים</h2>
         <p style="color: #888; margin-bottom: 16px;">
           ניהול חיבורים ל-Open Connector
-          <a href="${config.openConnectorUrl}" target="_blank" style="color: #4f46e5;">פתח קונסול →</a>
+          <a href="/connector/" target="_blank" style="color: #4f46e5;">פתח קונסול →</a>
         </p>
         <div id="servicesList">טוען...</div>
       </div>
@@ -1116,6 +1120,12 @@ export function startServer(): void {
 
   server.listen(config.port, config.host, () => {
     log.info({ host: config.host, port: config.port }, 'HTTP server started');
-    console.log(`\n🌐 Web UI: http://${config.host}:${config.port}/?token=${config.pairToken}`);
+    
+    if (config.isProduction) {
+      console.log(`\n🌐 Web UI: http://${config.host}:${config.port}/`);
+      console.log(`   Enter your PAIR_TOKEN to authenticate`);
+    } else {
+      console.log(`\n🌐 Web UI: http://${config.host}:${config.port}/?token=${config.pairToken}`);
+    }
   });
 }

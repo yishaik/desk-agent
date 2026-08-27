@@ -1,12 +1,21 @@
 # Caddy configuration for Desk Agent
-# Replace {$DOMAIN} with your actual domain or use environment variable
-#
-# For local development without a domain, use:
-#   :80 {
-#     ...
-#   }
+# Uses DOMAIN environment variable (passed from docker-compose)
+# Defaults to localhost for local development
 
 {$DOMAIN:localhost} {
+    # Open Connector console - accessible at /connector/
+    handle_path /connector/* {
+        reverse_proxy connector:3000
+    }
+    
+    # Open Connector API routes
+    handle /v1/* {
+        reverse_proxy connector:3000
+    }
+    handle /api/connections* {
+        reverse_proxy connector:3000
+    }
+
     # Agent Web UI and API
     handle /api/* {
         reverse_proxy agent:3001
@@ -38,8 +47,8 @@
     }
 }
 
-# Open Connector console (optional separate subdomain)
-# Uncomment if you want connector on a subdomain
+# Alternative: Open Connector on separate subdomain
+# Uncomment if you prefer connector.yourdomain.com instead of /connector/
 #
 # connector.{$DOMAIN} {
 #     reverse_proxy connector:3000
@@ -47,5 +56,12 @@
 #     header {
 #         X-Content-Type-Options nosniff
 #         X-Frame-Options SAMEORIGIN
+#     }
+#     
+#     log {
+#         output file /data/connector-access.log {
+#             roll_size 10mb
+#             roll_keep 5
+#         }
 #     }
 # }

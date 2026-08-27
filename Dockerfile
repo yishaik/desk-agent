@@ -8,6 +8,7 @@ RUN apt-get update && apt-get install -y \
     python3 \
     make \
     g++ \
+    wget \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
@@ -22,8 +23,14 @@ RUN npm ci --only=production
 COPY src/ ./src/
 COPY tsconfig.json ./
 
-# Create data directory
-RUN mkdir -p /app/data
+# Copy Pi skills directory if present
+COPY .pi/ ./.pi/
+
+# Copy skills-pack for resource loading
+COPY skills-pack/ ./skills-pack/
+
+# Create data directory with proper structure
+RUN mkdir -p /app/data/pi-agent
 
 # Set environment
 ENV NODE_ENV=production
@@ -34,9 +41,9 @@ ENV PORT=3001
 # Expose port
 EXPOSE 3001
 
-# Health check
+# Health check using wget (curl not available in node:slim)
 HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
-  CMD curl -f http://localhost:3001/health || exit 1
+  CMD wget -q -O /dev/null http://localhost:3001/health || exit 1
 
 # Run the agent
 CMD ["node", "--experimental-strip-types", "src/index.ts"]

@@ -5,15 +5,102 @@ import { config } from '../core/config.ts';
 import type { Message, Settings } from '../core/types.ts';
 import { getWhatsAppClient } from './client.ts';
 import { OpenConnectorClient } from '../open-connector/client.ts';
-import { runPrompt, clearSession, getOrCreateSession } from '../agent/session.ts';
+import { 
+  runPrompt, 
+  clearSession, 
+  getOrCreateSession, 
+  setSessionModel,
+  getPendingConfirmation,
+  confirmAction,
+  cancelConfirmation,
+  cleanupOldConfirmations,
+} from '../agent/session.ts';
 
 const log = createChildLogger('handler');
 
 const COMMAND_PREFIX = '/';
 
+const CONFIRM_PATTERNS = [
+  /^(yes|כן|אשר|confirm|ok|אוקיי|בסדר)$/i,
+];
+
+const CANCEL_PATTERNS = [
+  /^(no|לא|בטל|cancel|ביטול)$/i,
+];
+
 interface CommandResult {
   handled: boolean;
   response?: string;
+}
+
+async function checkForConfirmationResponse(text: string): Promise<CommandResult> {
+  cleanupOldConfirmations();
+  
+  const confirmIdMatch = text.match(/confirm_\d+_[a-z0-9]+/);
+  if (confirmIdMatch) {
+    const confirmId = confirmIdMatch[0];
+    const pending = getPendingConfirmation(confirmId);
+    
+    if (pending) {
+      const isConfirm = CONFIRM_PATTERNS.some((p) => p.test(text.replace(confirmId, '').trim()));
+      const isCancel = CANCEL_PATTERNS.some((p) => p.test(text.replace(confirmId, '').trim())) || 
+                       text.toLowerCase().includes('cancel') || text.includes('בטל');
+      
+      if (isCancel) {
+        cancelConfirmation(confirmId);
+        return {
+          handled: true,
+          response: `❌ Action "${pending.actionId}" cancelled.`,
+        };
+      }
+      
+      if (isConfirm || text.trim() === confirmId) {
+        confirmAction(confirmId);
+        const client = new OpenConnectorClient();
+        try {
+          const result = await client.executeAction({
+            actionId: pending.actionId,
+            input: pending.input,
+            connectionName: pending.connectionName,
+          });
+          
+          if (!result.success) {
+            return {
+              handled: true,
+              response: `❌ Action failed: ${result.message}`,
+            };
+          }
+          
+          return {
+            handled: true,
+            response: `✅ Action "${pending.actionId}" executed successfully.\n\nResult:\n${JSON.stringify(result.data, null, 2)}`,
+          };
+        } catch (err) {
+          return {
+            handled: true,
+            response: `❌ Error: ${err instanceof Error ? err.message : String(err)}`,
+          };
+        }
+      }
+    }
+  }
+  
+  const isSimpleConfirm = CONFIRM_PATTERNS.some((p) => p.test(text.trim()));
+  const isSimpleCancel = CANCEL_PATTERNS.some((p) => p.test(text.trim()));
+  
+  if (isSimpleConfirm || isSimpleCancel) {
+    return { handled: false };
+  }
+  
+  return { handled: false };
+}
+
+function isSelfChat(message: Message, ownerJid: string): boolean {
+  const ownerPhone = ownerJid.split(':')[0]?.split('@')[0];
+  const toJid = message.to;
+  const toPhone = toJid.split(':')[0]?.split('@')[0];
+  
+  return message.isFromMe && toPhone === ownerPhone;
 }
 
 export async function handleMessage(message: Message): Promise<void> {
@@ -26,11 +113,16 @@ export async function handleMessage(message: Message): Promise<void> {
     return;
   }
 
+  if (!isSelfChat(message, ownerJid)) {
+    log.debug({ from: message.from, to: message.to, isFromMe: message.isFromMe }, 'Ignoring non-self-chat message');
+    return;
+  }
+
   const projectId = settings.activeProject;
   message.projectId = projectId;
   saveMessage(message);
 
-  if (message.isFromMe && message.body.startsWith(COMMAND_PREFIX)) {
+  if (message.body.startsWith(COMMAND_PREFIX)) {
     const result = await handleCommand(message.body, settings);
     if (result.handled && result.response) {
       await wa.sendMessage(ownerJid, result.response);
@@ -38,20 +130,26 @@ export async function handleMessage(message: Message): Promise<void> {
     return;
   }
 
-  if (message.isFromMe) {
-    await wa.sendReaction(ownerJid, message.id, '👀');
-    
-    try {
-      const response = await processWithPi(message, settings);
-      if (response) {
-        await wa.sendReaction(ownerJid, message.id, '✅');
-        await sendSplitMessage(ownerJid, response, message.id);
-      }
-    } catch (err) {
-      log.error({ err }, 'Error processing message');
-      await wa.sendReaction(ownerJid, message.id, '❌');
-      await wa.sendMessage(ownerJid, `שגיאה: ${err instanceof Error ? err.message : 'Unknown error'}`);
+  const confirmResponse = await checkForConfirmationResponse(message.body);
+  if (confirmResponse.handled) {
+    if (confirmResponse.response) {
+      await wa.sendMessage(ownerJid, confirmResponse.response);
     }
+    return;
+  }
+
+  await wa.sendReaction(ownerJid, message.id, '👀');
+  
+  try {
+    const response = await processWithPi(message, settings);
+    if (response) {
+      await wa.sendReaction(ownerJid, message.id, '✅');
+      await sendSplitMessage(ownerJid, response, message.id);
+    }
+  } catch (err) {
+    log.error({ err }, 'Error processing message');
+    await wa.sendReaction(ownerJid, message.id, '❌');
+    await wa.sendMessage(ownerJid, `שגיאה: ${err instanceof Error ? err.message : 'Unknown error'}`);
   }
 }
 
@@ -268,16 +366,26 @@ _היכנס לממשק הניהול לשינוי הגדרות_`,
       if (args.length === 0) {
         return {
           handled: true,
-          response: `מודל נוכחי: *${settings.model}*\n\nלהחלפה: /model <שם-מודל>\n\nדוגמאות:\n- /model claude-3-5-sonnet-20241022\n- /model gpt-4o\n\n_או השתמש ב-pi /login ו-/model בטרמינל_`,
+          response: `מודל נוכחי: *${settings.model}*\n\nלהחלפה: /model <שם-מודל>\n\nדוגמאות:\n- /model claude-3-5-sonnet-20241022\n- /model claude-sonnet-4-5\n- /model gpt-4o\n\n_או השתמש ב-pi /login ו-/model בטרמינל_`,
         };
       }
       
       const model = args.join(' ');
-      updateSettings({ model });
-      return {
-        handled: true,
-        response: `✅ מודל שונה ל: *${model}*`,
-      };
+      
+      const success = await setSessionModel(settings.activeProject, model);
+      
+      if (success) {
+        return {
+          handled: true,
+          response: `✅ מודל שונה ל: *${model}*\n\n_Pi session נוצר מחדש עם המודל החדש._`,
+        };
+      } else {
+        updateSettings({ model });
+        return {
+          handled: true,
+          response: `✅ מודל שונה ל: *${model}* (ישתנה בהודעה הבאה)`,
+        };
+      }
     }
 
     case 'login': {
