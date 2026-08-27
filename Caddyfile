@@ -1,0 +1,51 @@
+# Caddy configuration for Desk Agent
+# Replace {$DOMAIN} with your actual domain or use environment variable
+#
+# For local development without a domain, use:
+#   :80 {
+#     ...
+#   }
+
+{$DOMAIN:localhost} {
+    # Agent Web UI and API
+    handle /api/* {
+        reverse_proxy agent:3001
+    }
+    handle /auth {
+        reverse_proxy agent:3001
+    }
+    handle /health {
+        reverse_proxy agent:3001
+    }
+    handle {
+        reverse_proxy agent:3001
+    }
+
+    # Security headers
+    header {
+        X-Content-Type-Options nosniff
+        X-Frame-Options DENY
+        X-XSS-Protection "1; mode=block"
+        Referrer-Policy strict-origin-when-cross-origin
+    }
+
+    # Logging
+    log {
+        output file /data/access.log {
+            roll_size 10mb
+            roll_keep 5
+        }
+    }
+}
+
+# Open Connector console (optional separate subdomain)
+# Uncomment if you want connector on a subdomain
+#
+# connector.{$DOMAIN} {
+#     reverse_proxy connector:3000
+#     
+#     header {
+#         X-Content-Type-Options nosniff
+#         X-Frame-Options SAMEORIGIN
+#     }
+# }

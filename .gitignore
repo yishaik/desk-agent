@@ -1,3 +1,12 @@
+# desk-agent specific
+data/
+*.sqlite
+*.sqlite3
+.pi/
+
+# WhatsApp sessions (never commit)
+whatsapp-auth/
+
 # Logs
 logs
 *.log

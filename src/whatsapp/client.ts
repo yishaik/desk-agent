@@ -1,0 +1,300 @@
+import makeWASocket, {
+  DisconnectReason,
+  useMultiFileAuthState,
+  fetchLatestBaileysVersion,
+  makeCacheableSignalKeyStore,
+  WASocket,
+  proto,
+  BaileysEventMap,
+} from '@whiskeysockets/baileys';
+import { Boom } from '@hapi/boom';
+import { join } from 'node:path';
+import { existsSync, mkdirSync } from 'node:fs';
+import * as qrcode from 'qrcode-terminal';
+import pino from 'pino';
+import { config } from '../core/config.ts';
+import { createChildLogger } from '../core/logger.ts';
+import { loadSettings, updateSettings } from '../core/settings.ts';
+import type { PairingState, Message } from '../core/types.ts';
+
+const log = createChildLogger('whatsapp');
+
+export type MessageHandler = (message: Message) => Promise<void>;
+
+export class WhatsAppClient {
+  private socket: WASocket | null = null;
+  private messageHandlers: MessageHandler[] = [];
+  private pairingState: PairingState = { isPaired: false };
+  private reconnectAttempts = 0;
+  private maxReconnectAttempts = 5;
+  private ownerJid: string | null = null;
+
+  async connect(): Promise<void> {
+    const authDir = join(config.dataDir, 'whatsapp-auth');
+    if (!existsSync(authDir)) {
+      mkdirSync(authDir, { recursive: true });
+    }
+
+    const { state, saveCreds } = await useMultiFileAuthState(authDir);
+    const { version } = await fetchLatestBaileysVersion();
+
+    const baileysLogger = pino({ level: 'silent' });
+
+    this.socket = makeWASocket({
+      version,
+      logger: baileysLogger,
+      printQRInTerminal: false,
+      auth: {
+        creds: state.creds,
+        keys: makeCacheableSignalKeyStore(state.keys, baileysLogger),
+      },
+      generateHighQualityLinkPreview: true,
+    });
+
+    this.setupEventHandlers(saveCreds);
+    log.info('WhatsApp client initialized');
+  }
+
+  private setupEventHandlers(saveCreds: () => Promise<void>): void {
+    if (!this.socket) return;
+
+    this.socket.ev.on('connection.update', async (update) => {
+      const { connection, lastDisconnect, qr } = update;
+
+      if (qr) {
+        this.pairingState = {
+          isPaired: false,
+          qrCode: qr,
+          qrExpiry: Date.now() + 60000,
+        };
+        log.info('New QR code generated');
+        qrcode.generate(qr, { small: true });
+        console.log('\n[whatsapp] Scan the QR code above to pair WhatsApp');
+      }
+
+      if (connection === 'close') {
+        const statusCode = (lastDisconnect?.error as Boom)?.output?.statusCode;
+        const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
+
+        log.warn(
+          { statusCode, shouldReconnect, attempts: this.reconnectAttempts },
+          'Connection closed'
+        );
+
+        this.pairingState.isPaired = false;
+
+        if (shouldReconnect && this.reconnectAttempts < this.maxReconnectAttempts) {
+          this.reconnectAttempts++;
+          const delay = Math.min(1000 * Math.pow(2, this.reconnectAttempts), 30000);
+          log.info({ delay }, 'Reconnecting...');
+          setTimeout(() => this.connect(), delay);
+        } else if (statusCode === DisconnectReason.loggedOut) {
+          log.warn('Logged out, need to re-pair');
+          this.pairingState = { isPaired: false };
+        }
+      }
+
+      if (connection === 'open') {
+        this.pairingState = {
+          isPaired: true,
+          phoneNumber: this.socket?.user?.id?.split(':')[0],
+          name: this.socket?.user?.name,
+        };
+        this.ownerJid = this.socket?.user?.id ?? null;
+        this.reconnectAttempts = 0;
+
+        const settings = loadSettings();
+        if (!settings.ownerPhone && this.pairingState.phoneNumber) {
+          updateSettings({ ownerPhone: this.pairingState.phoneNumber });
+        }
+
+        log.info(
+          { phone: this.pairingState.phoneNumber, name: this.pairingState.name },
+          'Connected to WhatsApp'
+        );
+      }
+    });
+
+    this.socket.ev.on('creds.update', saveCreds);
+
+    this.socket.ev.on('messages.upsert', async (m) => {
+      if (m.type !== 'notify') return;
+
+      for (const msg of m.messages) {
+        await this.handleIncomingMessage(msg);
+      }
+    });
+  }
+
+  private async handleIncomingMessage(
+    msg: proto.IWebMessageInfo
+  ): Promise<void> {
+    if (!msg.message || !msg.key.remoteJid) return;
+
+    const isFromMe = msg.key.fromMe ?? false;
+    const remoteJid = msg.key.remoteJid;
+
+    if (!this.isOwnerMessage(remoteJid, isFromMe)) {
+      log.debug({ remoteJid }, 'Ignoring message from non-owner');
+      return;
+    }
+
+    const body = this.extractMessageBody(msg.message);
+    if (!body) return;
+
+    const message: Message = {
+      id: msg.key.id ?? `msg_${Date.now()}`,
+      from: isFromMe ? (this.ownerJid ?? remoteJid) : remoteJid,
+      to: isFromMe ? remoteJid : (this.ownerJid ?? remoteJid),
+      body,
+      timestamp: msg.messageTimestamp as number ?? Math.floor(Date.now() / 1000),
+      isFromMe,
+    };
+
+    log.debug({ messageId: message.id, isFromMe }, 'Processing message');
+
+    for (const handler of this.messageHandlers) {
+      try {
+        await handler(message);
+      } catch (err) {
+        log.error({ err, messageId: message.id }, 'Message handler error');
+      }
+    }
+  }
+
+  private isOwnerMessage(remoteJid: string, isFromMe: boolean): boolean {
+    if (isFromMe) return true;
+    if (remoteJid === this.ownerJid) return true;
+    if (remoteJid.endsWith('@s.whatsapp.net')) {
+      const phoneFromJid = remoteJid.split('@')[0];
+      const ownerPhone = this.pairingState.phoneNumber;
+      return phoneFromJid === ownerPhone;
+    }
+    return false;
+  }
+
+  private extractMessageBody(message: proto.IMessage): string | null {
+    if (message.conversation) return message.conversation;
+    if (message.extendedTextMessage?.text) return message.extendedTextMessage.text;
+    if (message.imageMessage?.caption) return message.imageMessage.caption;
+    if (message.videoMessage?.caption) return message.videoMessage.caption;
+    if (message.documentMessage?.caption) return message.documentMessage.caption;
+    return null;
+  }
+
+  onMessage(handler: MessageHandler): void {
+    this.messageHandlers.push(handler);
+  }
+
+  async sendMessage(jid: string, text: string): Promise<void> {
+    if (!this.socket) {
+      throw new Error('WhatsApp client not connected');
+    }
+
+    const MAX_LENGTH = 4096;
+    const parts = this.splitMessage(text, MAX_LENGTH);
+
+    for (const part of parts) {
+      await this.socket.sendMessage(jid, { text: part });
+      if (parts.length > 1) {
+        await new Promise((r) => setTimeout(r, 500));
+      }
+    }
+
+    log.debug({ jid, parts: parts.length }, 'Message sent');
+  }
+
+  private splitMessage(text: string, maxLength: number): string[] {
+    if (text.length <= maxLength) return [text];
+
+    const parts: string[] = [];
+    let remaining = text;
+
+    while (remaining.length > 0) {
+      if (remaining.length <= maxLength) {
+        parts.push(remaining);
+        break;
+      }
+
+      let splitIndex = remaining.lastIndexOf('\n', maxLength);
+      if (splitIndex === -1 || splitIndex < maxLength / 2) {
+        splitIndex = remaining.lastIndexOf(' ', maxLength);
+      }
+      if (splitIndex === -1 || splitIndex < maxLength / 2) {
+        splitIndex = maxLength;
+      }
+
+      parts.push(remaining.slice(0, splitIndex));
+      remaining = remaining.slice(splitIndex).trimStart();
+    }
+
+    return parts;
+  }
+
+  async sendReaction(jid: string, messageId: string, emoji: string): Promise<void> {
+    if (!this.socket) {
+      throw new Error('WhatsApp client not connected');
+    }
+
+    await this.socket.sendMessage(jid, {
+      react: {
+        text: emoji,
+        key: {
+          remoteJid: jid,
+          id: messageId,
+        },
+      },
+    });
+  }
+
+  async sendFile(
+    jid: string,
+    buffer: Buffer,
+    filename: string,
+    mimetype: string,
+    caption?: string
+  ): Promise<void> {
+    if (!this.socket) {
+      throw new Error('WhatsApp client not connected');
+    }
+
+    await this.socket.sendMessage(jid, {
+      document: buffer,
+      mimetype,
+      fileName: filename,
+      caption,
+    });
+
+    log.debug({ jid, filename }, 'File sent');
+  }
+
+  getPairingState(): PairingState {
+    return { ...this.pairingState };
+  }
+
+  getOwnerJid(): string | null {
+    return this.ownerJid;
+  }
+
+  isConnected(): boolean {
+    return this.pairingState.isPaired;
+  }
+
+  async disconnect(): Promise<void> {
+    if (this.socket) {
+      await this.socket.logout();
+      this.socket = null;
+      this.pairingState = { isPaired: false };
+      log.info('Disconnected from WhatsApp');
+    }
+  }
+}
+
+let clientInstance: WhatsAppClient | null = null;
+
+export function getWhatsAppClient(): WhatsAppClient {
+  if (!clientInstance) {
+    clientInstance = new WhatsAppClient();
+  }
+  return clientInstance;
+}
