@@ -2,7 +2,11 @@
 data/
 *.sqlite
 *.sqlite3
-.pi/
+
+# Pi runtime data (but keep skills and extensions templates)
+.pi/agent/
+!.pi/skills/
+!.pi/extensions/
 
 # WhatsApp sessions (never commit)
 whatsapp-auth/

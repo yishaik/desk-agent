@@ -71,8 +71,10 @@ nano .env
 # טוקן גישה לממשק (צור אקראי)
 PAIR_TOKEN=$(openssl rand -hex 32)
 
-# מפתח API של Anthropic
+# אפשרות א׳: מפתח API של Anthropic
 MODEL_API_KEY=sk-ant-...
+
+# אפשרות ב׳: השתמש ב-pi /login במקום (ראה למטה)
 
 # טוקן Open Connector (ייצור אחרי ההפעלה הראשונה)
 OPEN_CONNECTOR_TOKEN=
@@ -103,7 +105,28 @@ docker compose logs -f
 2. סרוק את ה-QR עם WhatsApp (הגדרות → מכשירים מקושרים → קשר מכשיר)
 3. המתן לחיבור
 
-## שלב 6: יצירת טוקן Open Connector
+## שלב 6: התחברות לספק AI
+
+**אפשרות א׳ - מנוי (ללא API key):**
+```bash
+# בטרמינל בשרת
+docker compose exec agent npx pi /login
+
+# בחר ספק:
+# - Anthropic (Claude Pro/Max)
+# - OpenAI (ChatGPT Plus/Pro)
+# - GitHub Copilot
+# וכו׳
+```
+
+**אפשרות ב׳ - API key:**
+```bash
+# עדכן .env
+MODEL_API_KEY=sk-ant-...
+docker compose restart agent
+```
+
+## שלב 7: יצירת טוקן Open Connector
 
 1. פתח Open Connector: `https://agent.example.com:3000` (או דרך Docker network)
 2. לך ל-Access → Create Runtime Token
@@ -111,7 +134,7 @@ docker compose logs -f
 4. עדכן ב-.env: `OPEN_CONNECTOR_TOKEN=oct_...`
 5. הפעל מחדש: `docker compose restart agent`
 
-## שלב 7: חיבור שירותים
+## שלב 8: חיבור שירותים
 
 ### Gmail ו-Google Calendar
 
@@ -129,7 +152,7 @@ docker compose logs -f
 
 ראה תיעוד Open Connector: https://github.com/oomol-lab/open-connector
 
-## שלב 8: בדיקה
+## שלב 9: בדיקה
 
 שלח הודעה לעצמך ב-WhatsApp:
 ```

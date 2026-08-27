@@ -2,21 +2,24 @@
 
 Personal WhatsApp agent template for one SMB. Pair, connect tools, one gated stack per customer.
 
+**Built on [Pi Coding Agent](https://github.com/earendil-works/pi)** - a minimal terminal coding harness with extensions, skills, and tools.
+
 **10 minutes to a working agent:**
 1. `docker compose up`
 2. Open the URL, enter your pair token
 3. Scan QR with WhatsApp
-4. Connect your Gmail/Calendar in Open Connector
-5. Message yourself to talk to your agent
+4. Log in to your AI provider: `pi /login` (or set `MODEL_API_KEY`)
+5. Connect your services in Open Connector
+6. Message yourself to talk to your agent
 
 ## What You Get
 
 - **WhatsApp agent** that only responds to messages you send to yourself
+- **Pi runtime** with sessions, skills, extensions, and tool execution
+- **Open Connector tools** - search, get guides, execute actions (with confirmation)
 - **Web UI** for pairing, settings, and service connections
-- **Open Connector integration** for Gmail, Calendar, Notion, and 1000+ more services
-- **Per-project API keys** for isolating different business contexts
-- **Docker Compose stack** with automatic HTTPS via Caddy
-- **Starter skill packs** for common tasks (inbox, calendar, light CRM)
+- **Per-project API keys** for isolating different business contexts with separate tokens
+- **Docker Compose stack** (one stack per customer) with automatic HTTPS via Caddy
 
 ## Quick Start
 
@@ -32,6 +35,13 @@ Personal WhatsApp agent template for one SMB. Pair, connect tools, one gated sta
 ```bash
 # Install dependencies
 npm install
+
+# Log in to your AI provider (Claude, OpenAI, etc.)
+# Option A: Use your subscription
+npx pi /login
+
+# Option B: Use API key
+export MODEL_API_KEY=sk-ant-...
 
 # Start the agent (generates PAIR_TOKEN on first run)
 npm run dev
@@ -86,28 +96,36 @@ All configuration is via environment variables. See `.env.example` for the full 
                       ▼
 ┌─────────────────────────────────────────────────────┐
 │              Desk Agent (this repo)                  │
-│  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐  │
-│  │  WhatsApp   │  │  HTTP API   │  │  AI Model   │  │
-│  │   Client    │  │  + Web UI   │  │   Client    │  │
-│  │  (Baileys)  │  │             │  │             │  │
-│  └──────┬──────┘  └──────┬──────┘  └──────┬──────┘  │
-│         │                │                │          │
-│         └────────────────┼────────────────┘          │
-│                          │                           │
-│                    ┌─────┴─────┐                     │
-│                    │  Memory   │                     │
-│                    │ (SQLite)  │                     │
-│                    └───────────┘                     │
+│                                                      │
+│  ┌─────────────────────────────────────────────┐    │
+│  │             Pi Coding Agent                  │    │
+│  │  ┌──────────┐  ┌──────────┐  ┌──────────┐  │    │
+│  │  │ Sessions │  │  Skills  │  │Extensions│  │    │
+│  │  │ /project │  │.pi/skills│  │  Tools   │  │    │
+│  │  └──────────┘  └──────────┘  └──────────┘  │    │
+│  └─────────────────────┬───────────────────────┘    │
+│                        │                             │
+│  ┌─────────────┐  ┌────┴────┐  ┌─────────────┐     │
+│  │  WhatsApp   │  │  HTTP   │  │   Memory    │     │
+│  │   Client    │  │  + UI   │  │  (SQLite)   │     │
+│  │  (Baileys)  │  │         │  │             │     │
+│  └─────────────┘  └─────────┘  └─────────────┘     │
 └─────────────────────┬───────────────────────────────┘
-                      │
+                      │ Open Connector Tools:
+                      │ oc_search_actions
+                      │ oc_get_action_guide
+                      │ oc_execute_action
                       ▼
 ┌─────────────────────────────────────────────────────┐
-│              Open Connector                          │
+│              Open Connector (fork)                   │
 │         (Auth gateway for SaaS apps)                 │
+│     github.com/yishaik/open-connector                │
 │                                                      │
 │   Gmail │ Calendar │ Notion │ Slack │ 1000+ more    │
 └─────────────────────────────────────────────────────┘
 ```
+
+**One stack per customer** - Each business gets their own isolated Docker Compose deployment. No shared database, no multi-tenant risks.
 
 ## Web UI
 
@@ -130,11 +148,43 @@ Send these to yourself in WhatsApp:
 |---------|-------------|
 | `/help` | Show available commands |
 | `/status` | Check system status |
-| `/project [name]` | Switch or create a project |
+| `/project [name]` | Switch or create a project (creates new Pi session) |
 | `/projects` | List all projects |
 | `/mode [shared\|per-project]` | Change API key mode |
 | `/services` | List connected services |
 | `/settings` | View current settings |
+| `/model [name]` | Switch AI model |
+| `/login` | Instructions for AI provider login |
+
+## Pi Integration
+
+Desk Agent uses Pi as its AI runtime:
+
+- **Sessions** - Each project gets a separate Pi session with history
+- **Skills** - Add capabilities via `.pi/skills/` 
+- **Extensions** - Custom tools via `.pi/extensions/`
+- **Model switching** - Use `/model` or `pi /login` for provider login
+
+### Logging In
+
+Pi supports subscription logins (no API key needed):
+
+```bash
+# In the terminal where the agent runs
+npx pi /login
+
+# Then select:
+# - Anthropic (Claude Pro/Max subscription)
+# - OpenAI (ChatGPT Plus/Pro)
+# - GitHub Copilot
+# etc.
+```
+
+Or use API keys:
+```bash
+export MODEL_API_KEY=sk-ant-...
+export MODEL_API_URL=https://api.anthropic.com/v1/messages  # optional
+```
 
 ## API Key Modes
 

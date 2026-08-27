@@ -38,8 +38,15 @@ services:
       start_period: 30s
 
   # Open Connector - Auth gateway for SaaS apps
+  # Built from yishaik/open-connector fork (has token-grant + action-policy features)
   connector:
-    image: ghcr.io/oomol-lab/open-connector:latest
+    build:
+      context: https://github.com/yishaik/open-connector.git
+      dockerfile: docker/Dockerfile
+    # Alternative: clone locally and use local path:
+    # build:
+    #   context: ../open-connector
+    #   dockerfile: docker/Dockerfile
     container_name: desk-connector
     restart: unless-stopped
     environment:

@@ -2,19 +2,38 @@
 
 ## Architecture
 
-Desk Agent is a personal WhatsApp agent template for SMBs. It connects to Open Connector for SaaS integrations.
+Desk Agent is a personal WhatsApp agent template for SMBs built on the Pi Coding Agent runtime. It connects to Open Connector for SaaS integrations.
+
+**One stack per customer** - Each deployment is an isolated Docker Compose stack with no shared state between customers.
 
 ```
 src/
 ├── core/           # Config, types, settings, memory
-├── whatsapp/       # Baileys client, message handling
+├── whatsapp/       # Baileys client, message handling (uses Pi sessions)
 ├── http/           # Express-like HTTP server, Web UI
-├── open-connector/ # Open Connector API client
-└── skills/         # Skill definitions and handlers
+└── open-connector/ # Open Connector API client (token resolution)
 
-skills-pack/        # Pre-built skill configurations
+.pi/
+├── extensions/     # Pi extensions
+│   └── open-connector/  # OC tools: search, guide, execute
+└── skills/         # Pi skills
+    └── open-connector/  # OC skill documentation
+
+skills-pack/        # Pre-built skill configurations (for reference)
 data/              # Runtime data (gitignored)
 ```
+
+## Pi Integration
+
+The handler uses Pi Coding Agent SDK for:
+- **Sessions** - Each project gets a separate Pi session
+- **Extensions** - Custom tools via `.pi/extensions/`
+- **Skills** - On-demand capabilities via `.pi/skills/`
+- **Model runtime** - Multi-provider LLM support
+
+Login options:
+- `pi /login` - Use existing Claude Pro/Max, ChatGPT Plus/Pro subscription
+- `MODEL_API_KEY` env - Direct API key
 
 ## Code Style
 
@@ -113,20 +132,48 @@ case 'newcmd': {
 }
 ```
 
-### New Skill Pack
+### New Pi Extension
 
-Create `skills-pack/your-skill.json`:
+Create `.pi/extensions/my-extension/index.ts`:
 
-```json
-{
-  "id": "your-skill",
-  "name": "Your Skill",
-  "description": "...",
-  "requiredServices": ["service1"],
-  "actions": ["service1.action"],
-  "prompts": {},
-  "confirmationRequired": []
+```typescript
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { Type } from "typebox";
+
+export default function (pi: ExtensionAPI) {
+  pi.registerTool({
+    name: "my_tool",
+    label: "My Tool",
+    description: "Does something useful",
+    parameters: Type.Object({
+      input: Type.String({ description: "Input value" }),
+    }),
+    async execute(toolCallId, params, signal, onUpdate, ctx) {
+      return {
+        content: [{ type: "text", text: `Result: ${params.input}` }],
+        details: {},
+      };
+    },
+  });
 }
+```
+
+### New Pi Skill
+
+Create `.pi/skills/my-skill/SKILL.md`:
+
+```markdown
+# My Skill
+
+Use this skill when the user wants to do X.
+
+## Steps
+1. First step
+2. Second step
+
+## Examples
+- User: "Do X"
+- Response: Use my_tool with appropriate input
 ```
 
 ## Deployment
