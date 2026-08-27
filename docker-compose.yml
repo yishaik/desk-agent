@@ -4,8 +4,9 @@
 # Usage:
 #   1. Copy .env.example to .env and configure
 #   2. docker compose up -d
-#   3. Open https://your-domain.com/?token=YOUR_PAIR_TOKEN
-#   4. Scan QR code to pair WhatsApp
+#   3. Open https://your-domain.com (or http://localhost if no DOMAIN set)
+#   4. Enter your PAIR_TOKEN to authenticate
+#   5. Scan QR code to pair WhatsApp
 
 services:
   # Desk Agent - WhatsApp bot with AI
@@ -23,6 +24,7 @@ services:
       - OPEN_CONNECTOR_TOKEN=${OPEN_CONNECTOR_TOKEN}
       - MODEL_API_KEY=${MODEL_API_KEY}
       - MODEL_API_URL=${MODEL_API_URL:-https://api.anthropic.com/v1/messages}
+      - ANTHROPIC_API_KEY=${MODEL_API_KEY}
       - LOG_LEVEL=${LOG_LEVEL:-info}
     volumes:
       - agent-data:/app/data
@@ -31,7 +33,7 @@ services:
     networks:
       - desk-network
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:3001/health"]
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://localhost:3001/health"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -62,7 +64,7 @@ services:
     networks:
       - desk-network
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:3000/v1/health"]
+      test: ["CMD", "node", "-e", "require('http').get('http://localhost:3000/v1/health', r => process.exit(r.statusCode === 200 ? 0 : 1)).on('error', () => process.exit(1))"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -76,6 +78,8 @@ services:
     ports:
       - "80:80"
       - "443:443"
+    environment:
+      - DOMAIN=${DOMAIN:-localhost}
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy-data:/data

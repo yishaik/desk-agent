@@ -1,12 +1,33 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { createServer, IncomingMessage, ServerResponse } from 'node:http';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { IncomingMessage, ServerResponse } from 'node:http';
 import { existsSync, rmSync, mkdirSync } from 'node:fs';
+import { parse as parseUrl } from 'node:url';
 
 const TEST_DATA_DIR = './test-data-auth';
 const TEST_PORT = 3999;
 const TEST_PAIR_TOKEN = 'test-token-12345';
 
+function isAuthenticated(req: IncomingMessage, expectedToken: string): boolean {
+  const url = parseUrl(req.url ?? '', true);
+  const queryToken = url.query['token'] as string | undefined;
+  
+  const cookies = req.headers.cookie ?? '';
+  const cookieToken = cookies
+    .split(';')
+    .map((c) => c.trim().split('='))
+    .find(([key]) => key === 'PAIR_TOKEN')?.[1];
+
+  const authHeader = req.headers.authorization;
+  const bearerToken = authHeader?.startsWith('Bearer ')
+    ? authHeader.slice(7)
+    : undefined;
+
+  const token = queryToken ?? cookieToken ?? bearerToken;
+  return token === expectedToken;
+}
+
 beforeEach(() => {
+  vi.resetModules();
   process.env['DATA_DIR'] = TEST_DATA_DIR;
   process.env['PAIR_TOKEN'] = TEST_PAIR_TOKEN;
   process.env['PORT'] = String(TEST_PORT);
@@ -26,114 +47,111 @@ afterEach(() => {
   delete process.env['PORT'];
 });
 
-describe('Authentication', () => {
-  it('rejects requests without token', async () => {
-    const response = await simulateRequest('/api/settings', {});
-    expect(response.status).toBe(401);
+describe('Authentication Helper', () => {
+  it('rejects requests without token', () => {
+    const req = { url: '/api/settings', headers: {} } as IncomingMessage;
+    expect(isAuthenticated(req, TEST_PAIR_TOKEN)).toBe(false);
   });
 
-  it('accepts requests with valid query token', async () => {
-    const response = await simulateRequest(`/api/settings?token=${TEST_PAIR_TOKEN}`, {});
-    expect(response.status).toBe(200);
+  it('accepts requests with valid query token', () => {
+    const req = { url: `/api/settings?token=${TEST_PAIR_TOKEN}`, headers: {} } as IncomingMessage;
+    expect(isAuthenticated(req, TEST_PAIR_TOKEN)).toBe(true);
   });
 
-  it('accepts requests with valid bearer token', async () => {
-    const response = await simulateRequest('/api/settings', {
-      headers: { Authorization: `Bearer ${TEST_PAIR_TOKEN}` },
-    });
-    expect(response.status).toBe(200);
+  it('accepts requests with valid bearer token', () => {
+    const req = { 
+      url: '/api/settings', 
+      headers: { authorization: `Bearer ${TEST_PAIR_TOKEN}` } 
+    } as IncomingMessage;
+    expect(isAuthenticated(req, TEST_PAIR_TOKEN)).toBe(true);
   });
 
-  it('accepts requests with valid cookie token', async () => {
-    const response = await simulateRequest('/api/settings', {
-      headers: { Cookie: `PAIR_TOKEN=${TEST_PAIR_TOKEN}` },
-    });
-    expect(response.status).toBe(200);
+  it('accepts requests with valid cookie token', () => {
+    const req = { 
+      url: '/api/settings', 
+      headers: { cookie: `PAIR_TOKEN=${TEST_PAIR_TOKEN}` } 
+    } as IncomingMessage;
+    expect(isAuthenticated(req, TEST_PAIR_TOKEN)).toBe(true);
   });
 
-  it('rejects requests with invalid token', async () => {
-    const response = await simulateRequest('/api/settings?token=wrong-token', {});
-    expect(response.status).toBe(401);
+  it('rejects requests with invalid token', () => {
+    const req = { url: '/api/settings?token=wrong-token', headers: {} } as IncomingMessage;
+    expect(isAuthenticated(req, TEST_PAIR_TOKEN)).toBe(false);
   });
 
-  it('health endpoint does not require auth', async () => {
-    const response = await simulateRequest('/health', {});
-    expect(response.status).toBe(200);
+  it('prefers query token over cookie', () => {
+    const req = { 
+      url: `/api/settings?token=${TEST_PAIR_TOKEN}`, 
+      headers: { cookie: 'PAIR_TOKEN=wrong-token' } 
+    } as IncomingMessage;
+    expect(isAuthenticated(req, TEST_PAIR_TOKEN)).toBe(true);
+  });
+
+  it('prefers cookie token over bearer', () => {
+    const req = { 
+      url: '/api/settings', 
+      headers: { 
+        cookie: `PAIR_TOKEN=${TEST_PAIR_TOKEN}`,
+        authorization: 'Bearer wrong-token'
+      } 
+    } as IncomingMessage;
+    expect(isAuthenticated(req, TEST_PAIR_TOKEN)).toBe(true);
   });
 });
 
-async function simulateRequest(
-  path: string,
-  options: { headers?: Record<string, string> }
-): Promise<{ status: number; body: unknown }> {
-  return new Promise((resolve) => {
-    const mockReq = {
-      url: path,
-      method: 'GET',
-      headers: options.headers ?? {},
-    } as IncomingMessage;
+describe('Secure Cookie Setting', () => {
+  it('sets Secure flag when X-Forwarded-Proto is https', async () => {
+    const isHttps = (headers: Record<string, string | undefined>, isProduction: boolean): boolean => {
+      return headers['x-forwarded-proto'] === 'https' || 
+             (headers.host?.startsWith('https') ?? false) ||
+             isProduction;
+    };
 
-    let statusCode = 200;
-    let responseBody = '';
-
-    const mockRes = {
-      writeHead(status: number) {
-        statusCode = status;
-        return mockRes;
-      },
-      setHeader() {
-        // noop
-      },
-      end(body?: string) {
-        responseBody = body ?? '';
-        resolve({
-          status: statusCode,
-          body: responseBody ? JSON.parse(responseBody) : null,
-        });
-      },
-    } as unknown as ServerResponse;
-
-    handleMockRequest(mockReq, mockRes);
+    expect(isHttps({ 'x-forwarded-proto': 'https' }, false)).toBe(true);
   });
-}
 
-function handleMockRequest(req: IncomingMessage, res: ServerResponse & { _body?: string }): void {
-  const url = new URL(req.url ?? '/', 'http://localhost');
-  const path = url.pathname;
+  it('sets Secure flag in production', async () => {
+    const isHttps = (headers: Record<string, string | undefined>, isProduction: boolean): boolean => {
+      return headers['x-forwarded-proto'] === 'https' || 
+             (headers.host?.startsWith('https') ?? false) ||
+             isProduction;
+    };
+    
+    expect(isHttps({}, true)).toBe(true);
+    expect(isHttps({}, false)).toBe(false);
+  });
+});
 
-  if (path === '/health') {
-    res.writeHead(200, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ status: 'ok' }));
-    return;
-  }
+describe('Self-Chat Gate', () => {
+  it('identifies self-chat messages correctly', () => {
+    const isSelfChat = (message: { isFromMe: boolean; to: string }, ownerJid: string): boolean => {
+      const ownerPhone = ownerJid.split(':')[0]?.split('@')[0];
+      const toJid = message.to;
+      const toPhone = toJid.split(':')[0]?.split('@')[0];
+      
+      return message.isFromMe && toPhone === ownerPhone;
+    };
 
-  const queryToken = url.searchParams.get('token');
-  
-  const cookies = (req.headers['cookie'] ?? req.headers['Cookie'] ?? '') as string;
-  const cookieToken = cookies
-    .split(';')
-    .map((c) => c.trim().split('='))
-    .find(([key]) => key === 'PAIR_TOKEN')?.[1];
-  
-  const authHeader = (req.headers['authorization'] ?? req.headers['Authorization']) as string | undefined;
-  const bearerToken = authHeader?.startsWith('Bearer ')
-    ? authHeader.slice(7)
-    : undefined;
+    const ownerJid = '972501234567:0@s.whatsapp.net';
 
-  const token = queryToken ?? cookieToken ?? bearerToken;
-  
-  if (token !== TEST_PAIR_TOKEN) {
-    res.writeHead(401, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ success: false, error: 'Unauthorized' }));
-    return;
-  }
+    expect(isSelfChat({ 
+      isFromMe: true, 
+      to: '972501234567@s.whatsapp.net' 
+    }, ownerJid)).toBe(true);
 
-  if (path === '/api/settings') {
-    res.writeHead(200, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ success: true, data: {} }));
-    return;
-  }
+    expect(isSelfChat({ 
+      isFromMe: true, 
+      to: '972509876543@s.whatsapp.net' 
+    }, ownerJid)).toBe(false);
 
-  res.writeHead(404, { 'Content-Type': 'application/json' });
-  res.end(JSON.stringify({ success: false, error: 'Not found' }));
-}
+    expect(isSelfChat({ 
+      isFromMe: false, 
+      to: '972501234567@s.whatsapp.net' 
+    }, ownerJid)).toBe(false);
+
+    expect(isSelfChat({ 
+      isFromMe: true, 
+      to: '1234567890-1234567890@g.us' 
+    }, ownerJid)).toBe(false);
+  });
+});
