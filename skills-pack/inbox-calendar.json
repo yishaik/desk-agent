@@ -1,0 +1,50 @@
+{
+  "id": "inbox-calendar",
+  "name": "Inbox & Calendar",
+  "description": "Email inbox management and calendar operations - read emails, schedule meetings, check availability",
+  "version": "1.0.0",
+  "requiredServices": ["gmail", "google-calendar"],
+  "actions": [
+    "gmail.list_messages",
+    "gmail.get_message",
+    "gmail.search_messages",
+    "gmail.send_email",
+    "gmail.create_draft",
+    "gmail.list_labels",
+    "google-calendar.list_events",
+    "google-calendar.get_event",
+    "google-calendar.create_event",
+    "google-calendar.update_event",
+    "google-calendar.delete_event",
+    "google-calendar.list_calendars"
+  ],
+  "prompts": {
+    "inbox_summary": "Summarize my recent emails. Focus on:\n- Urgent items needing response\n- Important updates from key contacts\n- Action items mentioned\n\nGroup by priority and sender category.",
+    "schedule_meeting": "I want to schedule a meeting. Please:\n1. Check my calendar availability\n2. Suggest 2-3 time slots\n3. Create the calendar event when I confirm\n\nAlways confirm before creating events.",
+    "email_draft": "Help me draft an email response. I'll describe what I want to say, and you'll create a professional draft. Always show me the draft before sending.",
+    "daily_briefing": "Give me a morning briefing:\n1. Today's calendar events\n2. Unread important emails\n3. Any scheduling conflicts\n4. Suggested priorities"
+  },
+  "confirmationRequired": [
+    "gmail.send_email",
+    "google-calendar.create_event",
+    "google-calendar.update_event",
+    "google-calendar.delete_event"
+  ],
+  "examples": [
+    {
+      "user": "מה יש לי היום?",
+      "assistant": "Let me check your calendar for today...",
+      "action": "google-calendar.list_events"
+    },
+    {
+      "user": "יש לי מיילים חדשים?",
+      "assistant": "I'll check your inbox for unread messages...",
+      "action": "gmail.list_messages"
+    },
+    {
+      "user": "קבע לי פגישה מחר ב-10",
+      "assistant": "I'll check your availability tomorrow at 10 AM and help create the meeting. Who should I invite?",
+      "action": "google-calendar.list_events"
+    }
+  ]
+}
