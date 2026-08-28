@@ -43,6 +43,25 @@ describe('Settings', () => {
     expect(reloaded.ownerName).toBe('Test Owner');
   });
 
+  it('supports business name for customer onboarding', async () => {
+    const { loadSettings, updateSettings } = await import('./settings.ts');
+    
+    updateSettings({ 
+      ownerName: 'ישראל ישראלי',
+      businessName: 'העסק שלי',
+    });
+    
+    const reloaded = loadSettings();
+    expect(reloaded.ownerName).toBe('ישראל ישראלי');
+    expect(reloaded.businessName).toBe('העסק שלי');
+  });
+
+  it('defaults timezone to Asia/Jerusalem', async () => {
+    const { loadSettings } = await import('./settings.ts');
+    const settings = loadSettings();
+    expect(settings.timezone).toBe('Asia/Jerusalem');
+  });
+
   it('handles api key mode changes', async () => {
     const { loadSettings, setApiKeyMode } = await import('./settings.ts');
     

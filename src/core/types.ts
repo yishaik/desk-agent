@@ -1,15 +1,20 @@
 export interface Settings {
-  botName: string;
+  // Customer-facing settings (visible in first-run)
   ownerName: string;
+  businessName: string;
   ownerPhone?: string;
   timezone: string;
+  setupComplete: boolean;
+  
+  // Operator settings (hidden from first-run)
+  botName: string;
   model: string;
   apiKeyMode: 'shared' | 'per-project';
   sharedConnectorToken?: string;
   projectTokens: Record<string, string>;
   activeProject: string;
   services: ServiceConfig[];
-  setupComplete: boolean;
+  
   createdAt: string;
   updatedAt: string;
 }
@@ -71,15 +76,61 @@ export interface PairingState {
 }
 
 export const DEFAULT_SETTINGS: Settings = {
-  botName: 'Desk Agent',
+  // Customer-facing defaults
   ownerName: '',
-  timezone: 'UTC',
+  businessName: '',
+  timezone: 'Asia/Jerusalem',
+  setupComplete: false,
+  
+  // Operator defaults
+  botName: 'Desk Agent',
   model: 'claude-3-5-sonnet-20241022',
   apiKeyMode: 'shared',
   projectTokens: {},
   activeProject: 'default',
   services: [],
-  setupComplete: false,
+  
   createdAt: new Date().toISOString(),
   updatedAt: new Date().toISOString(),
 };
+
+export interface CustomerTool {
+  id: string;
+  hebrewName: string;
+  hebrewDescription: string;
+  icon: string;
+  serviceId: string;
+  isConnected: boolean;
+  identity?: string;
+}
+
+export const CUSTOMER_TOOLS: Omit<CustomerTool, 'isConnected' | 'identity'>[] = [
+  {
+    id: 'gmail',
+    hebrewName: 'Gmail',
+    hebrewDescription: 'קריאה ומענה למיילים',
+    icon: '✉️',
+    serviceId: 'google-mail',
+  },
+  {
+    id: 'calendar',
+    hebrewName: 'יומן',
+    hebrewDescription: 'ניהול פגישות ואירועים',
+    icon: '📅',
+    serviceId: 'google-calendar',
+  },
+  {
+    id: 'contacts',
+    hebrewName: 'אנשי קשר',
+    hebrewDescription: 'ניהול פרטי לקוחות',
+    icon: '👥',
+    serviceId: 'google-contacts',
+  },
+  {
+    id: 'notion',
+    hebrewName: 'Notion',
+    hebrewDescription: 'רשימות ומסמכים',
+    icon: '📝',
+    serviceId: 'notion',
+  },
+];

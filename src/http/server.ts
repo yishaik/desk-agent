@@ -1,9 +1,5 @@
 import { createServer, IncomingMessage, ServerResponse } from 'node:http';
 import { parse as parseUrl } from 'node:url';
-import { parse as parseQuery } from 'node:querystring';
-import { readFileSync } from 'node:fs';
-import { join, dirname } from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { config } from '../core/config.ts';
 import { createChildLogger } from '../core/logger.ts';
 import {
@@ -11,18 +7,16 @@ import {
   updateSettings,
   setProjectToken,
   removeProjectToken,
-  setApiKeyMode,
   markSetupComplete,
   isSetupRequired,
 } from '../core/settings.ts';
 import { listProjects, createProject, getProject } from '../core/memory.ts';
 import { getWhatsAppClient } from '../whatsapp/client.ts';
 import { createClient } from '../open-connector/client.ts';
+import { CUSTOMER_TOOLS } from '../core/types.ts';
+import type { CustomerTool } from '../core/types.ts';
 
 const log = createChildLogger('http');
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = dirname(__filename);
 
 type RouteHandler = (
   req: IncomingMessage,
@@ -71,7 +65,7 @@ function matchRoute(
   return null;
 }
 
-function isAuthenticated(req: IncomingMessage): boolean {
+function extractToken(req: IncomingMessage): string | undefined {
   const url = parseUrl(req.url ?? '', true);
   const queryToken = url.query['token'] as string | undefined;
   
@@ -86,8 +80,26 @@ function isAuthenticated(req: IncomingMessage): boolean {
     ? authHeader.slice(7)
     : undefined;
 
-  const token = queryToken ?? cookieToken ?? bearerToken;
+  return queryToken ?? cookieToken ?? bearerToken;
+}
+
+function isAuthenticated(req: IncomingMessage): boolean {
+  const token = extractToken(req);
   return token === config.pairToken;
+}
+
+function isHttpsRequest(req: IncomingMessage): boolean {
+  return req.headers['x-forwarded-proto'] === 'https' || 
+         (req.headers.host?.startsWith('https') ?? false) ||
+         config.isProduction;
+}
+
+function setAuthCookie(res: ServerResponse, token: string, isHttps: boolean): void {
+  const securePart = isHttps ? '; Secure' : '';
+  res.setHeader(
+    'Set-Cookie',
+    `PAIR_TOKEN=${token}; Path=/; HttpOnly; SameSite=Strict; Max-Age=31536000${securePart}`
+  );
 }
 
 function sendJson(res: ServerResponse, data: unknown, status = 200): void {
@@ -124,6 +136,7 @@ async function parseBody<T>(req: IncomingMessage): Promise<T> {
   });
 }
 
+// Health check (no auth required)
 addRoute('GET', '/health', async (req, res) => {
   const wa = getWhatsAppClient();
   const connector = createClient();
@@ -137,10 +150,20 @@ addRoute('GET', '/health', async (req, res) => {
   });
 });
 
+// Main entry point - handles token from URL, shows appropriate page
 addRoute('GET', '/', async (req, res) => {
+  const url = parseUrl(req.url ?? '', true);
+  const queryToken = url.query['token'] as string | undefined;
+  
+  // If token in URL matches, set cookie and redirect to clean URL
+  if (queryToken === config.pairToken) {
+    setAuthCookie(res, queryToken, isHttpsRequest(req));
+    redirect(res, '/');
+    return;
+  }
+
   if (!isAuthenticated(req)) {
-    const loginHtml = getLoginHtml();
-    sendHtml(res, loginHtml);
+    sendHtml(res, getInviteGateHtml());
     return;
   }
 
@@ -148,35 +171,30 @@ addRoute('GET', '/', async (req, res) => {
   const wa = getWhatsAppClient();
   const pairingState = wa.getPairingState();
 
-  if (isSetupRequired() || !pairingState.isPaired) {
-    const wizardHtml = getWizardHtml(settings, pairingState);
-    sendHtml(res, wizardHtml);
+  // If setup complete and WhatsApp paired, show home
+  if (settings.setupComplete && pairingState.isPaired) {
+    sendHtml(res, getHomeHtml(settings, pairingState));
     return;
   }
 
-  const dashboardHtml = getDashboardHtml(settings, pairingState);
-  sendHtml(res, dashboardHtml);
+  // Otherwise show first-run onboarding
+  sendHtml(res, getFirstRunHtml(settings, pairingState));
 });
 
+// Auth endpoint - validates invite code and sets cookie
 addRoute('POST', '/auth', async (req, res) => {
-  const body = await parseBody<{ token?: string }>(req).catch(() => ({ token: undefined }));
-  const token = body.token;
+  const body = await parseBody<{ code?: string }>(req).catch(() => ({ code: undefined }));
+  const code = body.code;
 
-  if (token === config.pairToken) {
-    const isHttps = req.headers['x-forwarded-proto'] === 'https' || 
-                    req.headers.host?.startsWith('https') ||
-                    config.isProduction;
-    const securePart = isHttps ? '; Secure' : '';
-    res.setHeader(
-      'Set-Cookie',
-      `PAIR_TOKEN=${token}; Path=/; HttpOnly; SameSite=Strict; Max-Age=31536000${securePart}`
-    );
+  if (code === config.pairToken) {
+    setAuthCookie(res, code, isHttpsRequest(req));
     sendJson(res, { success: true });
   } else {
-    sendError(res, 'Invalid token', 401);
+    sendError(res, 'קוד הזמנה שגוי', 401);
   }
 });
 
+// Customer API: Get pairing state (for polling)
 addRoute('GET', '/api/pairing', async (req, res) => {
   if (!isAuthenticated(req)) {
     sendError(res, 'Unauthorized', 401);
@@ -185,10 +203,200 @@ addRoute('GET', '/api/pairing', async (req, res) => {
 
   const wa = getWhatsAppClient();
   const state = wa.getPairingState();
-  sendJson(res, { success: true, data: state });
+  
+  sendJson(res, { 
+    success: true, 
+    data: {
+      isPaired: state.isPaired,
+      qrCode: state.qrCode,
+      phoneNumber: state.phoneNumber,
+      name: state.name,
+    }
+  });
 });
 
+// Customer API: Get settings (safe subset for customer)
 addRoute('GET', '/api/settings', async (req, res) => {
+  if (!isAuthenticated(req)) {
+    sendError(res, 'Unauthorized', 401);
+    return;
+  }
+
+  const settings = loadSettings();
+  const wa = getWhatsAppClient();
+  const pairingState = wa.getPairingState();
+  
+  // Return only customer-safe settings
+  sendJson(res, { 
+    success: true, 
+    data: {
+      ownerName: settings.ownerName,
+      businessName: settings.businessName,
+      timezone: settings.timezone,
+      setupComplete: settings.setupComplete,
+      whatsappPaired: pairingState.isPaired,
+      whatsappName: pairingState.name,
+      whatsappPhone: pairingState.phoneNumber,
+    }
+  });
+});
+
+// Customer API: Update settings (customer-safe fields only)
+addRoute('PUT', '/api/settings', async (req, res) => {
+  if (!isAuthenticated(req)) {
+    sendError(res, 'Unauthorized', 401);
+    return;
+  }
+
+  const body = await parseBody<Partial<{
+    ownerName: string;
+    businessName: string;
+    timezone: string;
+  }>>(req);
+
+  const updates: Partial<typeof body> = {};
+  if (body.ownerName !== undefined) updates.ownerName = body.ownerName;
+  if (body.businessName !== undefined) updates.businessName = body.businessName;
+  if (body.timezone !== undefined) updates.timezone = body.timezone;
+
+  const settings = updateSettings(updates);
+  sendJson(res, { 
+    success: true, 
+    data: {
+      ownerName: settings.ownerName,
+      businessName: settings.businessName,
+      timezone: settings.timezone,
+    }
+  });
+});
+
+// Customer API: Get tools with Hebrew names and connection status
+addRoute('GET', '/api/tools', async (req, res) => {
+  if (!isAuthenticated(req)) {
+    sendError(res, 'Unauthorized', 401);
+    return;
+  }
+
+  const settings = loadSettings();
+  const connector = createClient(settings.activeProject);
+
+  try {
+    const connections = await connector.listConnections().catch(() => []);
+    const connectedServices = new Set(connections.map(c => c.service));
+    
+    const tools: CustomerTool[] = CUSTOMER_TOOLS.map(tool => {
+      const connection = connections.find(c => c.service === tool.serviceId);
+      return {
+        ...tool,
+        isConnected: connectedServices.has(tool.serviceId),
+        identity: connection?.identity?.label,
+      };
+    });
+
+    sendJson(res, { success: true, data: tools });
+  } catch {
+    // Return tools with unknown connection status if connector is down
+    const tools: CustomerTool[] = CUSTOMER_TOOLS.map(tool => ({
+      ...tool,
+      isConnected: false,
+    }));
+    sendJson(res, { success: true, data: tools, connectorAvailable: false });
+  }
+});
+
+// Customer API: Get connector status
+addRoute('GET', '/api/connector/status', async (req, res) => {
+  if (!isAuthenticated(req)) {
+    sendError(res, 'Unauthorized', 401);
+    return;
+  }
+
+  const settings = loadSettings();
+  const connector = createClient(settings.activeProject);
+
+  try {
+    const healthy = await connector.checkHealth();
+    sendJson(res, {
+      success: true,
+      data: { available: healthy },
+    });
+  } catch {
+    sendJson(res, {
+      success: true,
+      data: { available: false },
+    });
+  }
+});
+
+// Customer API: Connect a tool (redirects to OAuth)
+addRoute('POST', '/api/tools/:id/connect', async (req, res) => {
+  if (!isAuthenticated(req)) {
+    sendError(res, 'Unauthorized', 401);
+    return;
+  }
+
+  const url = parseUrl(req.url ?? '', true);
+  const toolId = url.pathname?.split('/')[3];
+  const tool = CUSTOMER_TOOLS.find(t => t.id === toolId);
+  
+  if (!tool) {
+    sendError(res, 'כלי לא נמצא', 404);
+    return;
+  }
+
+  // Return the OAuth URL for the connector
+  const oauthUrl = `${config.openConnectorUrl}/connect/${tool.serviceId}`;
+  sendJson(res, { 
+    success: true, 
+    data: { 
+      connectUrl: oauthUrl,
+      serviceId: tool.serviceId,
+    }
+  });
+});
+
+// Customer API: Complete setup
+addRoute('POST', '/api/setup/complete', async (req, res) => {
+  if (!isAuthenticated(req)) {
+    sendError(res, 'Unauthorized', 401);
+    return;
+  }
+
+  const settings = loadSettings();
+  const wa = getWhatsAppClient();
+  const pairingState = wa.getPairingState();
+
+  // Require WhatsApp paired and name filled
+  if (!pairingState.isPaired) {
+    sendError(res, 'יש לחבר WhatsApp קודם', 400);
+    return;
+  }
+
+  if (!settings.ownerName.trim()) {
+    sendError(res, 'יש למלא שם', 400);
+    return;
+  }
+
+  markSetupComplete();
+  sendJson(res, { success: true });
+});
+
+// ============================================
+// OPERATOR ROUTES (hidden from first-run)
+// ============================================
+
+// Operator settings page
+addRoute('GET', '/setup/operator', async (req, res) => {
+  if (!isAuthenticated(req)) {
+    sendError(res, 'Unauthorized', 401);
+    return;
+  }
+
+  sendHtml(res, getOperatorHtml());
+});
+
+// Operator API: Get full settings
+addRoute('GET', '/api/operator/settings', async (req, res) => {
   if (!isAuthenticated(req)) {
     sendError(res, 'Unauthorized', 401);
     return;
@@ -205,7 +413,8 @@ addRoute('GET', '/api/settings', async (req, res) => {
   sendJson(res, { success: true, data: safeSettings });
 });
 
-addRoute('PUT', '/api/settings', async (req, res) => {
+// Operator API: Update full settings
+addRoute('PUT', '/api/operator/settings', async (req, res) => {
   if (!isAuthenticated(req)) {
     sendError(res, 'Unauthorized', 401);
     return;
@@ -214,24 +423,18 @@ addRoute('PUT', '/api/settings', async (req, res) => {
   const body = await parseBody<Partial<{
     botName: string;
     ownerName: string;
+    businessName: string;
     timezone: string;
     model: string;
     apiKeyMode: 'shared' | 'per-project';
     sharedConnectorToken: string;
   }>>(req);
 
-  const updates: Partial<typeof body> = {};
-  if (body.botName) updates.botName = body.botName;
-  if (body.ownerName) updates.ownerName = body.ownerName;
-  if (body.timezone) updates.timezone = body.timezone;
-  if (body.model) updates.model = body.model;
-  if (body.apiKeyMode) updates.apiKeyMode = body.apiKeyMode;
-  if (body.sharedConnectorToken) updates.sharedConnectorToken = body.sharedConnectorToken;
-
-  const settings = updateSettings(updates);
+  const settings = updateSettings(body);
   sendJson(res, { success: true, data: { ...settings, sharedConnectorToken: '***' } });
 });
 
+// Operator API: Projects
 addRoute('GET', '/api/projects', async (req, res) => {
   if (!isAuthenticated(req)) {
     sendError(res, 'Unauthorized', 401);
@@ -303,6 +506,7 @@ addRoute('PUT', '/api/projects/:id/activate', async (req, res) => {
   sendJson(res, { success: true });
 });
 
+// Operator API: Services
 addRoute('GET', '/api/services', async (req, res) => {
   if (!isAuthenticated(req)) {
     sendError(res, 'Unauthorized', 401);
@@ -339,762 +543,1295 @@ addRoute('GET', '/api/services', async (req, res) => {
   }
 });
 
-addRoute('POST', '/api/setup/complete', async (req, res) => {
-  if (!isAuthenticated(req)) {
-    sendError(res, 'Unauthorized', 401);
-    return;
-  }
+// ============================================
+// HTML TEMPLATES
+// ============================================
 
-  markSetupComplete();
-  sendJson(res, { success: true });
-});
-
-addRoute('GET', '/api/connector/status', async (req, res) => {
-  if (!isAuthenticated(req)) {
-    sendError(res, 'Unauthorized', 401);
-    return;
-  }
-
-  const settings = loadSettings();
-  const connector = createClient(settings.activeProject);
-
-  try {
-    const healthy = await connector.checkHealth();
-    const connections = healthy ? await connector.listConnections() : [];
-
-    sendJson(res, {
-      success: true,
-      data: {
-        healthy,
-        url: config.openConnectorUrl,
-        connectionCount: connections.length,
-      },
-    });
-  } catch (err) {
-    sendJson(res, {
-      success: true,
-      data: {
-        healthy: false,
-        url: config.openConnectorUrl,
-        connectionCount: 0,
-      },
-    });
-  }
-});
-
-function getLoginHtml(): string {
+function getInviteGateHtml(): string {
   return `<!DOCTYPE html>
 <html lang="he" dir="rtl">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Desk Agent - התחברות</title>
+  <title>ברוכים הבאים</title>
   <style>
-    * { box-sizing: border-box; margin: 0; padding: 0; }
-    body {
-      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-      background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
-      min-height: 100vh;
+${getBaseStyles()}
+    .gate-card {
+      background: rgba(255,255,255,0.08);
+      backdrop-filter: blur(20px);
+      border-radius: 24px;
+      padding: 48px 40px;
+      width: 100%;
+      max-width: 380px;
+      box-shadow: 0 20px 60px rgba(0,0,0,0.4);
+      border: 1px solid rgba(255,255,255,0.1);
+    }
+    .logo {
+      width: 80px;
+      height: 80px;
+      background: linear-gradient(135deg, #25D366 0%, #128C7E 100%);
+      border-radius: 20px;
       display: flex;
       align-items: center;
       justify-content: center;
+      font-size: 36px;
+      margin: 0 auto 24px;
+      box-shadow: 0 8px 24px rgba(37, 211, 102, 0.3);
+    }
+    h1 {
+      font-size: 28px;
+      font-weight: 700;
+      margin-bottom: 8px;
       color: #fff;
     }
-    .login-card {
-      background: rgba(255,255,255,0.1);
-      backdrop-filter: blur(10px);
-      border-radius: 16px;
-      padding: 40px;
-      width: 100%;
-      max-width: 400px;
-      box-shadow: 0 8px 32px rgba(0,0,0,0.3);
+    .subtitle {
+      color: rgba(255,255,255,0.6);
+      margin-bottom: 32px;
+      font-size: 15px;
     }
-    h1 { text-align: center; margin-bottom: 8px; font-size: 28px; }
-    .subtitle { text-align: center; color: #aaa; margin-bottom: 32px; }
-    label { display: block; margin-bottom: 8px; font-weight: 500; }
-    input {
+    .input-group { margin-bottom: 24px; }
+    .input-group label {
+      display: block;
+      margin-bottom: 8px;
+      font-weight: 500;
+      font-size: 14px;
+      color: rgba(255,255,255,0.8);
+    }
+    .input-group input {
       width: 100%;
-      padding: 12px 16px;
-      border: 1px solid rgba(255,255,255,0.2);
-      border-radius: 8px;
-      background: rgba(255,255,255,0.1);
+      padding: 14px 18px;
+      border: 2px solid rgba(255,255,255,0.15);
+      border-radius: 12px;
+      background: rgba(255,255,255,0.05);
       color: #fff;
       font-size: 16px;
-      margin-bottom: 24px;
+      transition: all 200ms ease;
+      text-align: center;
+      letter-spacing: 2px;
     }
-    input:focus { outline: none; border-color: #4f46e5; }
-    button {
+    .input-group input:focus {
+      outline: none;
+      border-color: #25D366;
+      background: rgba(255,255,255,0.08);
+    }
+    .input-group input::placeholder {
+      color: rgba(255,255,255,0.3);
+      letter-spacing: normal;
+    }
+    .submit-btn {
       width: 100%;
-      padding: 14px;
-      background: #4f46e5;
+      padding: 16px;
+      background: linear-gradient(135deg, #25D366 0%, #128C7E 100%);
       color: #fff;
       border: none;
-      border-radius: 8px;
+      border-radius: 12px;
       font-size: 16px;
       font-weight: 600;
       cursor: pointer;
-      transition: background 0.2s;
+      transition: all 200ms ease;
+      position: relative;
     }
-    button:hover { background: #4338ca; }
-    .error { color: #f87171; text-align: center; margin-top: 16px; display: none; }
+    .submit-btn:hover:not(:disabled) {
+      transform: translateY(-2px);
+      box-shadow: 0 8px 24px rgba(37, 211, 102, 0.4);
+    }
+    .submit-btn:disabled {
+      opacity: 0.6;
+      cursor: not-allowed;
+    }
+    .error-msg {
+      color: #ff6b6b;
+      font-size: 14px;
+      margin-top: 16px;
+      display: none;
+      padding: 12px;
+      background: rgba(255, 107, 107, 0.1);
+      border-radius: 8px;
+      border: 1px solid rgba(255, 107, 107, 0.2);
+    }
+    .error-msg.visible { display: block; }
   </style>
 </head>
 <body>
-  <div class="login-card">
-    <h1>🤖 Desk Agent</h1>
-    <p class="subtitle">הזן טוקן גישה להמשך</p>
-    <form id="loginForm">
-      <label for="token">טוקן גישה</label>
-      <input type="password" id="token" name="token" placeholder="הזן PAIR_TOKEN" required>
-      <button type="submit">התחבר</button>
+  <div class="gate-card">
+    <div class="logo">💬</div>
+    <h1>ברוכים הבאים</h1>
+    <p class="subtitle">הזינו את קוד ההזמנה שקיבלתם</p>
+    
+    <form id="inviteForm">
+      <div class="input-group">
+        <label for="code">קוד הזמנה</label>
+        <input 
+          type="text" 
+          id="code" 
+          name="code" 
+          placeholder="הזינו כאן" 
+          autocomplete="off"
+          required
+        >
+      </div>
+      <button type="submit" class="submit-btn" id="submitBtn">כניסה</button>
     </form>
-    <p class="error" id="error">טוקן שגוי</p>
+    
+    <div class="error-msg" id="error">קוד הזמנה שגוי</div>
   </div>
+
   <script>
-    document.getElementById('loginForm').addEventListener('submit', async (e) => {
+    const form = document.getElementById('inviteForm');
+    const btn = document.getElementById('submitBtn');
+    const error = document.getElementById('error');
+    const codeInput = document.getElementById('code');
+
+    form.addEventListener('submit', async (e) => {
       e.preventDefault();
-      const token = document.getElementById('token').value;
+      error.classList.remove('visible');
+      btn.disabled = true;
+      btn.textContent = 'מתחבר...';
+
       try {
         const res = await fetch('/auth', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ token })
+          credentials: 'same-origin',
+          body: JSON.stringify({ code: codeInput.value.trim() })
         });
+        
         if (res.ok) {
-          window.location.reload();
+          window.location.href = '/';
         } else {
-          document.getElementById('error').style.display = 'block';
+          error.classList.add('visible');
+          btn.disabled = false;
+          btn.textContent = 'כניסה';
         }
       } catch {
-        document.getElementById('error').style.display = 'block';
+        error.textContent = 'שגיאת חיבור';
+        error.classList.add('visible');
+        btn.disabled = false;
+        btn.textContent = 'כניסה';
       }
+    });
+
+    codeInput.addEventListener('input', () => {
+      error.classList.remove('visible');
     });
   </script>
 </body>
 </html>`;
 }
 
-function getWizardHtml(settings: ReturnType<typeof loadSettings>, pairingState: { isPaired: boolean; qrCode?: string; phoneNumber?: string }): string {
-  const step = !pairingState.isPaired ? 1 : !settings.ownerName ? 2 : 3;
+function getFirstRunHtml(settings: ReturnType<typeof loadSettings>, pairingState: { isPaired: boolean; qrCode?: string; phoneNumber?: string; name?: string }): string {
+  const waName = pairingState.name || settings.ownerName || '';
   
   return `<!DOCTYPE html>
 <html lang="he" dir="rtl">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Desk Agent - הגדרה ראשונית</title>
+  <title>הגדרה ראשונית</title>
   <style>
-    * { box-sizing: border-box; margin: 0; padding: 0; }
-    body {
-      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-      background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
-      min-height: 100vh;
-      color: #fff;
-      padding: 20px;
+${getBaseStyles()}
+    .container {
+      max-width: 520px;
+      width: 100%;
+      padding: 24px;
     }
-    .container { max-width: 600px; margin: 0 auto; }
-    .header { text-align: center; padding: 40px 0; }
-    h1 { font-size: 32px; margin-bottom: 8px; }
-    .subtitle { color: #aaa; }
-    .steps {
-      display: flex;
-      justify-content: center;
-      gap: 20px;
-      margin: 40px 0;
+    .header {
+      text-align: center;
+      margin-bottom: 32px;
     }
-    .step {
+    .logo {
+      width: 72px;
+      height: 72px;
+      background: linear-gradient(135deg, #25D366 0%, #128C7E 100%);
+      border-radius: 18px;
       display: flex;
       align-items: center;
-      gap: 8px;
-      color: #666;
+      justify-content: center;
+      font-size: 32px;
+      margin: 0 auto 16px;
+      box-shadow: 0 8px 24px rgba(37, 211, 102, 0.3);
     }
-    .step.active { color: #4f46e5; }
-    .step.done { color: #10b981; }
-    .step-num {
+    h1 {
+      font-size: 26px;
+      font-weight: 700;
+      margin-bottom: 4px;
+    }
+    .subtitle {
+      color: rgba(255,255,255,0.5);
+      font-size: 14px;
+    }
+    
+    .card {
+      background: rgba(255,255,255,0.06);
+      backdrop-filter: blur(20px);
+      border-radius: 20px;
+      padding: 24px;
+      margin-bottom: 16px;
+      border: 1px solid rgba(255,255,255,0.08);
+      transition: all 200ms ease;
+    }
+    .card-title {
+      font-size: 16px;
+      font-weight: 600;
+      margin-bottom: 16px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    .card-title .icon {
       width: 32px;
       height: 32px;
-      border-radius: 50%;
       background: rgba(255,255,255,0.1);
+      border-radius: 8px;
       display: flex;
       align-items: center;
       justify-content: center;
-      font-weight: 600;
-    }
-    .step.active .step-num { background: #4f46e5; }
-    .step.done .step-num { background: #10b981; }
-    .card {
-      background: rgba(255,255,255,0.1);
-      backdrop-filter: blur(10px);
-      border-radius: 16px;
-      padding: 32px;
-      margin-bottom: 20px;
-    }
-    .qr-container {
-      background: #fff;
-      padding: 20px;
-      border-radius: 8px;
-      display: inline-block;
-      margin: 20px 0;
-    }
-    .qr-container pre {
-      font-family: monospace;
-      font-size: 8px;
-      line-height: 1;
-      color: #000;
-    }
-    label { display: block; margin-bottom: 8px; font-weight: 500; }
-    input, select {
-      width: 100%;
-      padding: 12px 16px;
-      border: 1px solid rgba(255,255,255,0.2);
-      border-radius: 8px;
-      background: rgba(255,255,255,0.1);
-      color: #fff;
       font-size: 16px;
+    }
+    
+    /* WhatsApp Section */
+    .wa-connected {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 16px;
+      background: rgba(37, 211, 102, 0.15);
+      border-radius: 12px;
+      border: 1px solid rgba(37, 211, 102, 0.3);
+    }
+    .wa-connected .check {
+      width: 40px;
+      height: 40px;
+      background: linear-gradient(135deg, #25D366 0%, #128C7E 100%);
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 20px;
+      flex-shrink: 0;
+    }
+    .wa-connected .info { flex: 1; }
+    .wa-connected .name { font-weight: 600; font-size: 15px; }
+    .wa-connected .phone { color: rgba(255,255,255,0.5); font-size: 13px; direction: ltr; text-align: right; }
+    
+    .qr-section { text-align: center; }
+    .qr-wrapper {
+      background: #fff;
+      padding: 16px;
+      border-radius: 12px;
+      display: inline-block;
+      margin: 16px 0;
+    }
+    #qrCanvas { display: block; }
+    .qr-hint {
+      color: rgba(255,255,255,0.5);
+      font-size: 13px;
+      line-height: 1.6;
+    }
+    .qr-loading {
+      padding: 40px;
+      color: rgba(255,255,255,0.5);
+    }
+    
+    /* Identity Section */
+    .form-row {
       margin-bottom: 16px;
     }
-    input:focus, select:focus { outline: none; border-color: #4f46e5; }
-    select option { background: #1a1a2e; }
-    button {
-      padding: 14px 28px;
-      background: #4f46e5;
+    .form-row:last-child { margin-bottom: 0; }
+    .form-row label {
+      display: block;
+      font-size: 13px;
+      font-weight: 500;
+      color: rgba(255,255,255,0.6);
+      margin-bottom: 6px;
+    }
+    .form-row input, .form-row select {
+      width: 100%;
+      padding: 12px 16px;
+      border: 2px solid rgba(255,255,255,0.1);
+      border-radius: 10px;
+      background: rgba(255,255,255,0.05);
+      color: #fff;
+      font-size: 15px;
+      transition: all 150ms ease;
+    }
+    .form-row input:focus, .form-row select:focus {
+      outline: none;
+      border-color: #25D366;
+      background: rgba(255,255,255,0.08);
+    }
+    .form-row input::placeholder {
+      color: rgba(255,255,255,0.3);
+    }
+    .form-row select {
+      appearance: none;
+      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 24 24' stroke='white'%3E%3Cpath stroke-linecap='round' stroke-linejoin='round' stroke-width='2' d='M19 9l-7 7-7-7'/%3E%3C/svg%3E");
+      background-repeat: no-repeat;
+      background-position: left 12px center;
+      background-size: 16px;
+      padding-left: 40px;
+    }
+    .form-row select option {
+      background: #1a1a2e;
+    }
+    
+    /* Tools Section */
+    .tools-grid {
+      display: grid;
+      gap: 10px;
+    }
+    .tool-item {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 14px;
+      background: rgba(255,255,255,0.03);
+      border-radius: 12px;
+      border: 1px solid rgba(255,255,255,0.06);
+      cursor: pointer;
+      transition: all 150ms ease;
+    }
+    .tool-item:hover {
+      background: rgba(255,255,255,0.06);
+      border-color: rgba(255,255,255,0.1);
+    }
+    .tool-item.connected {
+      border-color: rgba(37, 211, 102, 0.3);
+      background: rgba(37, 211, 102, 0.08);
+    }
+    .tool-icon {
+      width: 36px;
+      height: 36px;
+      background: rgba(255,255,255,0.1);
+      border-radius: 10px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 18px;
+    }
+    .tool-info { flex: 1; }
+    .tool-name { font-weight: 500; font-size: 14px; }
+    .tool-desc { color: rgba(255,255,255,0.4); font-size: 12px; }
+    .tool-status {
+      font-size: 12px;
+      padding: 4px 10px;
+      border-radius: 20px;
+      font-weight: 500;
+    }
+    .tool-status.connected {
+      background: rgba(37, 211, 102, 0.2);
+      color: #25D366;
+    }
+    .tool-status.connect {
+      background: rgba(255,255,255,0.1);
+      color: rgba(255,255,255,0.6);
+    }
+    .tools-note {
+      color: rgba(255,255,255,0.4);
+      font-size: 12px;
+      margin-top: 12px;
+      text-align: center;
+    }
+    .tools-unavailable {
+      color: rgba(255,255,255,0.4);
+      font-size: 13px;
+      text-align: center;
+      padding: 16px;
+    }
+    
+    /* Finish Button */
+    .finish-section {
+      margin-top: 24px;
+    }
+    .finish-btn {
+      width: 100%;
+      padding: 18px;
+      background: linear-gradient(135deg, #25D366 0%, #128C7E 100%);
       color: #fff;
       border: none;
-      border-radius: 8px;
-      font-size: 16px;
+      border-radius: 14px;
+      font-size: 17px;
       font-weight: 600;
       cursor: pointer;
-      transition: background 0.2s;
+      transition: all 200ms ease;
+      position: relative;
     }
-    button:hover { background: #4338ca; }
-    button.secondary {
-      background: transparent;
-      border: 1px solid rgba(255,255,255,0.3);
+    .finish-btn:hover:not(:disabled) {
+      transform: translateY(-2px);
+      box-shadow: 0 12px 32px rgba(37, 211, 102, 0.4);
     }
-    .connected { color: #10b981; }
-    .status-badge {
-      display: inline-flex;
-      align-items: center;
-      gap: 6px;
-      padding: 6px 12px;
-      border-radius: 20px;
-      font-size: 14px;
-      background: rgba(16, 185, 129, 0.2);
-      color: #10b981;
+    .finish-btn:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+      background: rgba(255,255,255,0.1);
     }
-    .form-group { margin-bottom: 20px; }
-    .btn-group { display: flex; gap: 12px; margin-top: 24px; }
+    .finish-hint {
+      color: rgba(255,255,255,0.4);
+      font-size: 12px;
+      text-align: center;
+      margin-top: 12px;
+    }
+    
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after {
+        transition-duration: 0.01ms !important;
+      }
+    }
   </style>
 </head>
 <body>
   <div class="container">
     <div class="header">
-      <h1>🤖 Desk Agent</h1>
-      <p class="subtitle">הגדרה ראשונית</p>
+      <div class="logo">💬</div>
+      <h1>בואו נתחיל</h1>
+      <p class="subtitle">הגדרת הסוכן האישי שלכם</p>
     </div>
 
-    <div class="steps">
-      <div class="step ${step >= 1 ? (step > 1 ? 'done' : 'active') : ''}">
-        <span class="step-num">${step > 1 ? '✓' : '1'}</span>
+    <!-- WhatsApp Card -->
+    <div class="card" id="waCard">
+      <div class="card-title">
+        <div class="icon">📱</div>
         <span>חיבור WhatsApp</span>
       </div>
-      <div class="step ${step >= 2 ? (step > 2 ? 'done' : 'active') : ''}">
-        <span class="step-num">${step > 2 ? '✓' : '2'}</span>
-        <span>הגדרות</span>
-      </div>
-      <div class="step ${step >= 3 ? 'active' : ''}">
-        <span class="step-num">3</span>
-        <span>חיבור שירותים</span>
+      <div id="waContent">
+        ${pairingState.isPaired ? `
+        <div class="wa-connected">
+          <div class="check">✓</div>
+          <div class="info">
+            <div class="name">${pairingState.name || 'מחובר'}</div>
+            <div class="phone">${pairingState.phoneNumber || ''}</div>
+          </div>
+        </div>
+        ` : `
+        <div class="qr-section">
+          <div class="qr-wrapper">
+            <div id="qrContainer" class="qr-loading">טוען...</div>
+          </div>
+          <p class="qr-hint">
+            פתחו WhatsApp בטלפון<br>
+            הגדרות ← מכשירים מקושרים ← קישור מכשיר
+          </p>
+        </div>
+        `}
       </div>
     </div>
 
-    ${step === 1 ? `
-    <div class="card" style="text-align: center;">
-      <h2>סרוק QR לחיבור WhatsApp</h2>
-      <p style="color: #aaa; margin: 16px 0;">פתח WhatsApp → הגדרות → מכשירים מקושרים → קשר מכשיר</p>
-      ${pairingState.qrCode ? `
-        <div class="qr-container">
-          <pre id="qr"></pre>
-        </div>
-        <p style="color: #aaa;">QR מתעדכן כל 60 שניות</p>
-        <script>
-          // Render QR as text
-          const qr = ${JSON.stringify(pairingState.qrCode)};
-          // Will be replaced by actual QR rendering
-          document.getElementById('qr').textContent = 'סורק...';
-          setTimeout(() => location.reload(), 60000);
-        </script>
-      ` : `
-        <p>ממתין ל-QR...</p>
-        <script>setTimeout(() => location.reload(), 3000);</script>
-      `}
-    </div>
-    ` : step === 2 ? `
+    <!-- Identity Card -->
     <div class="card">
-      <h2>הגדרות בסיסיות</h2>
-      <form id="settingsForm">
-        <div class="form-group">
-          <label for="ownerName">שם הבעלים</label>
-          <input type="text" id="ownerName" name="ownerName" value="${settings.ownerName}" placeholder="השם שלך" required>
+      <div class="card-title">
+        <div class="icon">👤</div>
+        <span>פרטים</span>
+      </div>
+      <form id="identityForm">
+        <div class="form-row">
+          <label for="ownerName">שם</label>
+          <input 
+            type="text" 
+            id="ownerName" 
+            name="ownerName" 
+            value="${escapeHtml(waName)}"
+            placeholder="השם שלכם"
+            required
+          >
         </div>
-        <div class="form-group">
-          <label for="botName">שם הבוט</label>
-          <input type="text" id="botName" name="botName" value="${settings.botName}" placeholder="Desk Agent">
+        <div class="form-row">
+          <label for="businessName">שם העסק</label>
+          <input 
+            type="text" 
+            id="businessName" 
+            name="businessName" 
+            value="${escapeHtml(settings.businessName)}"
+            placeholder="אופציונלי"
+          >
         </div>
-        <div class="form-group">
+        <div class="form-row">
           <label for="timezone">אזור זמן</label>
           <select id="timezone" name="timezone">
-            <option value="Asia/Jerusalem" ${settings.timezone === 'Asia/Jerusalem' ? 'selected' : ''}>ישראל (Asia/Jerusalem)</option>
-            <option value="UTC" ${settings.timezone === 'UTC' ? 'selected' : ''}>UTC</option>
-            <option value="America/New_York" ${settings.timezone === 'America/New_York' ? 'selected' : ''}>ניו יורק</option>
-            <option value="Europe/London" ${settings.timezone === 'Europe/London' ? 'selected' : ''}>לונדון</option>
-          </select>
-        </div>
-        <div class="form-group">
-          <label for="apiKeyMode">מצב מפתחות API</label>
-          <select id="apiKeyMode" name="apiKeyMode">
-            <option value="shared" ${settings.apiKeyMode === 'shared' ? 'selected' : ''}>משותף - טוקן אחד לכל הפרויקטים</option>
-            <option value="per-project" ${settings.apiKeyMode === 'per-project' ? 'selected' : ''}>לפי פרויקט - טוקן נפרד לכל פרויקט</option>
-          </select>
-        </div>
-        <div class="btn-group">
-          <button type="submit">המשך</button>
-        </div>
-      </form>
-    </div>
-    <script>
-      document.getElementById('settingsForm').addEventListener('submit', async (e) => {
-        e.preventDefault();
-        const form = new FormData(e.target);
-        const data = Object.fromEntries(form.entries());
-        await fetch('/api/settings', {
-          method: 'PUT',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(data)
-        });
-        location.reload();
-      });
-    </script>
-    ` : `
-    <div class="card">
-      <h2>חיבור שירותים</h2>
-      <p style="color: #aaa; margin-bottom: 20px;">
-        חבר את השירותים שהסוכן יוכל לגשת אליהם דרך Open Connector.
-        <br>ניתן לדלג ולחבר מאוחר יותר.
-      </p>
-      <div id="services">טוען...</div>
-      <div class="btn-group">
-        <button onclick="completeSetup()">סיום הגדרה</button>
-        <a href="/connector/" target="_blank">
-          <button type="button" class="secondary">פתח Open Connector</button>
-        </a>
-      </div>
-    </div>
-    <script>
-      async function loadServices() {
-        try {
-          const res = await fetch('/api/services');
-          const { data } = await res.json();
-          const container = document.getElementById('services');
-          if (data.length === 0) {
-            container.innerHTML = '<p style="color: #aaa;">לא נמצאו שירותים. ודא ש-Open Connector פועל.</p>';
-            return;
-          }
-          container.innerHTML = data.slice(0, 10).map(s => \`
-            <div style="display: flex; align-items: center; gap: 12px; padding: 12px; background: rgba(255,255,255,0.05); border-radius: 8px; margin-bottom: 8px;">
-              <span style="font-size: 20px;">\${s.isConnected ? '✅' : '⚪'}</span>
-              <div style="flex: 1;">
-                <strong>\${s.name}</strong>
-                \${s.identity ? \`<span style="color: #aaa; font-size: 14px;"> - \${s.identity}</span>\` : ''}
-              </div>
-            </div>
-          \`).join('');
-        } catch (err) {
-          document.getElementById('services').innerHTML = '<p style="color: #f87171;">שגיאה בטעינת שירותים</p>';
-        }
-      }
-      async function completeSetup() {
-        await fetch('/api/setup/complete', { method: 'POST' });
-        location.href = '/';
-      }
-      loadServices();
-    </script>
-    `}
-  </div>
-</body>
-</html>`;
-}
-
-function getDashboardHtml(settings: ReturnType<typeof loadSettings>, pairingState: { isPaired: boolean; phoneNumber?: string; name?: string }): string {
-  return `<!DOCTYPE html>
-<html lang="he" dir="rtl">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>${settings.botName} - לוח בקרה</title>
-  <style>
-    * { box-sizing: border-box; margin: 0; padding: 0; }
-    body {
-      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-      background: #0f0f1a;
-      min-height: 100vh;
-      color: #fff;
-    }
-    .navbar {
-      background: rgba(255,255,255,0.05);
-      padding: 16px 24px;
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      border-bottom: 1px solid rgba(255,255,255,0.1);
-    }
-    .navbar h1 { font-size: 20px; }
-    .nav-status {
-      display: flex;
-      align-items: center;
-      gap: 16px;
-    }
-    .status-dot {
-      width: 10px;
-      height: 10px;
-      border-radius: 50%;
-      background: #10b981;
-    }
-    .status-dot.offline { background: #ef4444; }
-    .container { max-width: 1200px; margin: 0 auto; padding: 24px; }
-    .grid {
-      display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
-      gap: 20px;
-    }
-    .card {
-      background: rgba(255,255,255,0.05);
-      border-radius: 12px;
-      padding: 24px;
-      border: 1px solid rgba(255,255,255,0.1);
-    }
-    .card h2 {
-      font-size: 18px;
-      margin-bottom: 16px;
-      display: flex;
-      align-items: center;
-      gap: 8px;
-    }
-    .stat {
-      font-size: 32px;
-      font-weight: 700;
-      color: #4f46e5;
-    }
-    .stat-label { color: #888; font-size: 14px; }
-    label { display: block; margin-bottom: 8px; font-weight: 500; color: #aaa; }
-    input, select {
-      width: 100%;
-      padding: 10px 14px;
-      border: 1px solid rgba(255,255,255,0.2);
-      border-radius: 8px;
-      background: rgba(255,255,255,0.05);
-      color: #fff;
-      font-size: 14px;
-      margin-bottom: 12px;
-    }
-    input:focus, select:focus { outline: none; border-color: #4f46e5; }
-    select option { background: #1a1a2e; }
-    button {
-      padding: 10px 20px;
-      background: #4f46e5;
-      color: #fff;
-      border: none;
-      border-radius: 8px;
-      font-size: 14px;
-      font-weight: 500;
-      cursor: pointer;
-      transition: background 0.2s;
-    }
-    button:hover { background: #4338ca; }
-    button.secondary {
-      background: transparent;
-      border: 1px solid rgba(255,255,255,0.2);
-    }
-    .service-item {
-      display: flex;
-      align-items: center;
-      gap: 12px;
-      padding: 12px;
-      background: rgba(255,255,255,0.03);
-      border-radius: 8px;
-      margin-bottom: 8px;
-    }
-    .service-icon { font-size: 24px; }
-    .service-info { flex: 1; }
-    .service-name { font-weight: 500; }
-    .service-status { font-size: 12px; color: #888; }
-    .tabs {
-      display: flex;
-      gap: 4px;
-      margin-bottom: 24px;
-      background: rgba(255,255,255,0.05);
-      padding: 4px;
-      border-radius: 8px;
-    }
-    .tab {
-      padding: 10px 20px;
-      background: transparent;
-      border: none;
-      color: #888;
-      cursor: pointer;
-      border-radius: 6px;
-      transition: all 0.2s;
-    }
-    .tab.active { background: #4f46e5; color: #fff; }
-    .tab:hover:not(.active) { color: #fff; }
-    .project-item {
-      display: flex;
-      align-items: center;
-      gap: 12px;
-      padding: 12px;
-      background: rgba(255,255,255,0.03);
-      border-radius: 8px;
-      margin-bottom: 8px;
-      cursor: pointer;
-      border: 2px solid transparent;
-    }
-    .project-item.active { border-color: #4f46e5; }
-    .project-item:hover { background: rgba(255,255,255,0.08); }
-    .token-input {
-      display: flex;
-      gap: 8px;
-      margin-top: 8px;
-    }
-    .token-input input { margin-bottom: 0; }
-  </style>
-</head>
-<body>
-  <nav class="navbar">
-    <h1>🤖 ${settings.botName}</h1>
-    <div class="nav-status">
-      <span class="status-dot ${pairingState.isPaired ? '' : 'offline'}"></span>
-      <span>${pairingState.isPaired ? `${pairingState.name || pairingState.phoneNumber}` : 'מנותק'}</span>
-    </div>
-  </nav>
-
-  <div class="container">
-    <div class="tabs">
-      <button class="tab active" onclick="showTab('dashboard')">לוח בקרה</button>
-      <button class="tab" onclick="showTab('settings')">הגדרות</button>
-      <button class="tab" onclick="showTab('projects')">פרויקטים</button>
-      <button class="tab" onclick="showTab('services')">שירותים</button>
-    </div>
-
-    <div id="dashboard" class="tab-content">
-      <div class="grid">
-        <div class="card">
-          <h2>📱 WhatsApp</h2>
-          <div class="stat">${pairingState.isPaired ? '✅' : '❌'}</div>
-          <div class="stat-label">${pairingState.isPaired ? 'מחובר' : 'מנותק'}</div>
-          ${pairingState.phoneNumber ? `<p style="margin-top: 12px; color: #888;">${pairingState.phoneNumber}</p>` : ''}
-        </div>
-        <div class="card">
-          <h2>📁 פרויקט פעיל</h2>
-          <div class="stat" style="font-size: 24px;">${settings.activeProject}</div>
-          <div class="stat-label">מצב מפתחות: ${settings.apiKeyMode === 'shared' ? 'משותף' : 'לפי פרויקט'}</div>
-        </div>
-        <div class="card">
-          <h2>🔌 Open Connector</h2>
-          <div id="connectorStatus">בודק...</div>
-        </div>
-      </div>
-
-      <div class="card" style="margin-top: 20px;">
-        <h2>📖 איך להשתמש</h2>
-        <ol style="color: #aaa; line-height: 2; padding-right: 20px;">
-          <li>פתח את WhatsApp בטלפון שחיברת</li>
-          <li>שלח הודעה לעצמך (לשיחה שלך)</li>
-          <li>הסוכן יענה לך בצ'אט הפרטי</li>
-          <li>השתמש ב-/help לראות פקודות זמינות</li>
-        </ol>
-      </div>
-    </div>
-
-    <div id="settings" class="tab-content" style="display: none;">
-      <div class="card">
-        <h2>⚙️ הגדרות כלליות</h2>
-        <form id="settingsForm">
-          <label>שם הבוט</label>
-          <input type="text" name="botName" value="${settings.botName}">
-          
-          <label>שם הבעלים</label>
-          <input type="text" name="ownerName" value="${settings.ownerName}">
-          
-          <label>אזור זמן</label>
-          <select name="timezone">
             <option value="Asia/Jerusalem" ${settings.timezone === 'Asia/Jerusalem' ? 'selected' : ''}>ישראל</option>
             <option value="UTC" ${settings.timezone === 'UTC' ? 'selected' : ''}>UTC</option>
             <option value="America/New_York" ${settings.timezone === 'America/New_York' ? 'selected' : ''}>ניו יורק</option>
             <option value="Europe/London" ${settings.timezone === 'Europe/London' ? 'selected' : ''}>לונדון</option>
           </select>
-          
-          <label>מודל AI</label>
-          <input type="text" name="model" value="${settings.model}">
-          
-          <label>מצב מפתחות API</label>
-          <select name="apiKeyMode">
-            <option value="shared" ${settings.apiKeyMode === 'shared' ? 'selected' : ''}>משותף - טוקן אחד לכל הפרויקטים</option>
-            <option value="per-project" ${settings.apiKeyMode === 'per-project' ? 'selected' : ''}>לפי פרויקט - טוקן נפרד לכל פרויקט</option>
-          </select>
-          
-          <button type="submit" style="margin-top: 12px;">שמור</button>
-        </form>
-      </div>
-
-      <div class="card" style="margin-top: 20px;">
-        <h2>🔑 טוקן Open Connector (משותף)</h2>
-        <p style="color: #888; margin-bottom: 12px;">משמש כברירת מחדל אם לא הוגדר טוקן ספציפי לפרויקט</p>
-        <input type="password" id="sharedToken" placeholder="הזן טוקן משותף" value="${settings.sharedConnectorToken ? '********' : ''}">
-        <button onclick="saveSharedToken()">שמור טוקן</button>
-      </div>
+        </div>
+      </form>
     </div>
 
-    <div id="projects" class="tab-content" style="display: none;">
-      <div class="card">
-        <h2>📁 פרויקטים</h2>
-        <p style="color: #888; margin-bottom: 16px;">ניהול פרויקטים וטוקנים לכל פרויקט</p>
-        <div id="projectsList">טוען...</div>
-        <hr style="border-color: rgba(255,255,255,0.1); margin: 20px 0;">
-        <h3 style="margin-bottom: 12px;">צור פרויקט חדש</h3>
-        <input type="text" id="newProjectName" placeholder="שם הפרויקט">
-        <button onclick="createProject()">צור</button>
+    <!-- Tools Card -->
+    <div class="card">
+      <div class="card-title">
+        <div class="icon">🔧</div>
+        <span>כלים</span>
       </div>
+      <div id="toolsContent" class="tools-grid">
+        <div class="tools-unavailable">טוען...</div>
+      </div>
+      <p class="tools-note">אפשר לחבר כלים גם אחרי ההגדרה</p>
     </div>
 
-    <div id="services" class="tab-content" style="display: none;">
-      <div class="card">
-        <h2>🔌 שירותים מחוברים</h2>
-        <p style="color: #888; margin-bottom: 16px;">
-          ניהול חיבורים ל-Open Connector
-          <a href="/connector/" target="_blank" style="color: #4f46e5;">פתח קונסול →</a>
-        </p>
-        <div id="servicesList">טוען...</div>
-      </div>
+    <!-- Finish Section -->
+    <div class="finish-section">
+      <button type="button" class="finish-btn" id="finishBtn" disabled>סיום</button>
+      <p class="finish-hint" id="finishHint">יש לחבר WhatsApp ולמלא שם</p>
     </div>
   </div>
 
   <script>
-    function showTab(name) {
-      document.querySelectorAll('.tab-content').forEach(el => el.style.display = 'none');
-      document.querySelectorAll('.tab').forEach(el => el.classList.remove('active'));
-      document.getElementById(name).style.display = 'block';
-      document.querySelector(\`[onclick="showTab('\${name}')"]\`).classList.add('active');
+    let waConnected = ${pairingState.isPaired};
+    let pollInterval = null;
+    
+    // QR Code rendering (simple text-based for now, real implementation would use qrcode.js)
+    function renderQR(qrData) {
+      const container = document.getElementById('qrContainer');
+      if (!container) return;
       
-      if (name === 'projects') loadProjects();
-      if (name === 'services') loadServices();
-    }
-
-    async function loadConnectorStatus() {
-      try {
-        const res = await fetch('/api/connector/status');
-        const { data } = await res.json();
-        document.getElementById('connectorStatus').innerHTML = \`
-          <div class="stat">\${data.healthy ? '✅' : '❌'}</div>
-          <div class="stat-label">\${data.healthy ? \`\${data.connectionCount} חיבורים\` : 'לא זמין'}</div>
-          <p style="margin-top: 12px; color: #888; font-size: 12px;">\${data.url}</p>
-        \`;
-      } catch {
-        document.getElementById('connectorStatus').innerHTML = '<div class="stat">❌</div><div class="stat-label">שגיאה</div>';
+      // Using a simple QR library loaded from CDN would be better,
+      // but for now we'll create a canvas with the data URL approach
+      const canvas = document.createElement('canvas');
+      canvas.id = 'qrCanvas';
+      canvas.width = 200;
+      canvas.height = 200;
+      container.innerHTML = '';
+      container.appendChild(canvas);
+      
+      // For actual QR rendering, we'd use a library like qrcode
+      // This is a placeholder that shows we have QR data
+      const ctx = canvas.getContext('2d');
+      ctx.fillStyle = '#fff';
+      ctx.fillRect(0, 0, 200, 200);
+      ctx.fillStyle = '#000';
+      ctx.font = '10px monospace';
+      
+      // Simple visual representation - in production use qrcode-generator
+      const size = 200;
+      const moduleSize = 4;
+      let x = 10, y = 10;
+      for (let i = 0; i < qrData.length && y < size - 10; i++) {
+        const charCode = qrData.charCodeAt(i);
+        for (let bit = 7; bit >= 0; bit--) {
+          if ((charCode >> bit) & 1) {
+            ctx.fillRect(x, y, moduleSize - 1, moduleSize - 1);
+          }
+          x += moduleSize;
+          if (x >= size - 10) {
+            x = 10;
+            y += moduleSize;
+          }
+        }
       }
     }
 
-    async function loadProjects() {
+    async function pollPairingState() {
       try {
-        const res = await fetch('/api/projects');
+        const res = await fetch('/api/pairing', { credentials: 'same-origin' });
+        if (!res.ok) {
+          if (res.status === 401) {
+            window.location.href = '/';
+            return;
+          }
+          return;
+        }
+        
         const { data } = await res.json();
-        document.getElementById('projectsList').innerHTML = data.map(p => \`
-          <div class="project-item \${p.isActive ? 'active' : ''}" onclick="activateProject('\${p.id}')">
-            <div style="flex: 1;">
-              <div class="service-name">\${p.name}</div>
-              <div class="service-status">\${p.hasToken ? '🔑 יש טוקן' : '⚪ ללא טוקן'}</div>
+        
+        if (data.isPaired && !waConnected) {
+          waConnected = true;
+          clearInterval(pollInterval);
+          
+          // Update UI to show connected state
+          const waContent = document.getElementById('waContent');
+          waContent.innerHTML = \`
+            <div class="wa-connected">
+              <div class="check">✓</div>
+              <div class="info">
+                <div class="name">\${data.name || 'מחובר'}</div>
+                <div class="phone">\${data.phoneNumber || ''}</div>
+              </div>
             </div>
-            \${p.isActive ? '<span style="color: #4f46e5;">פעיל</span>' : ''}
-          </div>
-          <div class="token-input" style="margin-bottom: 16px;">
-            <input type="password" id="token-\${p.id}" placeholder="טוקן Open Connector לפרויקט">
-            <button onclick="saveProjectToken('\${p.id}')">שמור</button>
+          \`;
+          
+          // Pre-fill name if empty
+          const nameInput = document.getElementById('ownerName');
+          if (!nameInput.value && data.name) {
+            nameInput.value = data.name;
+          }
+          
+          updateFinishState();
+        } else if (!data.isPaired && data.qrCode) {
+          renderQR(data.qrCode);
+        }
+      } catch (err) {
+        console.error('Polling error:', err);
+      }
+    }
+
+    async function loadTools() {
+      const container = document.getElementById('toolsContent');
+      
+      try {
+        const res = await fetch('/api/tools', { credentials: 'same-origin' });
+        if (!res.ok) throw new Error('Failed to load tools');
+        
+        const { data, connectorAvailable } = await res.json();
+        
+        if (connectorAvailable === false) {
+          container.innerHTML = '<div class="tools-unavailable">שירות הכלים לא זמין כרגע</div>';
+          return;
+        }
+        
+        container.innerHTML = data.map(tool => \`
+          <div class="tool-item \${tool.isConnected ? 'connected' : ''}" data-tool-id="\${tool.id}">
+            <div class="tool-icon">\${tool.icon}</div>
+            <div class="tool-info">
+              <div class="tool-name">\${tool.hebrewName}</div>
+              <div class="tool-desc">\${tool.isConnected && tool.identity ? tool.identity : tool.hebrewDescription}</div>
+            </div>
+            <div class="tool-status \${tool.isConnected ? 'connected' : 'connect'}">
+              \${tool.isConnected ? 'מחובר' : 'חבר'}
+            </div>
           </div>
         \`).join('');
-      } catch {
-        document.getElementById('projectsList').innerHTML = '<p style="color: #f87171;">שגיאה בטעינת פרויקטים</p>';
+        
+        // Add click handlers for connecting tools
+        container.querySelectorAll('.tool-item:not(.connected)').forEach(el => {
+          el.addEventListener('click', () => connectTool(el.dataset.toolId));
+        });
+      } catch (err) {
+        container.innerHTML = '<div class="tools-unavailable">שירות הכלים לא זמין כרגע</div>';
       }
     }
 
-    async function loadServices() {
+    async function connectTool(toolId) {
       try {
-        const res = await fetch('/api/services');
-        const { data } = await res.json();
-        document.getElementById('servicesList').innerHTML = data.map(s => \`
-          <div class="service-item">
-            <span class="service-icon">\${s.isConnected ? '✅' : '⚪'}</span>
-            <div class="service-info">
-              <div class="service-name">\${s.name}</div>
-              <div class="service-status">\${s.identity || (s.isConnected ? 'מחובר' : 'לא מחובר')}</div>
-            </div>
-          </div>
-        \`).join('') || '<p style="color: #888;">לא נמצאו שירותים</p>';
-      } catch {
-        document.getElementById('servicesList').innerHTML = '<p style="color: #f87171;">שגיאה בטעינת שירותים</p>';
+        const res = await fetch(\`/api/tools/\${toolId}/connect\`, {
+          method: 'POST',
+          credentials: 'same-origin',
+        });
+        
+        if (res.ok) {
+          const { data } = await res.json();
+          if (data.connectUrl) {
+            window.open(data.connectUrl, '_blank');
+          }
+        }
+      } catch (err) {
+        console.error('Connect tool error:', err);
       }
     }
 
-    async function activateProject(id) {
-      await fetch(\`/api/projects/\${id}/activate\`, { method: 'PUT' });
-      loadProjects();
+    function updateFinishState() {
+      const btn = document.getElementById('finishBtn');
+      const hint = document.getElementById('finishHint');
+      const nameInput = document.getElementById('ownerName');
+      
+      const hasName = nameInput.value.trim().length > 0;
+      const canFinish = waConnected && hasName;
+      
+      btn.disabled = !canFinish;
+      
+      if (!waConnected && !hasName) {
+        hint.textContent = 'יש לחבר WhatsApp ולמלא שם';
+      } else if (!waConnected) {
+        hint.textContent = 'יש לחבר WhatsApp';
+      } else if (!hasName) {
+        hint.textContent = 'יש למלא שם';
+      } else {
+        hint.textContent = 'הכל מוכן!';
+      }
     }
 
-    async function saveProjectToken(id) {
-      const token = document.getElementById(\`token-\${id}\`).value;
-      await fetch(\`/api/projects/\${id}/token\`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ token })
-      });
-      loadProjects();
-    }
-
-    async function createProject() {
-      const name = document.getElementById('newProjectName').value;
-      if (!name) return;
-      await fetch('/api/projects', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name })
-      });
-      document.getElementById('newProjectName').value = '';
-      loadProjects();
-    }
-
-    async function saveSharedToken() {
-      const token = document.getElementById('sharedToken').value;
+    async function saveSettings() {
+      const data = {
+        ownerName: document.getElementById('ownerName').value.trim(),
+        businessName: document.getElementById('businessName').value.trim(),
+        timezone: document.getElementById('timezone').value,
+      };
+      
       await fetch('/api/settings', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ sharedConnectorToken: token })
+        credentials: 'same-origin',
+        body: JSON.stringify(data),
       });
-      alert('נשמר!');
+    }
+
+    async function finishSetup() {
+      const btn = document.getElementById('finishBtn');
+      btn.disabled = true;
+      btn.textContent = 'שומר...';
+      
+      try {
+        await saveSettings();
+        
+        const res = await fetch('/api/setup/complete', {
+          method: 'POST',
+          credentials: 'same-origin',
+        });
+        
+        if (res.ok) {
+          window.location.href = '/';
+        } else {
+          const { error } = await res.json();
+          alert(error || 'שגיאה בסיום ההגדרה');
+          btn.disabled = false;
+          btn.textContent = 'סיום';
+        }
+      } catch (err) {
+        alert('שגיאת חיבור');
+        btn.disabled = false;
+        btn.textContent = 'סיום';
+      }
+    }
+
+    // Initialize
+    document.getElementById('ownerName').addEventListener('input', updateFinishState);
+    document.getElementById('finishBtn').addEventListener('click', finishSetup);
+    
+    // Auto-save on field blur
+    ['ownerName', 'businessName', 'timezone'].forEach(id => {
+      document.getElementById(id).addEventListener('blur', saveSettings);
+    });
+    
+    // Start polling if not connected
+    if (!waConnected) {
+      pollPairingState();
+      pollInterval = setInterval(pollPairingState, 1500);
+    }
+    
+    // Load tools
+    loadTools();
+    
+    // Update finish state on load
+    updateFinishState();
+  </script>
+</body>
+</html>`;
+}
+
+function getHomeHtml(settings: ReturnType<typeof loadSettings>, pairingState: { isPaired: boolean; phoneNumber?: string; name?: string }): string {
+  return `<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>${escapeHtml(settings.botName)}</title>
+  <style>
+${getBaseStyles()}
+    .container {
+      max-width: 480px;
+      width: 100%;
+      padding: 24px;
+    }
+    .header {
+      text-align: center;
+      margin-bottom: 32px;
+    }
+    .logo {
+      width: 80px;
+      height: 80px;
+      background: linear-gradient(135deg, #25D366 0%, #128C7E 100%);
+      border-radius: 20px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 36px;
+      margin: 0 auto 20px;
+      box-shadow: 0 8px 24px rgba(37, 211, 102, 0.3);
+    }
+    h1 {
+      font-size: 28px;
+      font-weight: 700;
+      margin-bottom: 4px;
+    }
+    .subtitle {
+      color: rgba(255,255,255,0.5);
+      font-size: 15px;
+    }
+    
+    .status-card {
+      background: rgba(37, 211, 102, 0.12);
+      border: 1px solid rgba(37, 211, 102, 0.25);
+      border-radius: 16px;
+      padding: 20px;
+      margin-bottom: 24px;
+      display: flex;
+      align-items: center;
+      gap: 16px;
+    }
+    .status-icon {
+      width: 48px;
+      height: 48px;
+      background: linear-gradient(135deg, #25D366 0%, #128C7E 100%);
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 24px;
+      flex-shrink: 0;
+    }
+    .status-info h2 {
+      font-size: 18px;
+      font-weight: 600;
+      margin-bottom: 2px;
+    }
+    .status-info p {
+      color: rgba(255,255,255,0.6);
+      font-size: 14px;
+    }
+    
+    .card {
+      background: rgba(255,255,255,0.06);
+      border-radius: 16px;
+      padding: 24px;
+      margin-bottom: 16px;
+      border: 1px solid rgba(255,255,255,0.08);
+    }
+    .card h3 {
+      font-size: 16px;
+      font-weight: 600;
+      margin-bottom: 16px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .instructions {
+      list-style: none;
+      counter-reset: steps;
+    }
+    .instructions li {
+      counter-increment: steps;
+      padding: 12px 0;
+      padding-right: 40px;
+      position: relative;
+      color: rgba(255,255,255,0.8);
+      font-size: 15px;
+      border-bottom: 1px solid rgba(255,255,255,0.06);
+    }
+    .instructions li:last-child { border-bottom: none; }
+    .instructions li::before {
+      content: counter(steps);
+      position: absolute;
+      right: 0;
+      top: 12px;
+      width: 24px;
+      height: 24px;
+      background: rgba(255,255,255,0.1);
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 12px;
+      font-weight: 600;
+      color: rgba(255,255,255,0.5);
+    }
+    
+    .tools-section {
+      display: grid;
+      gap: 10px;
+    }
+    .tool-row {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 12px;
+      background: rgba(255,255,255,0.03);
+      border-radius: 10px;
+    }
+    .tool-row.connected { background: rgba(37, 211, 102, 0.08); }
+    .tool-icon { font-size: 20px; }
+    .tool-name { flex: 1; font-size: 14px; }
+    .tool-badge {
+      font-size: 11px;
+      padding: 3px 8px;
+      border-radius: 10px;
+    }
+    .tool-badge.connected {
+      background: rgba(37, 211, 102, 0.2);
+      color: #25D366;
+    }
+    .tool-badge.not-connected {
+      background: rgba(255,255,255,0.1);
+      color: rgba(255,255,255,0.5);
+    }
+    
+    .footer-link {
+      text-align: center;
+      margin-top: 24px;
+    }
+    .footer-link a {
+      color: rgba(255,255,255,0.4);
+      font-size: 13px;
+      text-decoration: none;
+    }
+    .footer-link a:hover {
+      color: rgba(255,255,255,0.6);
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <div class="logo">💬</div>
+      <h1>${escapeHtml(settings.businessName || 'הסוכן שלי')}</h1>
+      <p class="subtitle">שלום ${escapeHtml(settings.ownerName || '')}</p>
+    </div>
+
+    <div class="status-card">
+      <div class="status-icon">✓</div>
+      <div class="status-info">
+        <h2>הסוכן פעיל</h2>
+        <p>${pairingState.name || pairingState.phoneNumber || 'מחובר'}</p>
+      </div>
+    </div>
+
+    <div class="card">
+      <h3>📖 איך להשתמש</h3>
+      <ol class="instructions">
+        <li>פתחו את WhatsApp בטלפון</li>
+        <li>שלחו הודעה לעצמכם (לשיחה שלכם)</li>
+        <li>הסוכן יענה לכם בצ'אט</li>
+        <li>שלחו /עזרה לראות פקודות</li>
+      </ol>
+    </div>
+
+    <div class="card">
+      <h3>🔧 כלים מחוברים</h3>
+      <div id="toolsSection" class="tools-section">
+        <div style="color: rgba(255,255,255,0.5); text-align: center; padding: 12px;">טוען...</div>
+      </div>
+    </div>
+
+    <div class="footer-link">
+      <a href="/setup/operator">מתקדם</a>
+    </div>
+  </div>
+
+  <script>
+    async function loadTools() {
+      const container = document.getElementById('toolsSection');
+      
+      try {
+        const res = await fetch('/api/tools', { credentials: 'same-origin' });
+        if (!res.ok) throw new Error();
+        
+        const { data, connectorAvailable } = await res.json();
+        
+        if (connectorAvailable === false) {
+          container.innerHTML = '<div style="color: rgba(255,255,255,0.5); text-align: center; padding: 12px;">שירות הכלים לא זמין</div>';
+          return;
+        }
+        
+        container.innerHTML = data.map(tool => \`
+          <div class="tool-row \${tool.isConnected ? 'connected' : ''}">
+            <span class="tool-icon">\${tool.icon}</span>
+            <span class="tool-name">\${tool.hebrewName}</span>
+            <span class="tool-badge \${tool.isConnected ? 'connected' : 'not-connected'}">
+              \${tool.isConnected ? 'מחובר' : 'לא מחובר'}
+            </span>
+          </div>
+        \`).join('');
+      } catch {
+        container.innerHTML = '<div style="color: rgba(255,255,255,0.5); text-align: center; padding: 12px;">שגיאה בטעינת כלים</div>';
+      }
+    }
+    
+    loadTools();
+  </script>
+</body>
+</html>`;
+}
+
+function getOperatorHtml(): string {
+  return `<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>הגדרות מתקדמות</title>
+  <style>
+${getBaseStyles()}
+    .container {
+      max-width: 600px;
+      width: 100%;
+      padding: 24px;
+    }
+    .header {
+      margin-bottom: 32px;
+    }
+    .back-link {
+      color: rgba(255,255,255,0.5);
+      text-decoration: none;
+      font-size: 14px;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      margin-bottom: 16px;
+    }
+    .back-link:hover { color: rgba(255,255,255,0.8); }
+    h1 {
+      font-size: 24px;
+      font-weight: 700;
+    }
+    .subtitle {
+      color: rgba(255,255,255,0.5);
+      font-size: 14px;
+      margin-top: 4px;
+    }
+    
+    .card {
+      background: rgba(255,255,255,0.06);
+      border-radius: 16px;
+      padding: 24px;
+      margin-bottom: 16px;
+      border: 1px solid rgba(255,255,255,0.08);
+    }
+    .card h2 {
+      font-size: 16px;
+      font-weight: 600;
+      margin-bottom: 16px;
+    }
+    
+    .form-row {
+      margin-bottom: 16px;
+    }
+    .form-row:last-child { margin-bottom: 0; }
+    .form-row label {
+      display: block;
+      font-size: 13px;
+      font-weight: 500;
+      color: rgba(255,255,255,0.6);
+      margin-bottom: 6px;
+    }
+    .form-row input, .form-row select {
+      width: 100%;
+      padding: 12px 16px;
+      border: 2px solid rgba(255,255,255,0.1);
+      border-radius: 10px;
+      background: rgba(255,255,255,0.05);
+      color: #fff;
+      font-size: 15px;
+      transition: all 150ms ease;
+    }
+    .form-row input:focus, .form-row select:focus {
+      outline: none;
+      border-color: #4f46e5;
+      background: rgba(255,255,255,0.08);
+    }
+    .form-row select option { background: #1a1a2e; }
+    .form-row .hint {
+      color: rgba(255,255,255,0.4);
+      font-size: 12px;
+      margin-top: 6px;
+    }
+    
+    .save-btn {
+      width: 100%;
+      padding: 14px;
+      background: #4f46e5;
+      color: #fff;
+      border: none;
+      border-radius: 10px;
+      font-size: 15px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 150ms ease;
+      margin-top: 8px;
+    }
+    .save-btn:hover { background: #4338ca; }
+    .save-btn:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+    
+    .status-msg {
+      text-align: center;
+      margin-top: 12px;
+      font-size: 14px;
+    }
+    .status-msg.success { color: #10b981; }
+    .status-msg.error { color: #ef4444; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <a href="/" class="back-link">← חזרה</a>
+      <h1>הגדרות מתקדמות</h1>
+      <p class="subtitle">הגדרות אופרטור למפעיל המערכת</p>
+    </div>
+
+    <div class="card">
+      <h2>⚙️ הגדרות כלליות</h2>
+      <form id="settingsForm">
+        <div class="form-row">
+          <label for="botName">שם הבוט</label>
+          <input type="text" id="botName" name="botName" placeholder="Desk Agent">
+        </div>
+        <div class="form-row">
+          <label for="model">מודל AI</label>
+          <input type="text" id="model" name="model" placeholder="claude-3-5-sonnet-20241022">
+        </div>
+        <div class="form-row">
+          <label for="apiKeyMode">מצב מפתחות API</label>
+          <select id="apiKeyMode" name="apiKeyMode">
+            <option value="shared">משותף</option>
+            <option value="per-project">לפי פרויקט</option>
+          </select>
+          <p class="hint">קובע אם להשתמש בטוקן משותף או טוקן נפרד לכל פרויקט</p>
+        </div>
+        <button type="submit" class="save-btn" id="saveBtn">שמור</button>
+        <p class="status-msg" id="statusMsg"></p>
+      </form>
+    </div>
+
+    <div class="card">
+      <h2>🔑 טוקן Connector</h2>
+      <div class="form-row">
+        <label for="connectorToken">טוקן משותף</label>
+        <input type="password" id="connectorToken" placeholder="הזן טוקן">
+        <p class="hint">טוקן גישה ל-Open Connector</p>
+      </div>
+      <button type="button" class="save-btn" id="saveTokenBtn">שמור טוקן</button>
+    </div>
+
+    <div class="card">
+      <h2>📊 סטטוס</h2>
+      <div id="statusSection" style="color: rgba(255,255,255,0.6);">טוען...</div>
+    </div>
+  </div>
+
+  <script>
+    let settings = {};
+
+    async function loadSettings() {
+      try {
+        const res = await fetch('/api/operator/settings', { credentials: 'same-origin' });
+        if (!res.ok) throw new Error();
+        
+        const { data } = await res.json();
+        settings = data;
+        
+        document.getElementById('botName').value = data.botName || '';
+        document.getElementById('model').value = data.model || '';
+        document.getElementById('apiKeyMode').value = data.apiKeyMode || 'shared';
+        
+        if (data.sharedConnectorToken === '***') {
+          document.getElementById('connectorToken').placeholder = '********';
+        }
+      } catch (err) {
+        console.error('Failed to load settings:', err);
+      }
+    }
+
+    async function loadStatus() {
+      const container = document.getElementById('statusSection');
+      try {
+        const [healthRes, connectorRes] = await Promise.all([
+          fetch('/health'),
+          fetch('/api/connector/status', { credentials: 'same-origin' })
+        ]);
+        
+        const health = await healthRes.json();
+        const connector = await connectorRes.json();
+        
+        container.innerHTML = \`
+          <p>WhatsApp: \${health.whatsapp === 'connected' ? '✅ מחובר' : '❌ מנותק'}</p>
+          <p>Connector: \${connector.data?.available ? '✅ זמין' : '❌ לא זמין'}</p>
+        \`;
+      } catch {
+        container.innerHTML = '<p>שגיאה בטעינת סטטוס</p>';
+      }
     }
 
     document.getElementById('settingsForm').addEventListener('submit', async (e) => {
       e.preventDefault();
-      const form = new FormData(e.target);
-      await fetch('/api/settings', {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(Object.fromEntries(form.entries()))
-      });
-      alert('נשמר!');
+      const btn = document.getElementById('saveBtn');
+      const msg = document.getElementById('statusMsg');
+      
+      btn.disabled = true;
+      msg.className = 'status-msg';
+      msg.textContent = '';
+      
+      try {
+        const res = await fetch('/api/operator/settings', {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'same-origin',
+          body: JSON.stringify({
+            botName: document.getElementById('botName').value,
+            model: document.getElementById('model').value,
+            apiKeyMode: document.getElementById('apiKeyMode').value,
+          })
+        });
+        
+        if (res.ok) {
+          msg.className = 'status-msg success';
+          msg.textContent = 'נשמר בהצלחה';
+        } else {
+          throw new Error();
+        }
+      } catch {
+        msg.className = 'status-msg error';
+        msg.textContent = 'שגיאה בשמירה';
+      }
+      
+      btn.disabled = false;
     });
 
-    loadConnectorStatus();
+    document.getElementById('saveTokenBtn').addEventListener('click', async () => {
+      const token = document.getElementById('connectorToken').value;
+      if (!token) return;
+      
+      try {
+        await fetch('/api/operator/settings', {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'same-origin',
+          body: JSON.stringify({ sharedConnectorToken: token })
+        });
+        
+        document.getElementById('connectorToken').value = '';
+        document.getElementById('connectorToken').placeholder = '********';
+        alert('נשמר!');
+      } catch {
+        alert('שגיאה בשמירה');
+      }
+    });
+
+    loadSettings();
+    loadStatus();
   </script>
 </body>
 </html>`;
+}
+
+function getBaseStyles(): string {
+  return `
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
+      background: linear-gradient(135deg, #0a0a14 0%, #1a1a2e 50%, #0f1922 100%);
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: #fff;
+      line-height: 1.5;
+      -webkit-font-smoothing: antialiased;
+    }
+    :focus-visible {
+      outline: 2px solid #25D366;
+      outline-offset: 2px;
+    }
+  `;
+}
+
+function escapeHtml(str: string): string {
+  return str
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#039;');
 }
 
 export function startServer(): void {
@@ -1120,12 +1857,6 @@ export function startServer(): void {
 
   server.listen(config.port, config.host, () => {
     log.info({ host: config.host, port: config.port }, 'HTTP server started');
-    
-    if (config.isProduction) {
-      console.log(`\n🌐 Web UI: http://${config.host}:${config.port}/`);
-      console.log(`   Enter your PAIR_TOKEN to authenticate`);
-    } else {
-      console.log(`\n🌐 Web UI: http://${config.host}:${config.port}/?token=${config.pairToken}`);
-    }
+    console.log(`\n🌐 Web UI: http://${config.host}:${config.port}/`);
   });
 }
