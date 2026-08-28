@@ -26,7 +26,7 @@ export interface LoginStatus {
 interface PendingLogin {
   provider: ProviderId;
   authorizeUrl: string;
-  manualCodeResolver?: (codeOrUrl: string) => void;
+  getManualCodeResolver: () => ((codeOrUrl: string) => void) | undefined;
   loginPromise: Promise<void>;
   startedAt: number;
 }
@@ -157,12 +157,21 @@ export async function startLogin(provider: ProviderId): Promise<{
   let authorizeUrl = '';
   let manualCodeResolver: ((codeOrUrl: string) => void) | undefined;
 
+  const pendingEntry: PendingLogin = {
+    provider,
+    authorizeUrl: '',
+    getManualCodeResolver: () => manualCodeResolver,
+    loginPromise: Promise.resolve(),
+    startedAt: Date.now(),
+  };
+
   const loginPromise = new Promise<void>((resolveLogin, rejectLogin) => {
     runtime.login(provider, 'oauth', {
       notify: (event: { type: string; url?: string; instructions?: string }) => {
         if (event.type === 'auth_url' && event.url) {
           authorizeUrl = event.url;
-          log.info({ provider, url: event.url }, 'Got authorize URL');
+          pendingEntry.authorizeUrl = event.url;
+          log.info({ provider }, 'Got authorize URL');
         }
       },
       prompt: async (prompt: { type: string; message?: string }) => {
@@ -183,6 +192,8 @@ export async function startLogin(provider: ProviderId): Promise<{
     });
   });
 
+  pendingEntry.loginPromise = loginPromise;
+
   await new Promise<void>((resolve) => {
     const checkUrl = setInterval(() => {
       if (authorizeUrl) {
@@ -201,13 +212,7 @@ export async function startLogin(provider: ProviderId): Promise<{
     throw new Error('Failed to get authorize URL');
   }
 
-  pendingLogins.set(provider, {
-    provider,
-    authorizeUrl,
-    manualCodeResolver,
-    loginPromise,
-    startedAt: Date.now(),
-  });
+  pendingLogins.set(provider, pendingEntry);
 
   loginPromise.then(() => {
     log.info({ provider }, 'Login completed successfully');
@@ -243,12 +248,13 @@ export async function completeLogin(
     return { success: false, error: 'No pending login for this provider. Start login first.' };
   }
 
-  if (!pending.manualCodeResolver) {
-    return { success: false, error: 'Login flow does not support manual code input.' };
+  const resolver = pending.getManualCodeResolver();
+  if (!resolver) {
+    return { success: false, error: 'Login flow not ready for manual code input. Please wait and try again.' };
   }
 
   try {
-    pending.manualCodeResolver(codeOrRedirectUrl);
+    resolver(codeOrRedirectUrl);
 
     await Promise.race([
       pending.loginPromise,
@@ -262,7 +268,7 @@ export async function completeLogin(
   } catch (err) {
     pendingLogins.delete(provider);
     const message = err instanceof Error ? err.message : 'Unknown error';
-    log.error({ err, provider }, 'Login completion failed');
+    log.error({ provider }, 'Login completion failed');
     return { success: false, error: message };
   }
 }

@@ -398,9 +398,10 @@ _היכנס לממשק הניהול לשינוי הגדרות_`,
     }
 
     case 'login': {
+      const domain = process.env['DOMAIN'] || 'localhost';
       const webUrl = config.isProduction 
-        ? `https://${process.env['DOMAIN'] || 'localhost'}:${config.port}/`
-        : `http://localhost:${config.port}/?token=${config.pairToken}`;
+        ? `https://${domain}/`
+        : `http://localhost:${config.port}/`;
       
       return {
         handled: true,
@@ -408,8 +409,9 @@ _היכנס לממשק הניהול לשינוי הגדרות_`,
 
 הכי קל - דרך ממשק הניהול:
 1. פתח: ${webUrl}
-2. לחץ על לשונית "מנויי AI"
-3. התחבר עם מנוי Claude או ChatGPT
+2. היכנס עם טוקן הגישה שלך
+3. לחץ על לשונית "מנויי AI"
+4. התחבר עם מנוי Claude או ChatGPT
 
 *מנויים נתמכים:*
 - 🟣 Claude Pro/Max
