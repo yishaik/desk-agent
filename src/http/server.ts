@@ -1390,372 +1390,253 @@ function getSetupHtml(settings: Settings, pairingState: { isPaired: boolean; qrC
 </html>`;
 }
 
-function getDashboardHtml(settings: ReturnType<typeof loadSettings>, pairingState: { isPaired: boolean; phoneNumber?: string; name?: string }): string {
+function getDashboardHtml(settings: Settings, pairingState: { isPaired: boolean; phoneNumber?: string; name?: string }): string {
+  const escapeHtml = (str: string) => str.replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c] || c);
+  
   return `<!DOCTYPE html>
 <html lang="he" dir="rtl">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>${settings.botName} - לוח בקרה</title>
+  <title>${escapeHtml(settings.botName)}</title>
   <style>
+    :root {
+      --bg-primary: #09090b;
+      --bg-secondary: #18181b;
+      --bg-tertiary: #27272a;
+      --border: #3f3f46;
+      --border-subtle: #27272a;
+      --text-primary: #fafafa;
+      --text-secondary: #a1a1aa;
+      --text-muted: #71717a;
+      --accent: #6366f1;
+      --accent-hover: #4f46e5;
+      --success: #22c55e;
+      --success-subtle: rgba(34,197,94,0.1);
+      --error: #ef4444;
+    }
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body {
-      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-      background: #0f0f1a;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+      background: var(--bg-primary);
       min-height: 100vh;
-      color: #fff;
+      color: var(--text-primary);
+      -webkit-font-smoothing: antialiased;
     }
-    .navbar {
-      background: rgba(255,255,255,0.05);
+    .header {
+      border-bottom: 1px solid var(--border-subtle);
       padding: 16px 24px;
+      position: sticky;
+      top: 0;
+      background: var(--bg-primary);
+      z-index: 100;
+    }
+    .header-inner {
+      max-width: 1100px;
+      margin: 0 auto;
       display: flex;
       align-items: center;
       justify-content: space-between;
-      border-bottom: 1px solid rgba(255,255,255,0.1);
     }
-    .navbar h1 { font-size: 20px; }
-    .nav-status {
+    .brand {
       display: flex;
       align-items: center;
-      gap: 16px;
+      gap: 12px;
+    }
+    .brand-mark {
+      width: 32px;
+      height: 32px;
+      background: var(--accent);
+      border-radius: 8px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-weight: 600;
+      font-size: 14px;
+    }
+    .brand h1 {
+      font-size: 16px;
+      font-weight: 600;
+    }
+    .status-indicator {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 13px;
+      color: var(--text-secondary);
     }
     .status-dot {
-      width: 10px;
-      height: 10px;
+      width: 8px;
+      height: 8px;
       border-radius: 50%;
-      background: #10b981;
+      background: var(--success);
     }
-    .status-dot.offline { background: #ef4444; }
-    .container { max-width: 1200px; margin: 0 auto; padding: 24px; }
-    .grid {
+    .status-dot.offline { background: var(--error); }
+    .main {
+      max-width: 1100px;
+      margin: 0 auto;
+      padding: 24px;
+    }
+    .hero {
+      background: var(--bg-secondary);
+      border: 1px solid var(--border-subtle);
+      border-radius: 12px;
+      padding: 32px;
+      margin-bottom: 24px;
+    }
+    .hero h2 {
+      font-size: 20px;
+      font-weight: 600;
+      margin-bottom: 8px;
+    }
+    .hero p {
+      color: var(--text-secondary);
+      font-size: 14px;
+      margin-bottom: 20px;
+    }
+    .hero-action {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      background: var(--success-subtle);
+      color: var(--success);
+      padding: 12px 16px;
+      border-radius: 8px;
+      font-size: 14px;
+    }
+    .cards {
       display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
-      gap: 20px;
+      grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+      gap: 16px;
+      margin-bottom: 24px;
     }
     .card {
-      background: rgba(255,255,255,0.05);
+      background: var(--bg-secondary);
+      border: 1px solid var(--border-subtle);
       border-radius: 12px;
-      padding: 24px;
-      border: 1px solid rgba(255,255,255,0.1);
+      padding: 20px;
     }
-    .card h2 {
-      font-size: 18px;
+    .card-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
       margin-bottom: 16px;
-      display: flex;
-      align-items: center;
-      gap: 8px;
     }
-    .stat {
-      font-size: 32px;
-      font-weight: 700;
-      color: #4f46e5;
-    }
-    .stat-label { color: #888; font-size: 14px; }
-    label { display: block; margin-bottom: 8px; font-weight: 500; color: #aaa; }
-    input, select {
-      width: 100%;
-      padding: 10px 14px;
-      border: 1px solid rgba(255,255,255,0.2);
-      border-radius: 8px;
-      background: rgba(255,255,255,0.05);
-      color: #fff;
-      font-size: 14px;
-      margin-bottom: 12px;
-    }
-    input:focus, select:focus { outline: none; border-color: #4f46e5; }
-    select option { background: #1a1a2e; }
-    button {
-      padding: 10px 20px;
-      background: #4f46e5;
-      color: #fff;
-      border: none;
-      border-radius: 8px;
-      font-size: 14px;
+    .card-title {
+      font-size: 13px;
       font-weight: 500;
-      cursor: pointer;
-      transition: background 0.2s;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
     }
-    button:hover { background: #4338ca; }
-    button.secondary {
-      background: transparent;
-      border: 1px solid rgba(255,255,255,0.2);
+    .card-value {
+      font-size: 24px;
+      font-weight: 600;
     }
-    .service-item {
-      display: flex;
+    .card-label {
+      font-size: 13px;
+      color: var(--text-muted);
+      margin-top: 4px;
+    }
+    .chip {
+      display: inline-flex;
       align-items: center;
-      gap: 12px;
-      padding: 12px;
-      background: rgba(255,255,255,0.03);
-      border-radius: 8px;
-      margin-bottom: 8px;
-    }
-    .service-icon { font-size: 24px; }
-    .service-info { flex: 1; }
-    .service-name { font-weight: 500; }
-    .service-status { font-size: 12px; color: #888; }
-    .tabs {
-      display: flex;
-      gap: 4px;
-      margin-bottom: 24px;
-      background: rgba(255,255,255,0.05);
-      padding: 4px;
-      border-radius: 8px;
-    }
-    .tab {
-      padding: 10px 20px;
-      background: transparent;
-      border: none;
-      color: #888;
-      cursor: pointer;
+      gap: 6px;
+      padding: 4px 10px;
       border-radius: 6px;
-      transition: all 0.2s;
+      font-size: 12px;
+      font-weight: 500;
     }
-    .tab.active { background: #4f46e5; color: #fff; }
-    .tab:hover:not(.active) { color: #fff; }
-    .project-item {
-      display: flex;
-      align-items: center;
-      gap: 12px;
-      padding: 12px;
-      background: rgba(255,255,255,0.03);
-      border-radius: 8px;
-      margin-bottom: 8px;
-      cursor: pointer;
-      border: 2px solid transparent;
+    .chip.success {
+      background: var(--success-subtle);
+      color: var(--success);
     }
-    .project-item.active { border-color: #4f46e5; }
-    .project-item:hover { background: rgba(255,255,255,0.08); }
-    .token-input {
-      display: flex;
-      gap: 8px;
-      margin-top: 8px;
+    .chip.error {
+      background: rgba(239,68,68,0.1);
+      color: var(--error);
     }
-    .token-input input { margin-bottom: 0; }
+    @media (prefers-reduced-motion: reduce) {
+      * { transition: none !important; }
+    }
   </style>
 </head>
 <body>
-  <nav class="navbar">
-    <h1>🤖 ${settings.botName}</h1>
-    <div class="nav-status">
-      <span class="status-dot ${pairingState.isPaired ? '' : 'offline'}"></span>
-      <span>${pairingState.isPaired ? `${pairingState.name || pairingState.phoneNumber}` : 'מנותק'}</span>
-    </div>
-  </nav>
-
-  <div class="container">
-    <div class="tabs">
-      <button class="tab active" onclick="showTab('dashboard')">לוח בקרה</button>
-      <button class="tab" onclick="showTab('settings')">הגדרות</button>
-      <button class="tab" onclick="showTab('projects')">פרויקטים</button>
-      <button class="tab" onclick="showTab('services')">שירותים</button>
-    </div>
-
-    <div id="dashboard" class="tab-content">
-      <div class="grid">
-        <div class="card">
-          <h2>📱 WhatsApp</h2>
-          <div class="stat">${pairingState.isPaired ? '✅' : '❌'}</div>
-          <div class="stat-label">${pairingState.isPaired ? 'מחובר' : 'מנותק'}</div>
-          ${pairingState.phoneNumber ? `<p style="margin-top: 12px; color: #888;">${pairingState.phoneNumber}</p>` : ''}
-        </div>
-        <div class="card">
-          <h2>📁 פרויקט פעיל</h2>
-          <div class="stat" style="font-size: 24px;">${settings.activeProject}</div>
-          <div class="stat-label">מצב מפתחות: ${settings.apiKeyMode === 'shared' ? 'משותף' : 'לפי פרויקט'}</div>
-        </div>
-        <div class="card">
-          <h2>🔌 Open Connector</h2>
-          <div id="connectorStatus">בודק...</div>
-        </div>
+  <header class="header">
+    <div class="header-inner">
+      <div class="brand">
+        <div class="brand-mark">D</div>
+        <h1>${escapeHtml(settings.botName)}</h1>
       </div>
+      <div class="status-indicator">
+        <span class="status-dot ${pairingState.isPaired ? '' : 'offline'}"></span>
+        <span>${pairingState.isPaired ? escapeHtml(pairingState.name || pairingState.phoneNumber || 'מחובר') : 'מנותק'}</span>
+      </div>
+    </div>
+  </header>
 
-      <div class="card" style="margin-top: 20px;">
-        <h2>📖 איך להשתמש</h2>
-        <ol style="color: #aaa; line-height: 2; padding-right: 20px;">
-          <li>פתח את WhatsApp בטלפון שחיברת</li>
-          <li>שלח הודעה לעצמך (לשיחה שלך)</li>
-          <li>הסוכן יענה לך בצ'אט הפרטי</li>
-          <li>השתמש ב-/help לראות פקודות זמינות</li>
-        </ol>
+  <main class="main">
+    <div class="hero">
+      <h2>הסוכן מוכן לעבודה</h2>
+      <p>שלח הודעה לעצמך ב-WhatsApp כדי לתקשר עם הסוכן. הקלד /help לרשימת הפקודות הזמינות.</p>
+      <div class="hero-action">
+        <span class="status-dot"></span>
+        פעיל ומחכה להודעות
       </div>
     </div>
 
-    <div id="settings" class="tab-content" style="display: none;">
+    <div class="cards">
       <div class="card">
-        <h2>⚙️ הגדרות כלליות</h2>
-        <form id="settingsForm">
-          <label>שם הבוט</label>
-          <input type="text" name="botName" value="${settings.botName}">
-          
-          <label>שם הבעלים</label>
-          <input type="text" name="ownerName" value="${settings.ownerName}">
-          
-          <label>אזור זמן</label>
-          <select name="timezone">
-            <option value="Asia/Jerusalem" ${settings.timezone === 'Asia/Jerusalem' ? 'selected' : ''}>ישראל</option>
-            <option value="UTC" ${settings.timezone === 'UTC' ? 'selected' : ''}>UTC</option>
-            <option value="America/New_York" ${settings.timezone === 'America/New_York' ? 'selected' : ''}>ניו יורק</option>
-            <option value="Europe/London" ${settings.timezone === 'Europe/London' ? 'selected' : ''}>לונדון</option>
-          </select>
-          
-          <label>מודל AI</label>
-          <input type="text" name="model" value="${settings.model}">
-          
-          <label>מצב מפתחות API</label>
-          <select name="apiKeyMode">
-            <option value="shared" ${settings.apiKeyMode === 'shared' ? 'selected' : ''}>משותף - טוקן אחד לכל הפרויקטים</option>
-            <option value="per-project" ${settings.apiKeyMode === 'per-project' ? 'selected' : ''}>לפי פרויקט - טוקן נפרד לכל פרויקט</option>
-          </select>
-          
-          <button type="submit" style="margin-top: 12px;">שמור</button>
-        </form>
+        <div class="card-header">
+          <span class="card-title">WhatsApp</span>
+          <span class="chip ${pairingState.isPaired ? 'success' : 'error'}">
+            ${pairingState.isPaired ? 'מחובר' : 'מנותק'}
+          </span>
+        </div>
+        <div class="card-value">${pairingState.phoneNumber || '-'}</div>
+        <div class="card-label">${escapeHtml(pairingState.name || '')}</div>
       </div>
 
-      <div class="card" style="margin-top: 20px;">
-        <h2>🔑 טוקן Open Connector (משותף)</h2>
-        <p style="color: #888; margin-bottom: 12px;">משמש כברירת מחדל אם לא הוגדר טוקן ספציפי לפרויקט</p>
-        <input type="password" id="sharedToken" placeholder="הזן טוקן משותף" value="${settings.sharedConnectorToken ? '********' : ''}">
-        <button onclick="saveSharedToken()">שמור טוקן</button>
-      </div>
-    </div>
-
-    <div id="projects" class="tab-content" style="display: none;">
       <div class="card">
-        <h2>📁 פרויקטים</h2>
-        <p style="color: #888; margin-bottom: 16px;">ניהול פרויקטים וטוקנים לכל פרויקט</p>
-        <div id="projectsList">טוען...</div>
-        <hr style="border-color: rgba(255,255,255,0.1); margin: 20px 0;">
-        <h3 style="margin-bottom: 12px;">צור פרויקט חדש</h3>
-        <input type="text" id="newProjectName" placeholder="שם הפרויקט">
-        <button onclick="createProject()">צור</button>
+        <div class="card-header">
+          <span class="card-title">פרויקט</span>
+        </div>
+        <div class="card-value">${escapeHtml(settings.activeProject)}</div>
+        <div class="card-label">${settings.apiKeyMode === 'shared' ? 'מפתחות משותפים' : 'מפתחות לפי פרויקט'}</div>
       </div>
-    </div>
 
-    <div id="services" class="tab-content" style="display: none;">
       <div class="card">
-        <h2>🔌 שירותים מחוברים</h2>
-        <p style="color: #888; margin-bottom: 16px;">
-          ניהול חיבורים ל-Open Connector
-          <a href="/connector/" target="_blank" style="color: #4f46e5;">פתח קונסול →</a>
-        </p>
-        <div id="servicesList">טוען...</div>
+        <div class="card-header">
+          <span class="card-title">Open Connector</span>
+          <span class="chip" id="connector-chip">בודק...</span>
+        </div>
+        <div class="card-value" id="connector-count">-</div>
+        <div class="card-label">חיבורים פעילים</div>
       </div>
     </div>
-  </div>
+  </main>
 
   <script>
-    function showTab(name) {
-      document.querySelectorAll('.tab-content').forEach(el => el.style.display = 'none');
-      document.querySelectorAll('.tab').forEach(el => el.classList.remove('active'));
-      document.getElementById(name).style.display = 'block';
-      document.querySelector(\`[onclick="showTab('\${name}')"]\`).classList.add('active');
-      
-      if (name === 'projects') loadProjects();
-      if (name === 'services') loadServices();
-    }
-
     async function loadConnectorStatus() {
       try {
-        const res = await fetch('/api/connector/status');
+        const res = await fetch('/api/connector/status', { credentials: 'same-origin' });
         const { data } = await res.json();
-        document.getElementById('connectorStatus').innerHTML = \`
-          <div class="stat">\${data.healthy ? '✅' : '❌'}</div>
-          <div class="stat-label">\${data.healthy ? \`\${data.connectionCount} חיבורים\` : 'לא זמין'}</div>
-          <p style="margin-top: 12px; color: #888; font-size: 12px;">\${data.url}</p>
-        \`;
+        const chip = document.getElementById('connector-chip');
+        const count = document.getElementById('connector-count');
+        
+        if (data.healthy) {
+          chip.className = 'chip success';
+          chip.textContent = 'תקין';
+          count.textContent = data.connectionCount;
+        } else {
+          chip.className = 'chip error';
+          chip.textContent = 'לא זמין';
+          count.textContent = '-';
+        }
       } catch {
-        document.getElementById('connectorStatus').innerHTML = '<div class="stat">❌</div><div class="stat-label">שגיאה</div>';
+        document.getElementById('connector-chip').className = 'chip error';
+        document.getElementById('connector-chip').textContent = 'שגיאה';
       }
     }
-
-    async function loadProjects() {
-      try {
-        const res = await fetch('/api/projects');
-        const { data } = await res.json();
-        document.getElementById('projectsList').innerHTML = data.map(p => \`
-          <div class="project-item \${p.isActive ? 'active' : ''}" onclick="activateProject('\${p.id}')">
-            <div style="flex: 1;">
-              <div class="service-name">\${p.name}</div>
-              <div class="service-status">\${p.hasToken ? '🔑 יש טוקן' : '⚪ ללא טוקן'}</div>
-            </div>
-            \${p.isActive ? '<span style="color: #4f46e5;">פעיל</span>' : ''}
-          </div>
-          <div class="token-input" style="margin-bottom: 16px;">
-            <input type="password" id="token-\${p.id}" placeholder="טוקן Open Connector לפרויקט">
-            <button onclick="saveProjectToken('\${p.id}')">שמור</button>
-          </div>
-        \`).join('');
-      } catch {
-        document.getElementById('projectsList').innerHTML = '<p style="color: #f87171;">שגיאה בטעינת פרויקטים</p>';
-      }
-    }
-
-    async function loadServices() {
-      try {
-        const res = await fetch('/api/services');
-        const { data } = await res.json();
-        document.getElementById('servicesList').innerHTML = data.map(s => \`
-          <div class="service-item">
-            <span class="service-icon">\${s.isConnected ? '✅' : '⚪'}</span>
-            <div class="service-info">
-              <div class="service-name">\${s.name}</div>
-              <div class="service-status">\${s.identity || (s.isConnected ? 'מחובר' : 'לא מחובר')}</div>
-            </div>
-          </div>
-        \`).join('') || '<p style="color: #888;">לא נמצאו שירותים</p>';
-      } catch {
-        document.getElementById('servicesList').innerHTML = '<p style="color: #f87171;">שגיאה בטעינת שירותים</p>';
-      }
-    }
-
-    async function activateProject(id) {
-      await fetch(\`/api/projects/\${id}/activate\`, { method: 'PUT' });
-      loadProjects();
-    }
-
-    async function saveProjectToken(id) {
-      const token = document.getElementById(\`token-\${id}\`).value;
-      await fetch(\`/api/projects/\${id}/token\`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ token })
-      });
-      loadProjects();
-    }
-
-    async function createProject() {
-      const name = document.getElementById('newProjectName').value;
-      if (!name) return;
-      await fetch('/api/projects', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name })
-      });
-      document.getElementById('newProjectName').value = '';
-      loadProjects();
-    }
-
-    async function saveSharedToken() {
-      const token = document.getElementById('sharedToken').value;
-      await fetch('/api/settings', {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ sharedConnectorToken: token })
-      });
-      alert('נשמר!');
-    }
-
-    document.getElementById('settingsForm').addEventListener('submit', async (e) => {
-      e.preventDefault();
-      const form = new FormData(e.target);
-      await fetch('/api/settings', {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(Object.fromEntries(form.entries()))
-      });
-      alert('נשמר!');
-    });
-
     loadConnectorStatus();
   </script>
 </body>
