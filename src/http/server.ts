@@ -149,10 +149,24 @@ addRoute('GET', '/health', async (req, res) => {
 });
 
 addRoute('GET', '/', async (req, res) => {
+  const url = parseUrl(req.url ?? '', true);
+  const queryToken = url.query['token'] as string | undefined;
+  
   if (!isAuthenticated(req)) {
     const loginHtml = getLoginHtml();
     sendHtml(res, loginHtml);
     return;
+  }
+
+  if (queryToken === config.pairToken) {
+    const isHttps = req.headers['x-forwarded-proto'] === 'https' || 
+                    req.headers.host?.startsWith('https') ||
+                    config.isProduction;
+    const securePart = isHttps ? '; Secure' : '';
+    res.setHeader(
+      'Set-Cookie',
+      `PAIR_TOKEN=${queryToken}; Path=/; HttpOnly; SameSite=Strict; Max-Age=31536000${securePart}`
+    );
   }
 
   const settings = loadSettings();
@@ -160,9 +174,9 @@ addRoute('GET', '/', async (req, res) => {
   const pairingState = wa.getPairingState();
   const hasAuth = await hasAnyAuthConfigured();
 
-  if (isSetupRequired() || !pairingState.isPaired || !hasAuth) {
-    const wizardHtml = await getWizardHtml(settings, pairingState);
-    sendHtml(res, wizardHtml);
+  if (isSetupRequired() || !hasAuth) {
+    const onboardingHtml = await getOnboardingHtml(settings, pairingState);
+    sendHtml(res, onboardingHtml);
     return;
   }
 
@@ -545,91 +559,388 @@ addRoute('GET', '/api/auth/aliases', async (req, res) => {
   sendJson(res, { success: true, data: aliases });
 });
 
+const SHARED_STYLES = `
+  @import url('https://fonts.googleapis.com/css2?family=Heebo:wght@300;400;500;600;700&family=Inter:wght@400;500;600&display=swap');
+  
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  
+  :root {
+    --bg-primary: #0a0a0f;
+    --bg-secondary: #12121a;
+    --bg-elevated: #1a1a24;
+    --bg-hover: #22222e;
+    --border-subtle: rgba(255,255,255,0.06);
+    --border-default: rgba(255,255,255,0.1);
+    --border-focus: #6366f1;
+    --text-primary: #fafafa;
+    --text-secondary: #a1a1aa;
+    --text-tertiary: #71717a;
+    --accent: #6366f1;
+    --accent-hover: #818cf8;
+    --accent-muted: rgba(99,102,241,0.15);
+    --success: #22c55e;
+    --success-muted: rgba(34,197,94,0.15);
+    --error: #ef4444;
+    --error-muted: rgba(239,68,68,0.15);
+    --warning: #f59e0b;
+    --radius-sm: 6px;
+    --radius-md: 10px;
+    --radius-lg: 16px;
+    --radius-xl: 24px;
+    --shadow-sm: 0 1px 2px rgba(0,0,0,0.4);
+    --shadow-md: 0 4px 12px rgba(0,0,0,0.5);
+    --shadow-lg: 0 8px 24px rgba(0,0,0,0.6);
+    --transition-fast: 150ms cubic-bezier(0.4, 0, 0.2, 1);
+    --transition-normal: 200ms cubic-bezier(0.4, 0, 0.2, 1);
+    --transition-slow: 300ms cubic-bezier(0.4, 0, 0.2, 1);
+    --font-sans: 'Heebo', 'Inter', -apple-system, sans-serif;
+  }
+  
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after {
+      animation-duration: 0.01ms !important;
+      transition-duration: 0.01ms !important;
+    }
+  }
+  
+  html { font-size: 16px; }
+  
+  body {
+    font-family: var(--font-sans);
+    background: var(--bg-primary);
+    color: var(--text-primary);
+    line-height: 1.5;
+    min-height: 100vh;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+  
+  ::selection {
+    background: var(--accent);
+    color: white;
+  }
+  
+  :focus-visible {
+    outline: 2px solid var(--border-focus);
+    outline-offset: 2px;
+  }
+  
+  .btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    padding: 12px 24px;
+    font-family: var(--font-sans);
+    font-size: 15px;
+    font-weight: 500;
+    border: none;
+    border-radius: var(--radius-md);
+    cursor: pointer;
+    transition: all var(--transition-fast);
+    white-space: nowrap;
+  }
+  
+  .btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+  
+  .btn-primary {
+    background: var(--accent);
+    color: white;
+  }
+  
+  .btn-primary:hover:not(:disabled) {
+    background: var(--accent-hover);
+    transform: translateY(-1px);
+  }
+  
+  .btn-primary:active:not(:disabled) {
+    transform: translateY(0);
+  }
+  
+  .btn-secondary {
+    background: var(--bg-elevated);
+    color: var(--text-primary);
+    border: 1px solid var(--border-default);
+  }
+  
+  .btn-secondary:hover:not(:disabled) {
+    background: var(--bg-hover);
+    border-color: var(--border-focus);
+  }
+  
+  .btn-ghost {
+    background: transparent;
+    color: var(--text-secondary);
+  }
+  
+  .btn-ghost:hover:not(:disabled) {
+    background: var(--bg-hover);
+    color: var(--text-primary);
+  }
+  
+  .input {
+    width: 100%;
+    padding: 12px 16px;
+    font-family: var(--font-sans);
+    font-size: 15px;
+    color: var(--text-primary);
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-default);
+    border-radius: var(--radius-md);
+    transition: border-color var(--transition-fast), box-shadow var(--transition-fast);
+  }
+  
+  .input::placeholder {
+    color: var(--text-tertiary);
+  }
+  
+  .input:hover {
+    border-color: var(--border-focus);
+  }
+  
+  .input:focus {
+    outline: none;
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px var(--accent-muted);
+  }
+  
+  .label {
+    display: block;
+    font-size: 14px;
+    font-weight: 500;
+    color: var(--text-secondary);
+    margin-bottom: 8px;
+  }
+  
+  .card {
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-lg);
+    padding: 24px;
+  }
+  
+  @keyframes fadeIn {
+    from { opacity: 0; transform: translateY(8px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+  
+  @keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.5; }
+  }
+  
+  @keyframes spin {
+    to { transform: rotate(360deg); }
+  }
+  
+  .animate-in {
+    animation: fadeIn var(--transition-slow) ease-out;
+  }
+  
+  .spinner {
+    width: 20px;
+    height: 20px;
+    border: 2px solid var(--border-default);
+    border-top-color: var(--accent);
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+  }
+`;
+
 function getLoginHtml(): string {
   return `<!DOCTYPE html>
 <html lang="he" dir="rtl">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Desk Agent - התחברות</title>
+  <title>Desk Agent</title>
   <style>
-    * { box-sizing: border-box; margin: 0; padding: 0; }
-    body {
-      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-      background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+    ${SHARED_STYLES}
+    
+    .gate {
       min-height: 100vh;
       display: flex;
       align-items: center;
       justify-content: center;
-      color: #fff;
+      padding: 24px;
+      background: 
+        radial-gradient(ellipse at 50% 0%, rgba(99,102,241,0.08) 0%, transparent 50%),
+        var(--bg-primary);
     }
-    .login-card {
-      background: rgba(255,255,255,0.1);
-      backdrop-filter: blur(10px);
-      border-radius: 16px;
-      padding: 40px;
+    
+    .gate-card {
       width: 100%;
       max-width: 400px;
-      box-shadow: 0 8px 32px rgba(0,0,0,0.3);
+      animation: fadeIn var(--transition-slow) ease-out;
     }
-    h1 { text-align: center; margin-bottom: 8px; font-size: 28px; }
-    .subtitle { text-align: center; color: #aaa; margin-bottom: 32px; }
-    label { display: block; margin-bottom: 8px; font-weight: 500; }
-    input {
-      width: 100%;
-      padding: 12px 16px;
-      border: 1px solid rgba(255,255,255,0.2);
-      border-radius: 8px;
-      background: rgba(255,255,255,0.1);
-      color: #fff;
-      font-size: 16px;
-      margin-bottom: 24px;
+    
+    .gate-header {
+      text-align: center;
+      margin-bottom: 32px;
     }
-    input:focus { outline: none; border-color: #4f46e5; }
-    button {
-      width: 100%;
-      padding: 14px;
-      background: #4f46e5;
-      color: #fff;
-      border: none;
-      border-radius: 8px;
-      font-size: 16px;
+    
+    .gate-logo {
+      width: 56px;
+      height: 56px;
+      background: linear-gradient(135deg, var(--accent) 0%, #8b5cf6 100%);
+      border-radius: var(--radius-lg);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      margin: 0 auto 20px;
+      box-shadow: var(--shadow-lg);
+    }
+    
+    .gate-logo svg {
+      width: 28px;
+      height: 28px;
+      color: white;
+    }
+    
+    .gate-title {
+      font-size: 24px;
       font-weight: 600;
-      cursor: pointer;
-      transition: background 0.2s;
+      margin-bottom: 8px;
+      letter-spacing: -0.02em;
     }
-    button:hover { background: #4338ca; }
-    .error { color: #f87171; text-align: center; margin-top: 16px; display: none; }
+    
+    .gate-subtitle {
+      color: var(--text-secondary);
+      font-size: 15px;
+    }
+    
+    .gate-form {
+      display: flex;
+      flex-direction: column;
+      gap: 20px;
+    }
+    
+    .gate-field {
+      position: relative;
+    }
+    
+    .gate-input {
+      padding-inline-start: 44px;
+    }
+    
+    .gate-icon {
+      position: absolute;
+      top: 50%;
+      inset-inline-start: 14px;
+      transform: translateY(-50%);
+      color: var(--text-tertiary);
+      pointer-events: none;
+    }
+    
+    .gate-error {
+      display: none;
+      align-items: center;
+      gap: 8px;
+      padding: 12px 16px;
+      background: var(--error-muted);
+      border: 1px solid rgba(239,68,68,0.2);
+      border-radius: var(--radius-md);
+      color: var(--error);
+      font-size: 14px;
+    }
+    
+    .gate-error.show {
+      display: flex;
+      animation: fadeIn var(--transition-fast) ease-out;
+    }
   </style>
 </head>
 <body>
-  <div class="login-card">
-    <h1>🤖 Desk Agent</h1>
-    <p class="subtitle">הזן טוקן גישה להמשך</p>
-    <form id="loginForm">
-      <label for="token">טוקן גישה</label>
-      <input type="password" id="token" name="token" placeholder="הזן PAIR_TOKEN" required>
-      <button type="submit">התחבר</button>
-    </form>
-    <p class="error" id="error">טוקן שגוי</p>
+  <div class="gate">
+    <div class="gate-card card">
+      <div class="gate-header">
+        <div class="gate-logo">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M12 2L2 7l10 5 10-5-10-5z"/>
+            <path d="M2 17l10 5 10-5"/>
+            <path d="M2 12l10 5 10-5"/>
+          </svg>
+        </div>
+        <h1 class="gate-title">Desk Agent</h1>
+        <p class="gate-subtitle">הזן את טוקן הגישה כדי להמשיך</p>
+      </div>
+      
+      <form id="loginForm" class="gate-form">
+        <div class="gate-field">
+          <label for="token" class="label">טוקן גישה</label>
+          <div style="position: relative;">
+            <svg class="gate-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <rect x="3" y="11" width="18" height="11" rx="2" ry="2"/>
+              <path d="M7 11V7a5 5 0 0 1 10 0v4"/>
+            </svg>
+            <input 
+              type="password" 
+              id="token" 
+              name="token" 
+              class="input gate-input" 
+              placeholder="הדבק כאן את הטוקן"
+              autocomplete="current-password"
+              required
+            >
+          </div>
+        </div>
+        
+        <div id="error" class="gate-error">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <circle cx="12" cy="12" r="10"/>
+            <line x1="12" y1="8" x2="12" y2="12"/>
+            <line x1="12" y1="16" x2="12.01" y2="16"/>
+          </svg>
+          <span>טוקן שגוי. בדוק ונסה שוב.</span>
+        </div>
+        
+        <button type="submit" id="submitBtn" class="btn btn-primary" style="width: 100%;">
+          <span id="btnText">כניסה</span>
+          <div id="btnSpinner" class="spinner" style="display: none;"></div>
+        </button>
+      </form>
+    </div>
   </div>
+  
   <script>
-    document.getElementById('loginForm').addEventListener('submit', async (e) => {
+    const form = document.getElementById('loginForm');
+    const errorEl = document.getElementById('error');
+    const submitBtn = document.getElementById('submitBtn');
+    const btnText = document.getElementById('btnText');
+    const btnSpinner = document.getElementById('btnSpinner');
+    
+    form.addEventListener('submit', async (e) => {
       e.preventDefault();
+      errorEl.classList.remove('show');
+      submitBtn.disabled = true;
+      btnText.style.display = 'none';
+      btnSpinner.style.display = 'block';
+      
       const token = document.getElementById('token').value;
+      
       try {
         const res = await fetch('/auth', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ token })
         });
+        
         if (res.ok) {
           window.location.reload();
         } else {
-          document.getElementById('error').style.display = 'block';
+          errorEl.classList.add('show');
+          submitBtn.disabled = false;
+          btnText.style.display = 'inline';
+          btnSpinner.style.display = 'none';
         }
       } catch {
-        document.getElementById('error').style.display = 'block';
+        errorEl.classList.add('show');
+        submitBtn.disabled = false;
+        btnText.style.display = 'inline';
+        btnSpinner.style.display = 'none';
       }
     });
   </script>
@@ -637,20 +948,23 @@ function getLoginHtml(): string {
 </html>`;
 }
 
-async function getWizardHtml(settings: ReturnType<typeof loadSettings>, pairingState: { isPaired: boolean; qrCode?: string; phoneNumber?: string }): Promise<string> {
-  const hasAuth = await hasAnyAuthConfigured();
-  const step = !pairingState.isPaired ? 1 : !settings.ownerName ? 2 : !hasAuth ? 3 : 4;
+async function getOnboardingHtml(settings: ReturnType<typeof loadSettings>, pairingState: { isPaired: boolean; qrCode?: string; phoneNumber?: string; name?: string }): Promise<string> {
+  const providers = await listProviders();
+  const anthropicConnected = providers.find(p => p.id === 'anthropic')?.connected ?? false;
+  const openaiConnected = providers.find(p => p.id === 'openai-codex')?.connected ?? false;
+  
+  const ownerName = settings.ownerName || pairingState.name || '';
   
   let qrDataUrl = '';
-  if (pairingState.qrCode) {
+  if (!pairingState.isPaired && pairingState.qrCode) {
     try {
       qrDataUrl = await QRCode.toDataURL(pairingState.qrCode, {
-        width: 256,
+        width: 200,
         margin: 2,
         color: { dark: '#000000', light: '#ffffff' },
       });
     } catch (err) {
-      log.error({ err }, 'Failed to generate QR code for wizard');
+      log.error({ err }, 'Failed to generate QR code');
     }
   }
   
@@ -659,518 +973,798 @@ async function getWizardHtml(settings: ReturnType<typeof loadSettings>, pairingS
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Desk Agent - הגדרה ראשונית</title>
+  <title>Desk Agent — הגדרה</title>
   <style>
-    * { box-sizing: border-box; margin: 0; padding: 0; }
-    body {
-      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-      background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+    ${SHARED_STYLES}
+    
+    .onboard {
       min-height: 100vh;
-      color: #fff;
-      padding: 20px;
+      padding: 32px 20px;
+      background: 
+        radial-gradient(ellipse at 30% 0%, rgba(99,102,241,0.06) 0%, transparent 40%),
+        radial-gradient(ellipse at 70% 100%, rgba(139,92,246,0.04) 0%, transparent 40%),
+        var(--bg-primary);
     }
-    .container { max-width: 700px; margin: 0 auto; }
-    .header { text-align: center; padding: 40px 0; }
-    h1 { font-size: 32px; margin-bottom: 8px; }
-    .subtitle { color: #aaa; }
-    .steps {
+    
+    .onboard-container {
+      max-width: 600px;
+      margin: 0 auto;
+    }
+    
+    .onboard-header {
+      text-align: center;
+      margin-bottom: 40px;
+      animation: fadeIn var(--transition-slow) ease-out;
+    }
+    
+    .onboard-logo {
+      width: 48px;
+      height: 48px;
+      background: linear-gradient(135deg, var(--accent) 0%, #8b5cf6 100%);
+      border-radius: var(--radius-md);
       display: flex;
+      align-items: center;
       justify-content: center;
-      gap: 16px;
-      margin: 40px 0;
-      flex-wrap: wrap;
+      margin: 0 auto 16px;
+      box-shadow: var(--shadow-lg);
     }
-    .step {
+    
+    .onboard-logo svg {
+      width: 24px;
+      height: 24px;
+      color: white;
+    }
+    
+    .onboard-title {
+      font-size: 26px;
+      font-weight: 600;
+      letter-spacing: -0.02em;
+      margin-bottom: 6px;
+    }
+    
+    .onboard-subtitle {
+      color: var(--text-secondary);
+      font-size: 15px;
+    }
+    
+    .section {
+      margin-bottom: 24px;
+      animation: fadeIn var(--transition-slow) ease-out;
+      animation-fill-mode: both;
+    }
+    
+    .section:nth-child(2) { animation-delay: 50ms; }
+    .section:nth-child(3) { animation-delay: 100ms; }
+    .section:nth-child(4) { animation-delay: 150ms; }
+    
+    .section-header {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 16px;
+    }
+    
+    .section-icon {
+      width: 36px;
+      height: 36px;
+      background: var(--bg-elevated);
+      border: 1px solid var(--border-subtle);
+      border-radius: var(--radius-md);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: var(--text-secondary);
+      flex-shrink: 0;
+    }
+    
+    .section-icon.done {
+      background: var(--success-muted);
+      border-color: var(--success);
+      color: var(--success);
+    }
+    
+    .section-title {
+      font-size: 16px;
+      font-weight: 600;
+    }
+    
+    .section-desc {
+      font-size: 14px;
+      color: var(--text-secondary);
+    }
+    
+    /* WhatsApp Section */
+    .wa-status {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      padding: 16px 20px;
+      background: var(--success-muted);
+      border: 1px solid rgba(34,197,94,0.2);
+      border-radius: var(--radius-md);
+    }
+    
+    .wa-status-icon {
+      width: 40px;
+      height: 40px;
+      background: var(--success);
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: white;
+    }
+    
+    .wa-status-text {
+      flex: 1;
+    }
+    
+    .wa-status-name {
+      font-weight: 600;
+      font-size: 15px;
+    }
+    
+    .wa-status-phone {
+      color: var(--text-secondary);
+      font-size: 14px;
+    }
+    
+    .qr-section {
+      text-align: center;
+      padding: 24px;
+      background: var(--bg-secondary);
+      border: 1px solid var(--border-subtle);
+      border-radius: var(--radius-lg);
+    }
+    
+    .qr-box {
+      display: inline-block;
+      background: white;
+      padding: 12px;
+      border-radius: var(--radius-md);
+      margin: 16px 0;
+    }
+    
+    .qr-box img {
+      display: block;
+      width: 180px;
+      height: 180px;
+    }
+    
+    .qr-hint {
+      color: var(--text-secondary);
+      font-size: 14px;
+      line-height: 1.6;
+    }
+    
+    .qr-loading {
+      padding: 60px 0;
+    }
+    
+    /* Identity Section */
+    .identity-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 16px;
+    }
+    
+    @media (max-width: 500px) {
+      .identity-grid { grid-template-columns: 1fr; }
+    }
+    
+    .identity-field {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+    
+    .identity-field.full {
+      grid-column: 1 / -1;
+    }
+    
+    .select {
+      width: 100%;
+      padding: 12px 16px;
+      padding-inline-end: 40px;
+      font-family: var(--font-sans);
+      font-size: 15px;
+      color: var(--text-primary);
+      background: var(--bg-secondary);
+      border: 1px solid var(--border-default);
+      border-radius: var(--radius-md);
+      appearance: none;
+      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' fill='%2371717a' viewBox='0 0 16 16'%3E%3Cpath d='M8 10.5l-4-4h8l-4 4z'/%3E%3C/svg%3E");
+      background-repeat: no-repeat;
+      background-position: left 12px center;
+      cursor: pointer;
+      transition: border-color var(--transition-fast);
+    }
+    
+    .select:hover { border-color: var(--border-focus); }
+    .select:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-muted); }
+    .select option { background: var(--bg-secondary); }
+    
+    /* Provider Cards */
+    .providers {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+    
+    .provider {
+      display: flex;
+      align-items: flex-start;
+      gap: 16px;
+      padding: 20px;
+      background: var(--bg-secondary);
+      border: 1px solid var(--border-subtle);
+      border-radius: var(--radius-lg);
+      transition: border-color var(--transition-fast), box-shadow var(--transition-fast);
+    }
+    
+    .provider.connected {
+      border-color: var(--success);
+      box-shadow: 0 0 0 1px var(--success);
+    }
+    
+    .provider-icon {
+      width: 44px;
+      height: 44px;
+      border-radius: var(--radius-md);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+    }
+    
+    .provider-icon.claude {
+      background: linear-gradient(135deg, #d97706 0%, #c2410c 100%);
+    }
+    
+    .provider-icon.openai {
+      background: linear-gradient(135deg, #059669 0%, #047857 100%);
+    }
+    
+    .provider-icon svg {
+      width: 22px;
+      height: 22px;
+      color: white;
+    }
+    
+    .provider-body {
+      flex: 1;
+      min-width: 0;
+    }
+    
+    .provider-name {
+      font-weight: 600;
+      font-size: 15px;
+      margin-bottom: 2px;
+    }
+    
+    .provider-desc {
+      font-size: 13px;
+      color: var(--text-secondary);
+      margin-bottom: 12px;
+    }
+    
+    .provider-actions {
       display: flex;
       align-items: center;
       gap: 8px;
-      color: #666;
+      flex-wrap: wrap;
     }
-    .step.active { color: #4f46e5; }
-    .step.done { color: #10b981; }
-    .step-num {
-      width: 32px;
-      height: 32px;
-      border-radius: 50%;
-      background: rgba(255,255,255,0.1);
-      display: flex;
+    
+    .provider-error {
+      display: none;
       align-items: center;
-      justify-content: center;
-      font-weight: 600;
+      gap: 6px;
+      font-size: 13px;
+      color: var(--error);
+      margin-top: 10px;
     }
-    .step.active .step-num { background: #4f46e5; }
-    .step.done .step-num { background: #10b981; }
-    .card {
-      background: rgba(255,255,255,0.1);
-      backdrop-filter: blur(10px);
-      border-radius: 16px;
-      padding: 32px;
-      margin-bottom: 20px;
+    
+    .provider-error.show {
+      display: flex;
     }
-    .qr-container {
-      background: #fff;
-      padding: 16px;
-      border-radius: 12px;
-      display: inline-block;
-      margin: 20px 0;
-    }
-    .qr-container img {
-      display: block;
-      width: 256px;
-      height: 256px;
-    }
-    label { display: block; margin-bottom: 8px; font-weight: 500; }
-    input, select {
-      width: 100%;
-      padding: 12px 16px;
-      border: 1px solid rgba(255,255,255,0.2);
-      border-radius: 8px;
-      background: rgba(255,255,255,0.1);
-      color: #fff;
-      font-size: 16px;
-      margin-bottom: 16px;
-    }
-    input:focus, select:focus { outline: none; border-color: #4f46e5; }
-    select option { background: #1a1a2e; }
-    button {
-      padding: 14px 28px;
-      background: #4f46e5;
-      color: #fff;
-      border: none;
-      border-radius: 8px;
-      font-size: 16px;
-      font-weight: 600;
-      cursor: pointer;
-      transition: background 0.2s;
-    }
-    button:hover { background: #4338ca; }
-    button:disabled { background: #666; cursor: not-allowed; }
-    button.secondary {
-      background: transparent;
-      border: 1px solid rgba(255,255,255,0.3);
-    }
-    button.secondary:hover { background: rgba(255,255,255,0.1); }
-    .connected { color: #10b981; }
-    .status-badge {
+    
+    .status-chip {
       display: inline-flex;
       align-items: center;
       gap: 6px;
       padding: 6px 12px;
-      border-radius: 20px;
-      font-size: 14px;
+      font-size: 13px;
+      font-weight: 500;
+      border-radius: 100px;
+      background: var(--success-muted);
+      color: var(--success);
     }
-    .status-badge.connected { background: rgba(16, 185, 129, 0.2); color: #10b981; }
-    .status-badge.pending { background: rgba(251, 191, 36, 0.2); color: #fbbf24; }
-    .status-badge.error { background: rgba(239, 68, 68, 0.2); color: #ef4444; }
-    .form-group { margin-bottom: 20px; }
-    .btn-group { display: flex; gap: 12px; margin-top: 24px; flex-wrap: wrap; }
-    .provider-card {
-      background: rgba(255,255,255,0.05);
-      border: 1px solid rgba(255,255,255,0.1);
-      border-radius: 12px;
-      padding: 20px;
-      margin-bottom: 16px;
-    }
-    .provider-card.connected { border-color: #10b981; }
-    .provider-header {
-      display: flex;
-      align-items: center;
-      gap: 12px;
-      margin-bottom: 12px;
-    }
-    .provider-icon { font-size: 32px; }
-    .provider-info { flex: 1; }
-    .provider-name { font-weight: 600; font-size: 18px; }
-    .provider-desc { color: #aaa; font-size: 14px; }
-    .provider-actions {
-      display: flex;
-      gap: 8px;
-      align-items: center;
-      flex-wrap: wrap;
-    }
-    .paste-input {
+    
+    .paste-section {
       display: none;
       margin-top: 12px;
       padding-top: 12px;
-      border-top: 1px solid rgba(255,255,255,0.1);
+      border-top: 1px solid var(--border-subtle);
     }
-    .paste-input.show { display: block; }
-    .paste-input input { margin-bottom: 8px; }
-    .spinner {
-      width: 20px;
-      height: 20px;
-      border: 2px solid rgba(255,255,255,0.3);
-      border-top-color: #fff;
-      border-radius: 50%;
-      animation: spin 1s linear infinite;
+    
+    .paste-section.show {
+      display: block;
+      animation: fadeIn var(--transition-fast) ease-out;
     }
-    @keyframes spin { to { transform: rotate(360deg); } }
+    
+    .paste-hint {
+      font-size: 13px;
+      color: var(--text-tertiary);
+      margin-bottom: 8px;
+    }
+    
+    .paste-row {
+      display: flex;
+      gap: 8px;
+    }
+    
+    .paste-row .input {
+      flex: 1;
+    }
+    
+    /* Footer */
+    .onboard-footer {
+      margin-top: 32px;
+      padding-top: 24px;
+      border-top: 1px solid var(--border-subtle);
+      animation: fadeIn var(--transition-slow) ease-out;
+      animation-delay: 200ms;
+      animation-fill-mode: both;
+    }
+    
+    .finish-btn {
+      width: 100%;
+      padding: 16px 24px;
+      font-size: 16px;
+    }
+    
+    .finish-hint {
+      text-align: center;
+      font-size: 13px;
+      color: var(--text-tertiary);
+      margin-top: 12px;
+    }
+    
+    .error-banner {
+      display: none;
+      align-items: center;
+      gap: 10px;
+      padding: 14px 16px;
+      background: var(--error-muted);
+      border: 1px solid rgba(239,68,68,0.2);
+      border-radius: var(--radius-md);
+      color: var(--error);
+      font-size: 14px;
+      margin-bottom: 20px;
+    }
+    
+    .error-banner.show {
+      display: flex;
+      animation: fadeIn var(--transition-fast) ease-out;
+    }
   </style>
 </head>
 <body>
-  <div class="container">
-    <div class="header">
-      <h1>🤖 Desk Agent</h1>
-      <p class="subtitle">הגדרה ראשונית</p>
-    </div>
+  <div class="onboard">
+    <div class="onboard-container">
+      <header class="onboard-header">
+        <div class="onboard-logo">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M12 2L2 7l10 5 10-5-10-5z"/>
+            <path d="M2 17l10 5 10-5"/>
+            <path d="M2 12l10 5 10-5"/>
+          </svg>
+        </div>
+        <h1 class="onboard-title">ברוכים הבאים ל-Desk Agent</h1>
+        <p class="onboard-subtitle">בואו נגדיר את הסוכן האישי שלכם</p>
+      </header>
+      
+      <div id="errorBanner" class="error-banner">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <circle cx="12" cy="12" r="10"/>
+          <line x1="12" y1="8" x2="12" y2="12"/>
+          <line x1="12" y1="16" x2="12.01" y2="16"/>
+        </svg>
+        <span id="errorText"></span>
+      </div>
 
-    <div class="steps">
-      <div class="step ${step >= 1 ? (step > 1 ? 'done' : 'active') : ''}">
-        <span class="step-num">${step > 1 ? '✓' : '1'}</span>
-        <span>WhatsApp</span>
-      </div>
-      <div class="step ${step >= 2 ? (step > 2 ? 'done' : 'active') : ''}">
-        <span class="step-num">${step > 2 ? '✓' : '2'}</span>
-        <span>הגדרות</span>
-      </div>
-      <div class="step ${step >= 3 ? (step > 3 ? 'done' : 'active') : ''}">
-        <span class="step-num">${step > 3 ? '✓' : '3'}</span>
-        <span>מנוי AI</span>
-      </div>
-      <div class="step ${step >= 4 ? 'active' : ''}">
-        <span class="step-num">4</span>
-        <span>שירותים</span>
-      </div>
-    </div>
-
-    ${step === 1 ? `
-    <div class="card" style="text-align: center;">
-      <h2>סרוק QR לחיבור WhatsApp</h2>
-      <p style="color: #aaa; margin: 16px 0;">פתח WhatsApp ← הגדרות ← מכשירים מקושרים ← קשר מכשיר</p>
-      <div id="qr-area">
-        ${qrDataUrl ? `
-          <div class="qr-container">
-            <img id="qr-img" src="${qrDataUrl}" alt="WhatsApp QR Code" />
+      <!-- WhatsApp Section -->
+      <section class="section">
+        <div class="section-header">
+          <div class="section-icon ${pairingState.isPaired ? 'done' : ''}">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              ${pairingState.isPaired 
+                ? '<polyline points="20 6 9 17 4 12"/>'
+                : '<path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"/>'
+              }
+            </svg>
           </div>
-          <p style="color: #aaa; font-size: 14px;">QR מתעדכן אוטומטית</p>
+          <div>
+            <div class="section-title">WhatsApp</div>
+            <div class="section-desc">${pairingState.isPaired ? 'מחובר ומוכן' : 'חברו את הטלפון שלכם'}</div>
+          </div>
+        </div>
+        
+        ${pairingState.isPaired ? `
+          <div class="wa-status">
+            <div class="wa-status-icon">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+                <polyline points="20 6 9 17 4 12"/>
+              </svg>
+            </div>
+            <div class="wa-status-text">
+              <div class="wa-status-name">${pairingState.name || 'WhatsApp מחובר'}</div>
+              ${pairingState.phoneNumber ? `<div class="wa-status-phone">${pairingState.phoneNumber}</div>` : ''}
+            </div>
+          </div>
         ` : `
-          <div style="padding: 40px;">
-            <div class="spinner" style="margin: 0 auto 16px;"></div>
-            <p style="color: #aaa;">ממתין ל-QR...</p>
+          <div class="qr-section" id="qrSection">
+            ${qrDataUrl ? `
+              <div class="qr-box">
+                <img id="qrImg" src="${qrDataUrl}" alt="QR Code">
+              </div>
+              <p class="qr-hint">
+                פתחו WhatsApp בטלפון<br>
+                הגדרות ← מכשירים מקושרים ← קשר מכשיר
+              </p>
+            ` : `
+              <div class="qr-loading">
+                <div class="spinner" style="margin: 0 auto 12px;"></div>
+                <p style="color: var(--text-secondary); font-size: 14px;">מחכה ל-QR...</p>
+              </div>
+            `}
           </div>
         `}
-      </div>
-    </div>
-    <script>
-      let pollCount = 0;
-      const maxPolls = 120;
-      
-      async function pollPairing() {
-        if (pollCount++ > maxPolls) {
-          document.getElementById('qr-area').innerHTML = '<p style="color: #f87171;">זמן QR פג. רענן את הדף.</p>';
-          return;
-        }
+      </section>
+
+      <!-- Identity Section -->
+      <section class="section">
+        <div class="section-header">
+          <div class="section-icon">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/>
+              <circle cx="12" cy="7" r="4"/>
+            </svg>
+          </div>
+          <div>
+            <div class="section-title">פרטים</div>
+            <div class="section-desc">איך לקרוא לכם ואיפה אתם</div>
+          </div>
+        </div>
         
-        try {
-          const pairingRes = await fetch('/api/pairing');
-          const { data: pairingData } = await pairingRes.json();
-          
-          if (pairingData.isPaired) {
-            location.reload();
-            return;
-          }
-          
-          const qrRes = await fetch('/api/pairing/qr');
-          const { data: qrData } = await qrRes.json();
-          
-          if (qrData.qrDataUrl) {
-            const img = document.getElementById('qr-img');
-            if (img) {
-              img.src = qrData.qrDataUrl;
-            } else {
-              document.getElementById('qr-area').innerHTML = \`
-                <div class="qr-container">
-                  <img id="qr-img" src="\${qrData.qrDataUrl}" alt="WhatsApp QR Code" />
+        <div class="card">
+          <div class="identity-grid">
+            <div class="identity-field">
+              <label class="label" for="ownerName">שם</label>
+              <input type="text" id="ownerName" class="input" value="${ownerName}" placeholder="השם שלכם">
+            </div>
+            <div class="identity-field">
+              <label class="label" for="timezone">אזור זמן</label>
+              <select id="timezone" class="select">
+                <option value="Asia/Jerusalem" ${settings.timezone === 'Asia/Jerusalem' || !settings.timezone ? 'selected' : ''}>ישראל</option>
+                <option value="America/New_York" ${settings.timezone === 'America/New_York' ? 'selected' : ''}>ניו יורק</option>
+                <option value="Europe/London" ${settings.timezone === 'Europe/London' ? 'selected' : ''}>לונדון</option>
+                <option value="UTC" ${settings.timezone === 'UTC' ? 'selected' : ''}>UTC</option>
+              </select>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- AI Subscriptions Section -->
+      <section class="section">
+        <div class="section-header">
+          <div class="section-icon ${anthropicConnected || openaiConnected ? 'done' : ''}">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              ${anthropicConnected || openaiConnected 
+                ? '<polyline points="20 6 9 17 4 12"/>'
+                : '<circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/>'
+              }
+            </svg>
+          </div>
+          <div>
+            <div class="section-title">מנוי AI</div>
+            <div class="section-desc">חברו לפחות מנוי אחד</div>
+          </div>
+        </div>
+        
+        <div class="providers">
+          <!-- Claude -->
+          <div class="provider ${anthropicConnected ? 'connected' : ''}" id="anthropicCard">
+            <div class="provider-icon claude">
+              <svg viewBox="0 0 24 24" fill="currentColor">
+                <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/>
+              </svg>
+            </div>
+            <div class="provider-body">
+              <div class="provider-name">Claude Pro / Max</div>
+              <div class="provider-desc">Anthropic — מתאים לשיחות ארוכות ומשימות מורכבות</div>
+              <div class="provider-actions">
+                ${anthropicConnected 
+                  ? `<span class="status-chip"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg> מחובר</span>`
+                  : `<button class="btn btn-secondary" id="anthropicBtn" onclick="startLogin('anthropic')">התחברות</button>`
+                }
+              </div>
+              <div class="provider-error" id="anthropicError">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/>
+                </svg>
+                <span id="anthropicErrorText"></span>
+              </div>
+              <div class="paste-section" id="anthropicPaste">
+                <p class="paste-hint">אם הדפדפן לא על אותו מחשב, הדביקו את כתובת ה-callback:</p>
+                <div class="paste-row">
+                  <input type="text" id="anthropicCode" class="input" placeholder="http://localhost:53692/callback?code=...">
+                  <button class="btn btn-secondary" onclick="completePaste('anthropic')">אישור</button>
                 </div>
-                <p style="color: #aaa; font-size: 14px;">QR מתעדכן אוטומטית</p>
-              \`;
-            }
-          }
-        } catch (err) {
-          console.error('Polling error:', err);
-        }
-        
-        setTimeout(pollPairing, 3000);
-      }
-      
-      pollPairing();
-    </script>
-    ` : step === 2 ? `
-    <div class="card">
-      <h2>הגדרות בסיסיות</h2>
-      <form id="settingsForm">
-        <div class="form-group">
-          <label for="ownerName">שם הבעלים</label>
-          <input type="text" id="ownerName" name="ownerName" value="${settings.ownerName}" placeholder="השם שלך" required>
-        </div>
-        <div class="form-group">
-          <label for="botName">שם הבוט</label>
-          <input type="text" id="botName" name="botName" value="${settings.botName}" placeholder="Desk Agent">
-        </div>
-        <div class="form-group">
-          <label for="timezone">אזור זמן</label>
-          <select id="timezone" name="timezone">
-            <option value="Asia/Jerusalem" ${settings.timezone === 'Asia/Jerusalem' ? 'selected' : ''}>ישראל (Asia/Jerusalem)</option>
-            <option value="UTC" ${settings.timezone === 'UTC' ? 'selected' : ''}>UTC</option>
-            <option value="America/New_York" ${settings.timezone === 'America/New_York' ? 'selected' : ''}>ניו יורק</option>
-            <option value="Europe/London" ${settings.timezone === 'Europe/London' ? 'selected' : ''}>לונדון</option>
-          </select>
-        </div>
-        <div class="btn-group">
-          <button type="submit">המשך</button>
-        </div>
-      </form>
-    </div>
-    <script>
-      document.getElementById('settingsForm').addEventListener('submit', async (e) => {
-        e.preventDefault();
-        const form = new FormData(e.target);
-        const data = Object.fromEntries(form.entries());
-        await fetch('/api/settings', {
-          method: 'PUT',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(data)
-        });
-        location.reload();
-      });
-    </script>
-    ` : step === 3 ? `
-    <div class="card">
-      <h2>התחבר עם מנוי AI</h2>
-      <p style="color: #aaa; margin-bottom: 24px;">
-        חבר את מנוי ה-Claude או ChatGPT שלך. הסוכן ישתמש במנוי שלך לתשובות.
-        <br><strong>צריך לפחות חיבור אחד כדי להמשיך.</strong>
-      </p>
-      
-      <div id="providers">
-        <div class="provider-card" id="anthropic-card">
-          <div class="provider-header">
-            <span class="provider-icon">🟣</span>
-            <div class="provider-info">
-              <div class="provider-name">Claude Pro/Max</div>
-              <div class="provider-desc">השתמש במנוי Claude Pro או Max שלך</div>
-            </div>
-            <div class="provider-actions">
-              <span id="anthropic-status" class="status-badge"></span>
-              <button id="anthropic-btn" onclick="startLogin('anthropic')">התחבר</button>
-            </div>
-          </div>
-          <div class="paste-input" id="anthropic-paste">
-            <p style="font-size: 14px; color: #aaa; margin-bottom: 8px;">
-              אם הדפדפן לא באותו מחשב, העתק את כתובת ה-callback והדבק כאן:
-            </p>
-            <input type="text" id="anthropic-code" placeholder="הדבק כתובת callback או קוד...">
-            <button onclick="completeLogin('anthropic')" class="secondary">אשר</button>
-          </div>
-        </div>
-        
-        <div class="provider-card" id="openai-card">
-          <div class="provider-header">
-            <span class="provider-icon">🟢</span>
-            <div class="provider-info">
-              <div class="provider-name">ChatGPT Plus/Pro</div>
-              <div class="provider-desc">השתמש במנוי ChatGPT Plus או Pro שלך</div>
-            </div>
-            <div class="provider-actions">
-              <span id="openai-status" class="status-badge"></span>
-              <button id="openai-btn" onclick="startLogin('openai-codex')">התחבר</button>
-            </div>
-          </div>
-          <div class="paste-input" id="openai-paste">
-            <p style="font-size: 14px; color: #aaa; margin-bottom: 8px;">
-              אם הדפדפן לא באותו מחשב, העתק את הקוד או כתובת ה-callback והדבק כאן:
-            </p>
-            <input type="text" id="openai-code" placeholder="הדבק כתובת callback או קוד...">
-            <button onclick="completeLogin('openai-codex')" class="secondary">אשר</button>
-          </div>
-        </div>
-      </div>
-      
-      <div class="btn-group">
-        <button id="continueBtn" onclick="continueSetup()" disabled>המשך</button>
-      </div>
-    </div>
-    <script>
-      const providerStatus = { anthropic: false, 'openai-codex': false };
-      
-      function updateUI() {
-        const canContinue = providerStatus.anthropic || providerStatus['openai-codex'];
-        document.getElementById('continueBtn').disabled = !canContinue;
-        
-        if (providerStatus.anthropic) {
-          document.getElementById('anthropic-card').classList.add('connected');
-          document.getElementById('anthropic-status').className = 'status-badge connected';
-          document.getElementById('anthropic-status').textContent = '✓ מחובר';
-          document.getElementById('anthropic-btn').textContent = 'מחובר';
-          document.getElementById('anthropic-btn').disabled = true;
-          document.getElementById('anthropic-paste').classList.remove('show');
-        }
-        
-        if (providerStatus['openai-codex']) {
-          document.getElementById('openai-card').classList.add('connected');
-          document.getElementById('openai-status').className = 'status-badge connected';
-          document.getElementById('openai-status').textContent = '✓ מחובר';
-          document.getElementById('openai-btn').textContent = 'מחובר';
-          document.getElementById('openai-btn').disabled = true;
-          document.getElementById('openai-paste').classList.remove('show');
-        }
-      }
-      
-      async function loadProviders() {
-        try {
-          const res = await fetch('/api/auth/providers');
-          const { data } = await res.json();
-          
-          for (const p of data) {
-            if (p.connected) {
-              providerStatus[p.id] = true;
-            }
-          }
-          
-          updateUI();
-        } catch (err) {
-          console.error('Failed to load providers:', err);
-        }
-      }
-      
-      async function startLogin(provider) {
-        const btn = document.getElementById(provider === 'anthropic' ? 'anthropic-btn' : 'openai-btn');
-        const status = document.getElementById(provider === 'anthropic' ? 'anthropic-status' : 'openai-status');
-        const pasteDiv = document.getElementById(provider === 'anthropic' ? 'anthropic-paste' : 'openai-paste');
-        
-        btn.disabled = true;
-        btn.innerHTML = '<div class="spinner" style="width: 16px; height: 16px; margin: 0 auto;"></div>';
-        status.className = 'status-badge pending';
-        status.textContent = 'מתחבר...';
-        
-        try {
-          const res = await fetch('/api/auth/login', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ provider })
-          });
-          const { success, data, error } = await res.json();
-          
-          if (!success) {
-            throw new Error(error || 'Login failed');
-          }
-          
-          window.open(data.authorizeUrl, '_blank');
-          
-          pasteDiv.classList.add('show');
-          
-          btn.textContent = 'ממתין לאישור...';
-          
-          pollLoginStatus(provider);
-        } catch (err) {
-          status.className = 'status-badge error';
-          status.textContent = 'שגיאה';
-          btn.textContent = 'נסה שוב';
-          btn.disabled = false;
-          console.error('Login error:', err);
-        }
-      }
-      
-      async function completeLogin(provider) {
-        const codeInput = document.getElementById(provider === 'anthropic' ? 'anthropic-code' : 'openai-code');
-        const code = codeInput.value.trim();
-        
-        if (!code) {
-          alert('הזן קוד או כתובת callback');
-          return;
-        }
-        
-        try {
-          const res = await fetch('/api/auth/complete', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ provider, codeOrRedirectUrl: code })
-          });
-          const { success, error } = await res.json();
-          
-          if (success) {
-            providerStatus[provider] = true;
-            updateUI();
-          } else {
-            alert('שגיאה: ' + (error || 'Unknown error'));
-          }
-        } catch (err) {
-          alert('שגיאה בהתחברות');
-          console.error('Complete login error:', err);
-        }
-      }
-      
-      async function pollLoginStatus(provider) {
-        for (let i = 0; i < 60; i++) {
-          await new Promise(r => setTimeout(r, 3000));
-          
-          try {
-            const res = await fetch('/api/auth/login/' + provider + '/status');
-            const { data } = await res.json();
-            
-            if (data.status === 'connected') {
-              providerStatus[provider] = true;
-              updateUI();
-              return;
-            }
-          } catch (err) {
-            console.error('Poll error:', err);
-          }
-        }
-      }
-      
-      function continueSetup() {
-        location.reload();
-      }
-      
-      loadProviders();
-    </script>
-    ` : `
-    <div class="card">
-      <h2>חיבור שירותים</h2>
-      <p style="color: #aaa; margin-bottom: 20px;">
-        חבר את השירותים שהסוכן יוכל לגשת אליהם דרך Open Connector.
-        <br>ניתן לדלג ולחבר מאוחר יותר.
-      </p>
-      <div id="services">טוען...</div>
-      <div class="btn-group">
-        <button onclick="completeSetup()">סיום הגדרה</button>
-        <a href="/connector/" target="_blank">
-          <button type="button" class="secondary">פתח Open Connector</button>
-        </a>
-      </div>
-    </div>
-    <script>
-      async function loadServices() {
-        try {
-          const res = await fetch('/api/services');
-          const { data } = await res.json();
-          const container = document.getElementById('services');
-          if (data.length === 0) {
-            container.innerHTML = '<p style="color: #aaa;">לא נמצאו שירותים. ודא ש-Open Connector פועל.</p>';
-            return;
-          }
-          container.innerHTML = data.slice(0, 10).map(s => \`
-            <div style="display: flex; align-items: center; gap: 12px; padding: 12px; background: rgba(255,255,255,0.05); border-radius: 8px; margin-bottom: 8px;">
-              <span style="font-size: 20px;">\${s.isConnected ? '✅' : '⚪'}</span>
-              <div style="flex: 1;">
-                <strong>\${s.name}</strong>
-                \${s.identity ? \`<span style="color: #aaa; font-size: 14px;"> - \${s.identity}</span>\` : ''}
               </div>
             </div>
-          \`).join('');
-        } catch (err) {
-          document.getElementById('services').innerHTML = '<p style="color: #f87171;">שגיאה בטעינת שירותים</p>';
-        }
-      }
-      async function completeSetup() {
-        await fetch('/api/setup/complete', { method: 'POST' });
-        location.href = '/';
-      }
-      loadServices();
-    </script>
-    `}
+          </div>
+          
+          <!-- ChatGPT -->
+          <div class="provider ${openaiConnected ? 'connected' : ''}" id="openaiCard">
+            <div class="provider-icon openai">
+              <svg viewBox="0 0 24 24" fill="currentColor">
+                <path d="M22.282 9.821a5.985 5.985 0 0 0-.516-4.91 6.046 6.046 0 0 0-6.51-2.9A6.065 6.065 0 0 0 4.981 4.18a5.985 5.985 0 0 0-3.998 2.9 6.046 6.046 0 0 0 .743 7.097 5.98 5.98 0 0 0 .51 4.911 6.051 6.051 0 0 0 6.515 2.9A5.985 5.985 0 0 0 13.26 24a6.056 6.056 0 0 0 5.772-4.206 5.99 5.99 0 0 0 3.997-2.9 6.056 6.056 0 0 0-.747-7.073zM13.26 22.43a4.476 4.476 0 0 1-2.876-1.04l.141-.081 4.779-2.758a.795.795 0 0 0 .392-.681v-6.737l2.02 1.168a.071.071 0 0 1 .038.052v5.583a4.504 4.504 0 0 1-4.494 4.494zM3.6 18.304a4.47 4.47 0 0 1-.535-3.014l.142.085 4.783 2.759a.771.771 0 0 0 .78 0l5.843-3.369v2.332a.08.08 0 0 1-.033.062L9.74 19.95a4.5 4.5 0 0 1-6.14-1.646zM2.34 7.896a4.485 4.485 0 0 1 2.366-1.973V11.6a.766.766 0 0 0 .388.676l5.815 3.355-2.02 1.168a.076.076 0 0 1-.071 0l-4.83-2.786A4.504 4.504 0 0 1 2.34 7.872zm16.597 3.855l-5.833-3.387L15.119 7.2a.076.076 0 0 1 .071 0l4.83 2.791a4.494 4.494 0 0 1-.676 8.105v-5.678a.79.79 0 0 0-.407-.667zm2.01-3.023l-.141-.085-4.774-2.782a.776.776 0 0 0-.785 0L9.409 9.23V6.897a.066.066 0 0 1 .028-.061l4.83-2.787a4.5 4.5 0 0 1 6.68 4.66zm-12.64 4.135l-2.02-1.164a.08.08 0 0 1-.038-.057V6.075a4.5 4.5 0 0 1 7.375-3.453l-.142.08L8.704 5.46a.795.795 0 0 0-.393.681zm1.097-2.365l2.602-1.5 2.607 1.5v2.999l-2.597 1.5-2.607-1.5z"/>
+              </svg>
+            </div>
+            <div class="provider-body">
+              <div class="provider-name">ChatGPT Plus / Pro</div>
+              <div class="provider-desc">OpenAI — מודל GPT מהיר ויעיל</div>
+              <div class="provider-actions">
+                ${openaiConnected 
+                  ? `<span class="status-chip"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg> מחובר</span>`
+                  : `<button class="btn btn-secondary" id="openaiBtn" onclick="startLogin('openai-codex')">התחברות</button>`
+                }
+              </div>
+              <div class="provider-error" id="openaiError">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/>
+                </svg>
+                <span id="openaiErrorText"></span>
+              </div>
+              <div class="paste-section" id="openaiPaste">
+                <p class="paste-hint">אם הדפדפן לא על אותו מחשב, הדביקו את הקוד או כתובת ה-callback:</p>
+                <div class="paste-row">
+                  <input type="text" id="openaiCode" class="input" placeholder="http://127.0.0.1:1455/callback?code=...">
+                  <button class="btn btn-secondary" onclick="completePaste('openai-codex')">אישור</button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <footer class="onboard-footer">
+        <button class="btn btn-primary finish-btn" id="finishBtn" onclick="finishSetup()" ${!anthropicConnected && !openaiConnected ? 'disabled' : ''}>
+          <span id="finishText">סיום והמשך</span>
+          <div id="finishSpinner" class="spinner" style="display: none;"></div>
+        </button>
+        <p class="finish-hint" id="finishHint">
+          ${!anthropicConnected && !openaiConnected ? 'חברו לפחות מנוי AI אחד כדי להמשיך' : 'הסוכן יהיה מוכן לשימוש'}
+        </p>
+      </footer>
+    </div>
   </div>
+  
+  <script>
+    const state = {
+      anthropic: ${anthropicConnected},
+      'openai-codex': ${openaiConnected},
+      isPaired: ${pairingState.isPaired}
+    };
+    
+    function showError(msg) {
+      const banner = document.getElementById('errorBanner');
+      document.getElementById('errorText').textContent = msg;
+      banner.classList.add('show');
+      setTimeout(() => banner.classList.remove('show'), 5000);
+    }
+    
+    function updateFinishButton() {
+      const canFinish = state.anthropic || state['openai-codex'];
+      const btn = document.getElementById('finishBtn');
+      const hint = document.getElementById('finishHint');
+      btn.disabled = !canFinish;
+      hint.textContent = canFinish ? 'הסוכן יהיה מוכן לשימוש' : 'חברו לפחות מנוי AI אחד כדי להמשיך';
+    }
+    
+    function setProviderConnected(provider) {
+      state[provider] = true;
+      const card = document.getElementById(provider === 'anthropic' ? 'anthropicCard' : 'openaiCard');
+      const paste = document.getElementById(provider === 'anthropic' ? 'anthropicPaste' : 'openaiPaste');
+      
+      card.classList.add('connected');
+      paste.classList.remove('show');
+      
+      const actionsHtml = \`<span class="status-chip"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg> מחובר</span>\`;
+      card.querySelector('.provider-actions').innerHTML = actionsHtml;
+      
+      updateFinishButton();
+    }
+    
+    async function startLogin(provider) {
+      const btn = document.getElementById(provider === 'anthropic' ? 'anthropicBtn' : 'openaiBtn');
+      const errDiv = document.getElementById(provider === 'anthropic' ? 'anthropicError' : 'openaiError');
+      const errText = document.getElementById(provider === 'anthropic' ? 'anthropicErrorText' : 'openaiErrorText');
+      const paste = document.getElementById(provider === 'anthropic' ? 'anthropicPaste' : 'openaiPaste');
+      
+      if (!btn) return;
+      
+      btn.disabled = true;
+      btn.innerHTML = '<div class="spinner" style="width:16px;height:16px;"></div>';
+      errDiv.classList.remove('show');
+      
+      try {
+        const res = await fetch('/api/auth/login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'same-origin',
+          body: JSON.stringify({ provider })
+        });
+        
+        if (!res.ok) {
+          const data = await res.json().catch(() => ({}));
+          throw new Error(data.error || 'בקשה נכשלה');
+        }
+        
+        const { success, data, error } = await res.json();
+        if (!success) throw new Error(error || 'התחברות נכשלה');
+        
+        window.open(data.authorizeUrl, '_blank');
+        paste.classList.add('show');
+        btn.textContent = 'ממתין...';
+        
+        pollStatus(provider);
+      } catch (err) {
+        errText.textContent = err.message;
+        errDiv.classList.add('show');
+        btn.textContent = 'נסו שוב';
+        btn.disabled = false;
+      }
+    }
+    
+    async function completePaste(provider) {
+      const input = document.getElementById(provider === 'anthropic' ? 'anthropicCode' : 'openaiCode');
+      const errDiv = document.getElementById(provider === 'anthropic' ? 'anthropicError' : 'openaiError');
+      const errText = document.getElementById(provider === 'anthropic' ? 'anthropicErrorText' : 'openaiErrorText');
+      const code = input.value.trim();
+      
+      if (!code) {
+        errText.textContent = 'הזינו את הקוד או הכתובת';
+        errDiv.classList.add('show');
+        return;
+      }
+      
+      errDiv.classList.remove('show');
+      
+      try {
+        const res = await fetch('/api/auth/complete', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'same-origin',
+          body: JSON.stringify({ provider, codeOrRedirectUrl: code })
+        });
+        
+        const { success, error } = await res.json();
+        if (success) {
+          setProviderConnected(provider);
+        } else {
+          errText.textContent = error || 'אישור נכשל';
+          errDiv.classList.add('show');
+        }
+      } catch (err) {
+        errText.textContent = 'שגיאת רשת';
+        errDiv.classList.add('show');
+      }
+    }
+    
+    async function pollStatus(provider) {
+      for (let i = 0; i < 90; i++) {
+        await new Promise(r => setTimeout(r, 2000));
+        try {
+          const res = await fetch('/api/auth/login/' + provider + '/status', { credentials: 'same-origin' });
+          const { data } = await res.json();
+          if (data.status === 'connected') {
+            setProviderConnected(provider);
+            return;
+          }
+        } catch {}
+      }
+    }
+    
+    async function finishSetup() {
+      const btn = document.getElementById('finishBtn');
+      const text = document.getElementById('finishText');
+      const spinner = document.getElementById('finishSpinner');
+      
+      btn.disabled = true;
+      text.style.display = 'none';
+      spinner.style.display = 'block';
+      
+      const ownerName = document.getElementById('ownerName').value.trim();
+      const timezone = document.getElementById('timezone').value;
+      
+      try {
+        const settingsRes = await fetch('/api/settings', {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'same-origin',
+          body: JSON.stringify({ ownerName, timezone })
+        });
+        
+        if (!settingsRes.ok) throw new Error('שמירת הגדרות נכשלה');
+        
+        const completeRes = await fetch('/api/setup/complete', {
+          method: 'POST',
+          credentials: 'same-origin'
+        });
+        
+        if (!completeRes.ok) throw new Error('סיום הגדרה נכשל');
+        
+        window.location.href = '/';
+      } catch (err) {
+        showError(err.message);
+        btn.disabled = false;
+        text.style.display = 'inline';
+        spinner.style.display = 'none';
+      }
+    }
+    
+    ${!pairingState.isPaired ? `
+    async function pollPairing() {
+      try {
+        const res = await fetch('/api/pairing', { credentials: 'same-origin' });
+        if (!res.ok) return setTimeout(pollPairing, 1500);
+        
+        const { data } = await res.json();
+        if (data.isPaired) {
+          state.isPaired = true;
+          const section = document.querySelector('.qr-section');
+          if (section) {
+            section.innerHTML = \`
+              <div class="wa-status" style="margin: 0;">
+                <div class="wa-status-icon">
+                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+                    <polyline points="20 6 9 17 4 12"/>
+                  </svg>
+                </div>
+                <div class="wa-status-text">
+                  <div class="wa-status-name">\${data.name || 'WhatsApp מחובר'}</div>
+                  \${data.phoneNumber ? \`<div class="wa-status-phone">\${data.phoneNumber}</div>\` : ''}
+                </div>
+              </div>
+            \`;
+            document.querySelector('.section-icon').classList.add('done');
+            document.querySelector('.section-icon').innerHTML = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>';
+            document.querySelector('.section-desc').textContent = 'מחובר ומוכן';
+            
+            if (data.name && !document.getElementById('ownerName').value) {
+              document.getElementById('ownerName').value = data.name;
+            }
+          }
+          return;
+        }
+        
+        const qrRes = await fetch('/api/pairing/qr', { credentials: 'same-origin' });
+        if (qrRes.ok) {
+          const { data: qrData } = await qrRes.json();
+          if (qrData.qrDataUrl) {
+            const img = document.getElementById('qrImg');
+            if (img) img.src = qrData.qrDataUrl;
+          }
+        }
+      } catch {}
+      setTimeout(pollPairing, 1500);
+    }
+    pollPairing();
+    ` : ''}
+  </script>
 </body>
 </html>`;
 }
@@ -1188,372 +1782,813 @@ async function getDashboardHtml(settings: ReturnType<typeof loadSettings>, pairi
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>${settings.botName} - לוח בקרה</title>
+  <title>${settings.botName} — לוח בקרה</title>
   <style>
-    * { box-sizing: border-box; margin: 0; padding: 0; }
-    body {
-      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-      background: #0f0f1a;
+    ${SHARED_STYLES}
+    
+    .dashboard {
       min-height: 100vh;
-      color: #fff;
+      background: var(--bg-primary);
     }
-    .navbar {
-      background: rgba(255,255,255,0.05);
-      padding: 16px 24px;
+    
+    .nav {
       display: flex;
       align-items: center;
       justify-content: space-between;
-      border-bottom: 1px solid rgba(255,255,255,0.1);
+      padding: 16px 24px;
+      background: var(--bg-secondary);
+      border-bottom: 1px solid var(--border-subtle);
+      position: sticky;
+      top: 0;
+      z-index: 100;
     }
-    .navbar h1 { font-size: 20px; }
+    
+    .nav-brand {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+    
+    .nav-logo {
+      width: 36px;
+      height: 36px;
+      background: linear-gradient(135deg, var(--accent) 0%, #8b5cf6 100%);
+      border-radius: var(--radius-sm);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    
+    .nav-logo svg {
+      width: 18px;
+      height: 18px;
+      color: white;
+    }
+    
+    .nav-title {
+      font-size: 18px;
+      font-weight: 600;
+      letter-spacing: -0.01em;
+    }
+    
     .nav-status {
       display: flex;
       align-items: center;
-      gap: 16px;
+      gap: 10px;
+      padding: 8px 14px;
+      background: var(--bg-elevated);
+      border-radius: 100px;
+      font-size: 14px;
     }
-    .status-dot {
-      width: 10px;
-      height: 10px;
+    
+    .status-indicator {
+      width: 8px;
+      height: 8px;
       border-radius: 50%;
-      background: #10b981;
+      background: var(--success);
     }
-    .status-dot.offline { background: #ef4444; }
-    .container { max-width: 1200px; margin: 0 auto; padding: 24px; }
-    .grid {
-      display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
-      gap: 20px;
+    
+    .status-indicator.offline {
+      background: var(--error);
     }
-    .card {
-      background: rgba(255,255,255,0.05);
-      border-radius: 12px;
+    
+    .main {
+      max-width: 1100px;
+      margin: 0 auto;
       padding: 24px;
-      border: 1px solid rgba(255,255,255,0.1);
     }
-    .card h2 {
-      font-size: 18px;
-      margin-bottom: 16px;
-      display: flex;
-      align-items: center;
-      gap: 8px;
-    }
-    .stat {
-      font-size: 32px;
-      font-weight: 700;
-      color: #4f46e5;
-    }
-    .stat-label { color: #888; font-size: 14px; }
-    label { display: block; margin-bottom: 8px; font-weight: 500; color: #aaa; }
-    input, select {
-      width: 100%;
-      padding: 10px 14px;
-      border: 1px solid rgba(255,255,255,0.2);
-      border-radius: 8px;
-      background: rgba(255,255,255,0.05);
-      color: #fff;
-      font-size: 14px;
-      margin-bottom: 12px;
-    }
-    input:focus, select:focus { outline: none; border-color: #4f46e5; }
-    select option { background: #1a1a2e; }
-    button {
-      padding: 10px 20px;
-      background: #4f46e5;
-      color: #fff;
-      border: none;
-      border-radius: 8px;
-      font-size: 14px;
-      font-weight: 500;
-      cursor: pointer;
-      transition: background 0.2s;
-    }
-    button:hover { background: #4338ca; }
-    button:disabled { background: #666; cursor: not-allowed; }
-    button.secondary {
-      background: transparent;
-      border: 1px solid rgba(255,255,255,0.2);
-    }
-    button.secondary:hover { background: rgba(255,255,255,0.1); }
-    button.danger {
-      background: #ef4444;
-    }
-    button.danger:hover { background: #dc2626; }
-    .service-item {
-      display: flex;
-      align-items: center;
-      gap: 12px;
-      padding: 12px;
-      background: rgba(255,255,255,0.03);
-      border-radius: 8px;
-      margin-bottom: 8px;
-    }
-    .service-icon { font-size: 24px; }
-    .service-info { flex: 1; }
-    .service-name { font-weight: 500; }
-    .service-status { font-size: 12px; color: #888; }
+    
     .tabs {
       display: flex;
       gap: 4px;
-      margin-bottom: 24px;
-      background: rgba(255,255,255,0.05);
       padding: 4px;
-      border-radius: 8px;
-      flex-wrap: wrap;
+      background: var(--bg-secondary);
+      border-radius: var(--radius-md);
+      margin-bottom: 24px;
+      overflow-x: auto;
     }
+    
     .tab {
-      padding: 10px 20px;
+      padding: 10px 18px;
+      font-family: var(--font-sans);
+      font-size: 14px;
+      font-weight: 500;
+      color: var(--text-secondary);
       background: transparent;
       border: none;
-      color: #888;
+      border-radius: var(--radius-sm);
       cursor: pointer;
-      border-radius: 6px;
-      transition: all 0.2s;
+      transition: all var(--transition-fast);
+      white-space: nowrap;
     }
-    .tab.active { background: #4f46e5; color: #fff; }
-    .tab:hover:not(.active) { color: #fff; }
-    .project-item {
+    
+    .tab:hover {
+      color: var(--text-primary);
+      background: var(--bg-hover);
+    }
+    
+    .tab.active {
+      color: white;
+      background: var(--accent);
+    }
+    
+    .tab-content {
+      animation: fadeIn var(--transition-normal) ease-out;
+    }
+    
+    .stats-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+      gap: 16px;
+      margin-bottom: 24px;
+    }
+    
+    .stat-card {
+      background: var(--bg-secondary);
+      border: 1px solid var(--border-subtle);
+      border-radius: var(--radius-lg);
+      padding: 20px;
+      transition: border-color var(--transition-fast);
+    }
+    
+    .stat-card:hover {
+      border-color: var(--border-default);
+    }
+    
+    .stat-header {
       display: flex;
       align-items: center;
-      gap: 12px;
-      padding: 12px;
-      background: rgba(255,255,255,0.03);
-      border-radius: 8px;
-      margin-bottom: 8px;
-      cursor: pointer;
-      border: 2px solid transparent;
+      gap: 10px;
+      margin-bottom: 14px;
     }
-    .project-item.active { border-color: #4f46e5; }
-    .project-item:hover { background: rgba(255,255,255,0.08); }
-    .token-input {
-      display: flex;
-      gap: 8px;
-      margin-top: 8px;
-    }
-    .token-input input { margin-bottom: 0; }
-    .provider-card {
-      background: rgba(255,255,255,0.03);
-      border: 1px solid rgba(255,255,255,0.1);
-      border-radius: 12px;
-      padding: 16px;
-      margin-bottom: 12px;
-    }
-    .provider-card.connected { border-color: #10b981; }
-    .provider-header {
+    
+    .stat-icon {
+      width: 40px;
+      height: 40px;
+      border-radius: var(--radius-md);
       display: flex;
       align-items: center;
-      gap: 12px;
+      justify-content: center;
+      color: white;
     }
-    .provider-icon { font-size: 28px; }
-    .provider-info { flex: 1; }
-    .provider-name { font-weight: 600; }
-    .provider-desc { color: #888; font-size: 13px; }
-    .provider-actions {
+    
+    .stat-icon.whatsapp { background: linear-gradient(135deg, #25D366 0%, #128C7E 100%); }
+    .stat-icon.ai { background: linear-gradient(135deg, var(--accent) 0%, #8b5cf6 100%); }
+    .stat-icon.connector { background: linear-gradient(135deg, #f59e0b 0%, #d97706 100%); }
+    
+    .stat-icon svg {
+      width: 20px;
+      height: 20px;
+    }
+    
+    .stat-title {
+      font-size: 14px;
+      color: var(--text-secondary);
+    }
+    
+    .stat-value {
+      font-size: 28px;
+      font-weight: 600;
+      letter-spacing: -0.02em;
+      margin-bottom: 4px;
+    }
+    
+    .stat-label {
+      font-size: 13px;
+      color: var(--text-tertiary);
+    }
+    
+    .section-card {
+      background: var(--bg-secondary);
+      border: 1px solid var(--border-subtle);
+      border-radius: var(--radius-lg);
+      padding: 24px;
+      margin-bottom: 20px;
+    }
+    
+    .section-title {
+      font-size: 16px;
+      font-weight: 600;
+      margin-bottom: 16px;
       display: flex;
-      gap: 8px;
       align-items: center;
+      gap: 10px;
     }
-    .status-badge {
-      display: inline-flex;
+    
+    .section-title svg {
+      color: var(--text-secondary);
+    }
+    
+    .help-list {
+      list-style: none;
+      counter-reset: step;
+    }
+    
+    .help-list li {
+      counter-increment: step;
+      display: flex;
+      align-items: flex-start;
+      gap: 14px;
+      padding: 12px 0;
+      border-bottom: 1px solid var(--border-subtle);
+      color: var(--text-secondary);
+      font-size: 14px;
+      line-height: 1.6;
+    }
+    
+    .help-list li:last-child {
+      border-bottom: none;
+    }
+    
+    .help-list li::before {
+      content: counter(step);
+      display: flex;
       align-items: center;
-      gap: 4px;
-      padding: 4px 10px;
-      border-radius: 16px;
+      justify-content: center;
+      width: 24px;
+      height: 24px;
+      background: var(--bg-elevated);
+      border: 1px solid var(--border-default);
+      border-radius: 50%;
       font-size: 12px;
+      font-weight: 600;
+      color: var(--text-primary);
+      flex-shrink: 0;
     }
-    .status-badge.connected { background: rgba(16, 185, 129, 0.2); color: #10b981; }
-    .status-badge.pending { background: rgba(251, 191, 36, 0.2); color: #fbbf24; }
-    .status-badge.disconnected { background: rgba(239, 68, 68, 0.2); color: #ef4444; }
-    .paste-input {
-      display: none;
-      margin-top: 12px;
-      padding-top: 12px;
-      border-top: 1px solid rgba(255,255,255,0.1);
+    
+    .form-grid {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 16px;
     }
-    .paste-input.show { display: block; }
-    .paste-input input { margin-bottom: 8px; }
+    
+    @media (max-width: 600px) {
+      .form-grid { grid-template-columns: 1fr; }
+    }
+    
+    .form-group {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+    
+    .form-group.full {
+      grid-column: 1 / -1;
+    }
+    
     .model-picker {
       display: flex;
       gap: 8px;
       flex-wrap: wrap;
+    }
+    
+    .model-btn {
+      padding: 10px 18px;
+      font-family: var(--font-sans);
+      font-size: 14px;
+      font-weight: 500;
+      color: var(--text-secondary);
+      background: var(--bg-elevated);
+      border: 1px solid var(--border-default);
+      border-radius: var(--radius-md);
+      cursor: pointer;
+      transition: all var(--transition-fast);
+    }
+    
+    .model-btn:hover {
+      background: var(--bg-hover);
+      color: var(--text-primary);
+    }
+    
+    .model-btn.active {
+      background: var(--accent);
+      border-color: var(--accent);
+      color: white;
+    }
+    
+    .provider-card {
+      display: flex;
+      align-items: flex-start;
+      gap: 16px;
+      padding: 20px;
+      background: var(--bg-elevated);
+      border: 1px solid var(--border-subtle);
+      border-radius: var(--radius-lg);
+      margin-bottom: 12px;
+      transition: border-color var(--transition-fast);
+    }
+    
+    .provider-card.connected {
+      border-color: var(--success);
+    }
+    
+    .provider-icon {
+      width: 44px;
+      height: 44px;
+      border-radius: var(--radius-md);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+    }
+    
+    .provider-icon.claude {
+      background: linear-gradient(135deg, #d97706 0%, #c2410c 100%);
+    }
+    
+    .provider-icon.openai {
+      background: linear-gradient(135deg, #059669 0%, #047857 100%);
+    }
+    
+    .provider-icon svg {
+      width: 22px;
+      height: 22px;
+      color: white;
+    }
+    
+    .provider-body {
+      flex: 1;
+      min-width: 0;
+    }
+    
+    .provider-name {
+      font-weight: 600;
+      font-size: 15px;
+      margin-bottom: 2px;
+    }
+    
+    .provider-desc {
+      font-size: 13px;
+      color: var(--text-secondary);
       margin-bottom: 12px;
     }
-    .model-btn {
-      padding: 8px 16px;
-      background: rgba(255,255,255,0.05);
-      border: 1px solid rgba(255,255,255,0.2);
-      color: #aaa;
-      border-radius: 6px;
+    
+    .provider-actions {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+    
+    .status-chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 6px 12px;
+      font-size: 13px;
+      font-weight: 500;
+      border-radius: 100px;
+    }
+    
+    .status-chip.connected {
+      background: var(--success-muted);
+      color: var(--success);
+    }
+    
+    .status-chip.disconnected {
+      background: var(--error-muted);
+      color: var(--error);
+    }
+    
+    .status-chip.pending {
+      background: rgba(245,158,11,0.15);
+      color: var(--warning);
+    }
+    
+    .btn-danger {
+      background: var(--error);
+      color: white;
+    }
+    
+    .btn-danger:hover:not(:disabled) {
+      background: #dc2626;
+    }
+    
+    .paste-section {
+      display: none;
+      margin-top: 14px;
+      padding-top: 14px;
+      border-top: 1px solid var(--border-subtle);
+    }
+    
+    .paste-section.show {
+      display: block;
+      animation: fadeIn var(--transition-fast) ease-out;
+    }
+    
+    .paste-hint {
+      font-size: 13px;
+      color: var(--text-tertiary);
+      margin-bottom: 8px;
+    }
+    
+    .paste-row {
+      display: flex;
+      gap: 8px;
+    }
+    
+    .paste-row .input { flex: 1; }
+    
+    .project-list {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    
+    .project-item {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      padding: 14px 16px;
+      background: var(--bg-elevated);
+      border: 1px solid var(--border-subtle);
+      border-radius: var(--radius-md);
       cursor: pointer;
+      transition: all var(--transition-fast);
+    }
+    
+    .project-item:hover {
+      background: var(--bg-hover);
+    }
+    
+    .project-item.active {
+      border-color: var(--accent);
+      box-shadow: 0 0 0 1px var(--accent);
+    }
+    
+    .project-info { flex: 1; }
+    .project-name { font-weight: 500; font-size: 14px; }
+    .project-meta { font-size: 12px; color: var(--text-tertiary); }
+    
+    .project-badge {
+      padding: 4px 10px;
+      font-size: 12px;
+      font-weight: 500;
+      background: var(--accent-muted);
+      color: var(--accent);
+      border-radius: 100px;
+    }
+    
+    .token-row {
+      display: flex;
+      gap: 8px;
+      margin-top: 8px;
+    }
+    
+    .token-row .input {
+      flex: 1;
+      margin-bottom: 0;
+    }
+    
+    .service-list {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    
+    .service-item {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      padding: 14px 16px;
+      background: var(--bg-elevated);
+      border: 1px solid var(--border-subtle);
+      border-radius: var(--radius-md);
+    }
+    
+    .service-icon {
+      width: 36px;
+      height: 36px;
+      border-radius: var(--radius-sm);
+      background: var(--bg-hover);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: var(--text-secondary);
+    }
+    
+    .service-icon.connected {
+      background: var(--success-muted);
+      color: var(--success);
+    }
+    
+    .service-info { flex: 1; }
+    .service-name { font-weight: 500; font-size: 14px; }
+    .service-status { font-size: 12px; color: var(--text-tertiary); }
+    
+    .external-link {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      color: var(--accent);
       font-size: 14px;
-      transition: all 0.2s;
+      text-decoration: none;
+      transition: color var(--transition-fast);
     }
-    .model-btn:hover { background: rgba(255,255,255,0.1); color: #fff; }
-    .model-btn.active { background: #4f46e5; border-color: #4f46e5; color: #fff; }
-    .spinner {
-      width: 16px;
-      height: 16px;
-      border: 2px solid rgba(255,255,255,0.3);
-      border-top-color: #fff;
-      border-radius: 50%;
-      animation: spin 1s linear infinite;
+    
+    .external-link:hover {
+      color: var(--accent-hover);
     }
-    @keyframes spin { to { transform: rotate(360deg); } }
+    
+    .divider {
+      height: 1px;
+      background: var(--border-subtle);
+      margin: 20px 0;
+    }
+    
+    .toast {
+      position: fixed;
+      bottom: 24px;
+      left: 50%;
+      transform: translateX(-50%) translateY(100px);
+      padding: 12px 20px;
+      background: var(--bg-elevated);
+      border: 1px solid var(--border-default);
+      border-radius: var(--radius-md);
+      box-shadow: var(--shadow-lg);
+      font-size: 14px;
+      opacity: 0;
+      transition: all var(--transition-normal);
+      z-index: 1000;
+    }
+    
+    .toast.show {
+      transform: translateX(-50%) translateY(0);
+      opacity: 1;
+    }
   </style>
 </head>
 <body>
-  <nav class="navbar">
-    <h1>🤖 ${settings.botName}</h1>
-    <div class="nav-status">
-      <span class="status-dot ${pairingState.isPaired ? '' : 'offline'}"></span>
-      <span>${pairingState.isPaired ? `${pairingState.name || pairingState.phoneNumber}` : 'מנותק'}</span>
-    </div>
-  </nav>
-
-  <div class="container">
-    <div class="tabs">
-      <button class="tab active" onclick="showTab('dashboard')">לוח בקרה</button>
-      <button class="tab" onclick="showTab('settings')">הגדרות</button>
-      <button class="tab" onclick="showTab('ai')">מנויי AI</button>
-      <button class="tab" onclick="showTab('projects')">פרויקטים</button>
-      <button class="tab" onclick="showTab('services')">שירותים</button>
-    </div>
-
-    <div id="dashboard" class="tab-content">
-      <div class="grid">
-        <div class="card">
-          <h2>📱 WhatsApp</h2>
-          <div class="stat">${pairingState.isPaired ? '✅' : '❌'}</div>
-          <div class="stat-label">${pairingState.isPaired ? 'מחובר' : 'מנותק'}</div>
-          ${pairingState.phoneNumber ? `<p style="margin-top: 12px; color: #888;">${pairingState.phoneNumber}</p>` : ''}
+  <div class="dashboard">
+    <nav class="nav">
+      <div class="nav-brand">
+        <div class="nav-logo">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M12 2L2 7l10 5 10-5-10-5z"/>
+            <path d="M2 17l10 5 10-5"/>
+            <path d="M2 12l10 5 10-5"/>
+          </svg>
         </div>
-        <div class="card">
-          <h2>🧠 מודל AI</h2>
-          <div class="stat" style="font-size: 20px;">${currentModelAlias || 'claude'}</div>
-          <div class="stat-label">${settings.model}</div>
-        </div>
-        <div class="card">
-          <h2>🔌 Open Connector</h2>
-          <div id="connectorStatus">בודק...</div>
-        </div>
+        <span class="nav-title">${settings.botName}</span>
       </div>
-
-      <div class="card" style="margin-top: 20px;">
-        <h2>📖 איך להשתמש</h2>
-        <ol style="color: #aaa; line-height: 2; padding-right: 20px;">
-          <li>פתח את WhatsApp בטלפון שחיברת</li>
-          <li>שלח הודעה לעצמך (לשיחה שלך)</li>
-          <li>הסוכן יענה לך בצ'אט הפרטי</li>
-          <li>השתמש ב-/help לראות פקודות זמינות</li>
-        </ol>
+      <div class="nav-status">
+        <span class="status-indicator ${pairingState.isPaired ? '' : 'offline'}"></span>
+        <span>${pairingState.isPaired ? (pairingState.name || pairingState.phoneNumber || 'מחובר') : 'מנותק'}</span>
       </div>
-    </div>
-
-    <div id="settings" class="tab-content" style="display: none;">
-      <div class="card">
-        <h2>⚙️ הגדרות כלליות</h2>
-        <form id="settingsForm">
-          <label>שם הבוט</label>
-          <input type="text" name="botName" value="${settings.botName}">
-          
-          <label>שם הבעלים</label>
-          <input type="text" name="ownerName" value="${settings.ownerName}">
-          
-          <label>אזור זמן</label>
-          <select name="timezone">
-            <option value="Asia/Jerusalem" ${settings.timezone === 'Asia/Jerusalem' ? 'selected' : ''}>ישראל</option>
-            <option value="UTC" ${settings.timezone === 'UTC' ? 'selected' : ''}>UTC</option>
-            <option value="America/New_York" ${settings.timezone === 'America/New_York' ? 'selected' : ''}>ניו יורק</option>
-            <option value="Europe/London" ${settings.timezone === 'Europe/London' ? 'selected' : ''}>לונדון</option>
-          </select>
-          
-          <label>מודל AI</label>
-          <div class="model-picker">
-            <button type="button" class="model-btn ${currentModelAlias === 'claude' || currentModelAlias === 'claude-sonnet' ? 'active' : ''}" onclick="selectModel('claude')">Claude</button>
-            <button type="button" class="model-btn ${currentModelAlias === 'claude-opus' ? 'active' : ''}" onclick="selectModel('claude-opus')">Claude Opus</button>
-            <button type="button" class="model-btn ${currentModelAlias === 'gpt' || currentModelAlias === 'chatgpt' ? 'active' : ''}" onclick="selectModel('gpt')">GPT</button>
-          </div>
-          <input type="text" name="model" id="modelInput" value="${settings.model}" style="font-size: 12px;">
-          
-          <label>מצב מפתחות API</label>
-          <select name="apiKeyMode">
-            <option value="shared" ${settings.apiKeyMode === 'shared' ? 'selected' : ''}>משותף - טוקן אחד לכל הפרויקטים</option>
-            <option value="per-project" ${settings.apiKeyMode === 'per-project' ? 'selected' : ''}>לפי פרויקט - טוקן נפרד לכל פרויקט</option>
-          </select>
-          
-          <button type="submit" style="margin-top: 12px;">שמור</button>
-        </form>
+    </nav>
+    
+    <main class="main">
+      <div class="tabs">
+        <button class="tab active" onclick="showTab('overview')">סקירה</button>
+        <button class="tab" onclick="showTab('settings')">הגדרות</button>
+        <button class="tab" onclick="showTab('ai')">מנויי AI</button>
+        <button class="tab" onclick="showTab('projects')">פרויקטים</button>
+        <button class="tab" onclick="showTab('services')">שירותים</button>
       </div>
-
-      <div class="card" style="margin-top: 20px;">
-        <h2>🔑 טוקן Open Connector (משותף)</h2>
-        <p style="color: #888; margin-bottom: 12px;">משמש כברירת מחדל אם לא הוגדר טוקן ספציפי לפרויקט</p>
-        <input type="password" id="sharedToken" placeholder="הזן טוקן משותף" value="${settings.sharedConnectorToken ? '********' : ''}">
-        <button onclick="saveSharedToken()">שמור טוקן</button>
-      </div>
-    </div>
-
-    <div id="ai" class="tab-content" style="display: none;">
-      <div class="card">
-        <h2>🧠 מנויי AI</h2>
-        <p style="color: #aaa; margin-bottom: 20px;">התחבר עם מנוי ה-Claude או ChatGPT שלך. הסוכן ישתמש במנוי שלך לתשובות.</p>
-        
-        <div id="ai-providers">
-          ${providers.map(p => `
-            <div class="provider-card ${p.connected ? 'connected' : ''}" id="${p.id}-card">
-              <div class="provider-header">
-                <span class="provider-icon">${p.id === 'anthropic' ? '🟣' : '🟢'}</span>
-                <div class="provider-info">
-                  <div class="provider-name">${p.name}</div>
-                  <div class="provider-desc">${p.description}</div>
-                </div>
-                <div class="provider-actions">
-                  ${p.connected 
-                    ? `<span class="status-badge connected">✓ מחובר</span>
-                       <button class="secondary danger" onclick="logoutProvider('${p.id}')">התנתק</button>`
-                    : `<span class="status-badge disconnected" id="${p.id}-status">לא מחובר</span>
-                       <button id="${p.id}-btn" onclick="startLogin('${p.id}')">התחבר</button>`
-                  }
-                </div>
+      
+      <!-- Overview Tab -->
+      <div id="overview" class="tab-content">
+        <div class="stats-grid">
+          <div class="stat-card">
+            <div class="stat-header">
+              <div class="stat-icon whatsapp">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"/>
+                </svg>
               </div>
-              <div class="paste-input" id="${p.id}-paste">
-                <p style="font-size: 13px; color: #aaa; margin-bottom: 8px;">
-                  אם הדפדפן לא באותו מחשב, העתק את כתובת ה-callback והדבק כאן:
-                </p>
-                <input type="text" id="${p.id}-code" placeholder="הדבק כתובת callback או קוד...">
-                <button onclick="completeLogin('${p.id}')" class="secondary">אשר</button>
+              <span class="stat-title">WhatsApp</span>
+            </div>
+            <div class="stat-value">${pairingState.isPaired ? 'מחובר' : 'מנותק'}</div>
+            <div class="stat-label">${pairingState.phoneNumber || (pairingState.isPaired ? 'פעיל' : 'לא מקושר')}</div>
+          </div>
+          
+          <div class="stat-card">
+            <div class="stat-header">
+              <div class="stat-icon ai">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <circle cx="12" cy="12" r="10"/>
+                  <path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/>
+                  <line x1="12" y1="17" x2="12.01" y2="17"/>
+                </svg>
+              </div>
+              <span class="stat-title">מודל AI</span>
+            </div>
+            <div class="stat-value">${currentModelAlias || 'Claude'}</div>
+            <div class="stat-label">${settings.model}</div>
+          </div>
+          
+          <div class="stat-card">
+            <div class="stat-header">
+              <div class="stat-icon connector">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/>
+                  <polyline points="15 3 21 3 21 9"/>
+                  <line x1="10" y1="14" x2="21" y2="3"/>
+                </svg>
+              </div>
+              <span class="stat-title">Open Connector</span>
+            </div>
+            <div id="connectorStatus">
+              <div class="stat-value">בודק...</div>
+            </div>
+          </div>
+        </div>
+        
+        <div class="section-card">
+          <h2 class="section-title">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <circle cx="12" cy="12" r="10"/>
+              <path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/>
+              <line x1="12" y1="17" x2="12.01" y2="17"/>
+            </svg>
+            איך להשתמש
+          </h2>
+          <ol class="help-list">
+            <li>פתחו את WhatsApp בטלפון שחיברתם</li>
+            <li>שלחו הודעה לעצמכם (לשיחה הפרטית שלכם)</li>
+            <li>הסוכן יענה לכם אוטומטית בצ'אט</li>
+            <li>השתמשו ב-<code style="background:var(--bg-elevated);padding:2px 6px;border-radius:4px;">/help</code> לראות פקודות זמינות</li>
+          </ol>
+        </div>
+      </div>
+      
+      <!-- Settings Tab -->
+      <div id="settings" class="tab-content" style="display: none;">
+        <div class="section-card">
+          <h2 class="section-title">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <circle cx="12" cy="12" r="3"/>
+              <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+            </svg>
+            הגדרות כלליות
+          </h2>
+          <form id="settingsForm">
+            <div class="form-grid">
+              <div class="form-group">
+                <label class="label" for="botName">שם הבוט</label>
+                <input type="text" id="botName" name="botName" class="input" value="${settings.botName}">
+              </div>
+              <div class="form-group">
+                <label class="label" for="ownerName">שם הבעלים</label>
+                <input type="text" id="ownerName" name="ownerName" class="input" value="${settings.ownerName}">
+              </div>
+              <div class="form-group">
+                <label class="label" for="timezone">אזור זמן</label>
+                <select id="timezone" name="timezone" class="input" style="padding-inline-end: 40px; background-image: url(\\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' fill='%2371717a' viewBox='0 0 16 16'%3E%3Cpath d='M8 10.5l-4-4h8l-4 4z'/%3E%3C/svg%3E\\"); background-repeat: no-repeat; background-position: left 12px center; appearance: none;">
+                  <option value="Asia/Jerusalem" ${settings.timezone === 'Asia/Jerusalem' ? 'selected' : ''}>ישראל</option>
+                  <option value="America/New_York" ${settings.timezone === 'America/New_York' ? 'selected' : ''}>ניו יורק</option>
+                  <option value="Europe/London" ${settings.timezone === 'Europe/London' ? 'selected' : ''}>לונדון</option>
+                  <option value="UTC" ${settings.timezone === 'UTC' ? 'selected' : ''}>UTC</option>
+                </select>
+              </div>
+              <div class="form-group">
+                <label class="label" for="apiKeyMode">מצב טוקנים</label>
+                <select id="apiKeyMode" name="apiKeyMode" class="input" style="padding-inline-end: 40px; background-image: url(\\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' fill='%2371717a' viewBox='0 0 16 16'%3E%3Cpath d='M8 10.5l-4-4h8l-4 4z'/%3E%3C/svg%3E\\"); background-repeat: no-repeat; background-position: left 12px center; appearance: none;">
+                  <option value="shared" ${settings.apiKeyMode === 'shared' ? 'selected' : ''}>משותף</option>
+                  <option value="per-project" ${settings.apiKeyMode === 'per-project' ? 'selected' : ''}>לפי פרויקט</option>
+                </select>
+              </div>
+              <div class="form-group full">
+                <label class="label">מודל AI</label>
+                <div class="model-picker">
+                  <button type="button" class="model-btn ${currentModelAlias === 'claude' || currentModelAlias === 'claude-sonnet' ? 'active' : ''}" onclick="selectModel('claude')">Claude</button>
+                  <button type="button" class="model-btn ${currentModelAlias === 'claude-opus' ? 'active' : ''}" onclick="selectModel('claude-opus')">Claude Opus</button>
+                  <button type="button" class="model-btn ${currentModelAlias === 'gpt' || currentModelAlias === 'chatgpt' ? 'active' : ''}" onclick="selectModel('gpt')">GPT</button>
+                </div>
+                <input type="text" id="modelInput" name="model" class="input" value="${settings.model}" style="font-size: 13px; color: var(--text-secondary);">
               </div>
             </div>
+            <button type="submit" class="btn btn-primary" style="margin-top: 8px;">שמור שינויים</button>
+          </form>
+        </div>
+        
+        <div class="section-card">
+          <h2 class="section-title">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <rect x="3" y="11" width="18" height="11" rx="2" ry="2"/>
+              <path d="M7 11V7a5 5 0 0 1 10 0v4"/>
+            </svg>
+            טוקן Open Connector
+          </h2>
+          <p style="color: var(--text-secondary); font-size: 14px; margin-bottom: 16px;">טוקן משותף לכל הפרויקטים (ניתן להגדיר טוקן נפרד לכל פרויקט)</p>
+          <div class="token-row">
+            <input type="password" id="sharedToken" class="input" placeholder="הזינו טוקן משותף" value="${settings.sharedConnectorToken ? '••••••••' : ''}">
+            <button class="btn btn-secondary" onclick="saveSharedToken()">שמור</button>
+          </div>
+        </div>
+      </div>
+      
+      <!-- AI Tab -->
+      <div id="ai" class="tab-content" style="display: none;">
+        <div class="section-card">
+          <h2 class="section-title">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <circle cx="12" cy="12" r="10"/>
+              <path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/>
+              <line x1="12" y1="17" x2="12.01" y2="17"/>
+            </svg>
+            מנויי AI
+          </h2>
+          <p style="color: var(--text-secondary); font-size: 14px; margin-bottom: 20px;">חברו את המנוי שלכם ל-Claude או ChatGPT. הסוכן ישתמש במנוי שלכם.</p>
+          
+          ${providers.map(p => `
+          <div class="provider-card ${p.connected ? 'connected' : ''}" id="${p.id}-card">
+            <div class="provider-icon ${p.id === 'anthropic' ? 'claude' : 'openai'}">
+              <svg viewBox="0 0 24 24" fill="currentColor">
+                ${p.id === 'anthropic' 
+                  ? '<path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/>'
+                  : '<path d="M22.282 9.821a5.985 5.985 0 0 0-.516-4.91 6.046 6.046 0 0 0-6.51-2.9A6.065 6.065 0 0 0 4.981 4.18a5.985 5.985 0 0 0-3.998 2.9 6.046 6.046 0 0 0 .743 7.097 5.98 5.98 0 0 0 .51 4.911 6.051 6.051 0 0 0 6.515 2.9A5.985 5.985 0 0 0 13.26 24a6.056 6.056 0 0 0 5.772-4.206 5.99 5.99 0 0 0 3.997-2.9 6.056 6.056 0 0 0-.747-7.073z"/>'
+                }
+              </svg>
+            </div>
+            <div class="provider-body">
+              <div class="provider-name">${p.name}</div>
+              <div class="provider-desc">${p.description}</div>
+              <div class="provider-actions">
+                ${p.connected 
+                  ? `<span class="status-chip connected">
+                       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
+                       מחובר
+                     </span>
+                     <button class="btn btn-danger" onclick="logoutProvider('${p.id}')">התנתק</button>`
+                  : `<span class="status-chip disconnected" id="${p.id}-status">לא מחובר</span>
+                     <button class="btn btn-secondary" id="${p.id}-btn" onclick="startLogin('${p.id}')">התחברות</button>`
+                }
+              </div>
+              <div class="paste-section" id="${p.id}-paste">
+                <p class="paste-hint">אם הדפדפן לא על אותו מחשב, הדביקו את כתובת ה-callback:</p>
+                <div class="paste-row">
+                  <input type="text" id="${p.id}-code" class="input" placeholder="http://localhost:.../callback?code=...">
+                  <button class="btn btn-secondary" onclick="completeLogin('${p.id}')">אישור</button>
+                </div>
+              </div>
+            </div>
+          </div>
           `).join('')}
         </div>
       </div>
-    </div>
-
-    <div id="projects" class="tab-content" style="display: none;">
-      <div class="card">
-        <h2>📁 פרויקטים</h2>
-        <p style="color: #888; margin-bottom: 16px;">ניהול פרויקטים וטוקנים לכל פרויקט</p>
-        <div id="projectsList">טוען...</div>
-        <hr style="border-color: rgba(255,255,255,0.1); margin: 20px 0;">
-        <h3 style="margin-bottom: 12px;">צור פרויקט חדש</h3>
-        <input type="text" id="newProjectName" placeholder="שם הפרויקט">
-        <button onclick="createProject()">צור</button>
+      
+      <!-- Projects Tab -->
+      <div id="projects" class="tab-content" style="display: none;">
+        <div class="section-card">
+          <h2 class="section-title">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
+            </svg>
+            פרויקטים
+          </h2>
+          <p style="color: var(--text-secondary); font-size: 14px; margin-bottom: 16px;">ניהול פרויקטים וטוקנים</p>
+          <div id="projectsList" class="project-list">טוען...</div>
+          
+          <div class="divider"></div>
+          
+          <h3 style="font-size: 15px; font-weight: 600; margin-bottom: 12px;">פרויקט חדש</h3>
+          <div class="token-row">
+            <input type="text" id="newProjectName" class="input" placeholder="שם הפרויקט">
+            <button class="btn btn-primary" onclick="createNewProject()">צור</button>
+          </div>
+        </div>
       </div>
-    </div>
-
-    <div id="services" class="tab-content" style="display: none;">
-      <div class="card">
-        <h2>🔌 שירותים מחוברים</h2>
-        <p style="color: #888; margin-bottom: 16px;">
-          ניהול חיבורים ל-Open Connector
-          <a href="/connector/" target="_blank" style="color: #4f46e5;">פתח קונסול ←</a>
-        </p>
-        <div id="servicesList">טוען...</div>
+      
+      <!-- Services Tab -->
+      <div id="services" class="tab-content" style="display: none;">
+        <div class="section-card">
+          <h2 class="section-title">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/>
+              <polyline points="15 3 21 3 21 9"/>
+              <line x1="10" y1="14" x2="21" y2="3"/>
+            </svg>
+            שירותים מחוברים
+          </h2>
+          <p style="color: var(--text-secondary); font-size: 14px; margin-bottom: 16px;">
+            שירותים מחוברים דרך Open Connector
+            <a href="/connector/" target="_blank" class="external-link" style="margin-inline-start: 12px;">
+              פתח קונסול
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/>
+                <polyline points="15 3 21 3 21 9"/>
+                <line x1="10" y1="14" x2="21" y2="3"/>
+              </svg>
+            </a>
+          </p>
+          <div id="servicesList" class="service-list">טוען...</div>
+        </div>
       </div>
-    </div>
+    </main>
+    
+    <div id="toast" class="toast"></div>
   </div>
-
+  
   <script>
     const modelAliases = ${JSON.stringify(modelAliases)};
+    
+    function showToast(msg) {
+      const toast = document.getElementById('toast');
+      toast.textContent = msg;
+      toast.classList.add('show');
+      setTimeout(() => toast.classList.remove('show'), 3000);
+    }
     
     function selectModel(alias) {
       const config = modelAliases[alias];
@@ -1568,114 +2603,129 @@ async function getDashboardHtml(settings: ReturnType<typeof loadSettings>, pairi
       document.querySelectorAll('.tab-content').forEach(el => el.style.display = 'none');
       document.querySelectorAll('.tab').forEach(el => el.classList.remove('active'));
       document.getElementById(name).style.display = 'block';
-      document.querySelector(\`[onclick="showTab('\${name}')"]\`).classList.add('active');
+      event.target.classList.add('active');
       
       if (name === 'projects') loadProjects();
       if (name === 'services') loadServices();
     }
-
+    
     async function loadConnectorStatus() {
       try {
-        const res = await fetch('/api/connector/status');
+        const res = await fetch('/api/connector/status', { credentials: 'same-origin' });
         const { data } = await res.json();
         document.getElementById('connectorStatus').innerHTML = \`
-          <div class="stat">\${data.healthy ? '✅' : '❌'}</div>
-          <div class="stat-label">\${data.healthy ? \`\${data.connectionCount} חיבורים\` : 'לא זמין'}</div>
-          <p style="margin-top: 12px; color: #888; font-size: 12px;">\${data.url}</p>
+          <div class="stat-value">\${data.healthy ? 'פעיל' : 'לא זמין'}</div>
+          <div class="stat-label">\${data.healthy ? \`\${data.connectionCount} חיבורים\` : 'בדוק הגדרות'}</div>
         \`;
       } catch {
-        document.getElementById('connectorStatus').innerHTML = '<div class="stat">❌</div><div class="stat-label">שגיאה</div>';
+        document.getElementById('connectorStatus').innerHTML = '<div class="stat-value">שגיאה</div>';
       }
     }
-
+    
     async function loadProjects() {
       try {
-        const res = await fetch('/api/projects');
+        const res = await fetch('/api/projects', { credentials: 'same-origin' });
         const { data } = await res.json();
-        document.getElementById('projectsList').innerHTML = data.map(p => \`
-          <div class="project-item \${p.isActive ? 'active' : ''}" onclick="activateProject('\${p.id}')">
-            <div style="flex: 1;">
-              <div class="service-name">\${p.name}</div>
-              <div class="service-status">\${p.hasToken ? '🔑 יש טוקן' : '⚪ ללא טוקן'}</div>
-            </div>
-            \${p.isActive ? '<span style="color: #4f46e5;">פעיל</span>' : ''}
-          </div>
-          <div class="token-input" style="margin-bottom: 16px;">
-            <input type="password" id="token-\${p.id}" placeholder="טוקן Open Connector לפרויקט">
-            <button onclick="saveProjectToken('\${p.id}')">שמור</button>
-          </div>
-        \`).join('');
+        document.getElementById('projectsList').innerHTML = data.length > 0 
+          ? data.map(p => \`
+              <div class="project-item \${p.isActive ? 'active' : ''}" onclick="activateProject('\${p.id}')">
+                <div class="project-info">
+                  <div class="project-name">\${p.name}</div>
+                  <div class="project-meta">\${p.hasToken ? 'יש טוקן' : 'ללא טוקן'}</div>
+                </div>
+                \${p.isActive ? '<span class="project-badge">פעיל</span>' : ''}
+              </div>
+              <div class="token-row" style="margin-bottom: 12px;">
+                <input type="password" id="token-\${p.id}" class="input" placeholder="טוקן Open Connector">
+                <button class="btn btn-secondary" onclick="event.stopPropagation(); saveProjectToken('\${p.id}')">שמור</button>
+              </div>
+            \`).join('')
+          : '<p style="color: var(--text-tertiary);">אין פרויקטים</p>';
       } catch {
-        document.getElementById('projectsList').innerHTML = '<p style="color: #f87171;">שגיאה בטעינת פרויקטים</p>';
+        document.getElementById('projectsList').innerHTML = '<p style="color: var(--error);">שגיאה בטעינה</p>';
       }
     }
-
+    
     async function loadServices() {
       try {
-        const res = await fetch('/api/services');
+        const res = await fetch('/api/services', { credentials: 'same-origin' });
         const { data } = await res.json();
-        document.getElementById('servicesList').innerHTML = data.map(s => \`
-          <div class="service-item">
-            <span class="service-icon">\${s.isConnected ? '✅' : '⚪'}</span>
-            <div class="service-info">
-              <div class="service-name">\${s.name}</div>
-              <div class="service-status">\${s.identity || (s.isConnected ? 'מחובר' : 'לא מחובר')}</div>
-            </div>
-          </div>
-        \`).join('') || '<p style="color: #888;">לא נמצאו שירותים</p>';
+        document.getElementById('servicesList').innerHTML = data.length > 0
+          ? data.map(s => \`
+              <div class="service-item">
+                <div class="service-icon \${s.isConnected ? 'connected' : ''}">
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    \${s.isConnected 
+                      ? '<polyline points="20 6 9 17 4 12"/>'
+                      : '<circle cx="12" cy="12" r="10"/>'
+                    }
+                  </svg>
+                </div>
+                <div class="service-info">
+                  <div class="service-name">\${s.name}</div>
+                  <div class="service-status">\${s.identity || (s.isConnected ? 'מחובר' : 'לא מחובר')}</div>
+                </div>
+              </div>
+            \`).join('')
+          : '<p style="color: var(--text-tertiary);">לא נמצאו שירותים</p>';
       } catch {
-        document.getElementById('servicesList').innerHTML = '<p style="color: #f87171;">שגיאה בטעינת שירותים</p>';
+        document.getElementById('servicesList').innerHTML = '<p style="color: var(--error);">שגיאה בטעינה</p>';
       }
     }
-
+    
     async function activateProject(id) {
-      await fetch(\`/api/projects/\${id}/activate\`, { method: 'PUT' });
+      await fetch(\`/api/projects/\${id}/activate\`, { method: 'PUT', credentials: 'same-origin' });
       loadProjects();
     }
-
+    
     async function saveProjectToken(id) {
-      const token = document.getElementById(\`token-\${id}\`).value;
+      const token = document.getElementById('token-' + id).value;
       await fetch(\`/api/projects/\${id}/token\`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
+        credentials: 'same-origin',
         body: JSON.stringify({ token })
       });
+      showToast('נשמר!');
       loadProjects();
     }
-
-    async function createProject() {
-      const name = document.getElementById('newProjectName').value;
+    
+    async function createNewProject() {
+      const name = document.getElementById('newProjectName').value.trim();
       if (!name) return;
       await fetch('/api/projects', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
+        credentials: 'same-origin',
         body: JSON.stringify({ name })
       });
       document.getElementById('newProjectName').value = '';
+      showToast('נוצר!');
       loadProjects();
     }
-
+    
     async function saveSharedToken() {
       const token = document.getElementById('sharedToken').value;
       await fetch('/api/settings', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
+        credentials: 'same-origin',
         body: JSON.stringify({ sharedConnectorToken: token })
       });
-      alert('נשמר!');
+      showToast('נשמר!');
     }
-
+    
     async function startLogin(provider) {
       const btn = document.getElementById(provider + '-btn');
       const status = document.getElementById(provider + '-status');
-      const pasteDiv = document.getElementById(provider + '-paste');
+      const paste = document.getElementById(provider + '-paste');
       
       if (!btn) return;
       
       btn.disabled = true;
       btn.innerHTML = '<div class="spinner"></div>';
       if (status) {
-        status.className = 'status-badge pending';
+        status.className = 'status-chip pending';
         status.textContent = 'מתחבר...';
       }
       
@@ -1683,36 +2733,32 @@ async function getDashboardHtml(settings: ReturnType<typeof loadSettings>, pairi
         const res = await fetch('/api/auth/login', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
+          credentials: 'same-origin',
           body: JSON.stringify({ provider })
         });
         const { success, data, error } = await res.json();
         
-        if (!success) {
-          throw new Error(error || 'Login failed');
-        }
+        if (!success) throw new Error(error || 'Login failed');
         
         window.open(data.authorizeUrl, '_blank');
-        pasteDiv.classList.add('show');
+        paste.classList.add('show');
         btn.textContent = 'ממתין...';
         
         pollLoginStatus(provider);
       } catch (err) {
         if (status) {
-          status.className = 'status-badge disconnected';
+          status.className = 'status-chip disconnected';
           status.textContent = 'שגיאה';
         }
-        btn.textContent = 'נסה שוב';
+        btn.textContent = 'נסו שוב';
         btn.disabled = false;
-        console.error('Login error:', err);
       }
     }
     
     async function completeLogin(provider) {
-      const codeInput = document.getElementById(provider + '-code');
-      const code = codeInput?.value.trim();
-      
+      const code = document.getElementById(provider + '-code')?.value.trim();
       if (!code) {
-        alert('הזן קוד או כתובת callback');
+        showToast('הזינו קוד או כתובת callback');
         return;
       }
       
@@ -1720,6 +2766,7 @@ async function getDashboardHtml(settings: ReturnType<typeof loadSettings>, pairi
         const res = await fetch('/api/auth/complete', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
+          credentials: 'same-origin',
           body: JSON.stringify({ provider, codeOrRedirectUrl: code })
         });
         const { success, error } = await res.json();
@@ -1727,39 +2774,35 @@ async function getDashboardHtml(settings: ReturnType<typeof loadSettings>, pairi
         if (success) {
           location.reload();
         } else {
-          alert('שגיאה: ' + (error || 'Unknown error'));
+          showToast('שגיאה: ' + (error || 'נכשל'));
         }
-      } catch (err) {
-        alert('שגיאה בהתחברות');
-        console.error('Complete login error:', err);
+      } catch {
+        showToast('שגיאת רשת');
       }
     }
     
     async function pollLoginStatus(provider) {
-      for (let i = 0; i < 60; i++) {
-        await new Promise(r => setTimeout(r, 3000));
-        
+      for (let i = 0; i < 90; i++) {
+        await new Promise(r => setTimeout(r, 2000));
         try {
-          const res = await fetch('/api/auth/login/' + provider + '/status');
+          const res = await fetch('/api/auth/login/' + provider + '/status', { credentials: 'same-origin' });
           const { data } = await res.json();
-          
           if (data.status === 'connected') {
             location.reload();
             return;
           }
-        } catch (err) {
-          console.error('Poll error:', err);
-        }
+        } catch {}
       }
     }
     
     async function logoutProvider(provider) {
-      if (!confirm('האם אתה בטוח שברצונך להתנתק?')) return;
+      if (!confirm('להתנתק מהמנוי?')) return;
       
       try {
         const res = await fetch('/api/auth/logout', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
+          credentials: 'same-origin',
           body: JSON.stringify({ provider })
         });
         const { success, error } = await res.json();
@@ -1767,25 +2810,25 @@ async function getDashboardHtml(settings: ReturnType<typeof loadSettings>, pairi
         if (success) {
           location.reload();
         } else {
-          alert('שגיאה: ' + (error || 'Unknown error'));
+          showToast('שגיאה: ' + (error || 'נכשל'));
         }
-      } catch (err) {
-        alert('שגיאה בהתנתקות');
-        console.error('Logout error:', err);
+      } catch {
+        showToast('שגיאת רשת');
       }
     }
-
+    
     document.getElementById('settingsForm').addEventListener('submit', async (e) => {
       e.preventDefault();
       const form = new FormData(e.target);
       await fetch('/api/settings', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
+        credentials: 'same-origin',
         body: JSON.stringify(Object.fromEntries(form.entries()))
       });
-      alert('נשמר!');
+      showToast('נשמר!');
     });
-
+    
     loadConnectorStatus();
   </script>
 </body>
