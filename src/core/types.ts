@@ -12,6 +12,11 @@ export interface Settings {
   setupComplete: boolean;
   createdAt: string;
   updatedAt: string;
+  businessName?: string;
+  businessDescription?: string;
+  agentVoice?: string;
+  agentBoundaries?: string;
+  connectedProviders?: string[];
 }
 
 export interface ServiceConfig {
@@ -73,8 +78,8 @@ export interface PairingState {
 export const DEFAULT_SETTINGS: Settings = {
   botName: 'Desk Agent',
   ownerName: '',
-  timezone: 'UTC',
-  model: 'claude-3-5-sonnet-20241022',
+  timezone: 'Asia/Jerusalem',
+  model: 'claude-sonnet-4-5',
   apiKeyMode: 'shared',
   projectTokens: {},
   activeProject: 'default',
@@ -82,4 +87,9 @@ export const DEFAULT_SETTINGS: Settings = {
   setupComplete: false,
   createdAt: new Date().toISOString(),
   updatedAt: new Date().toISOString(),
+  businessName: '',
+  businessDescription: '',
+  agentVoice: '',
+  agentBoundaries: '',
+  connectedProviders: [],
 };

@@ -15,6 +15,7 @@ import {
   cancelConfirmation,
   cleanupOldConfirmations,
 } from '../agent/session.ts';
+import { isSelfChatJid, validateSelfChatMessage } from './self-chat.ts';
 
 const log = createChildLogger('handler');
 
@@ -95,26 +96,40 @@ async function checkForConfirmationResponse(text: string): Promise<CommandResult
   return { handled: false };
 }
 
-function isSelfChat(message: Message, ownerJid: string): boolean {
-  const ownerPhone = ownerJid.split(':')[0]?.split('@')[0];
-  const toJid = message.to;
-  const toPhone = toJid.split(':')[0]?.split('@')[0];
+/**
+ * SECURITY: Validates that a message is in a self-chat conversation.
+ * 
+ * This is a critical security gate. The bot must NEVER respond to:
+ * - Messages in chats with other people
+ * - Messages in group chats
+ * - Messages in broadcast lists
+ * 
+ * The production incident occurred because this check was insufficient.
+ * Now we use the validated isSelfChatJid function.
+ */
+function isSelfChat(message: Message, ownerJid: string, ownerLid: string | null): boolean {
+  const ownerPhone = ownerJid.split(':')[0]?.split('@')[0] ?? null;
+  const targetJid = message.isFromMe ? message.to : message.from;
   
-  return message.isFromMe && toPhone === ownerPhone;
+  return isSelfChatJid(targetJid, ownerPhone, ownerLid);
 }
 
 export async function handleMessage(message: Message): Promise<void> {
   const settings = loadSettings();
   const wa = getWhatsAppClient();
   const ownerJid = wa.getOwnerJid();
+  const ownerLid = wa.getOwnerLid();
 
   if (!ownerJid) {
     log.warn('No owner JID, skipping message');
     return;
   }
 
-  if (!isSelfChat(message, ownerJid)) {
-    log.debug({ from: message.from, to: message.to, isFromMe: message.isFromMe }, 'Ignoring non-self-chat message');
+  if (!isSelfChat(message, ownerJid, ownerLid)) {
+    log.debug(
+      { from: message.from, to: message.to, isFromMe: message.isFromMe },
+      'SECURITY: Ignoring non-self-chat message - bot will NOT respond'
+    );
     return;
   }
 

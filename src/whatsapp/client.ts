@@ -16,6 +16,7 @@ import { config } from '../core/config.ts';
 import { createChildLogger } from '../core/logger.ts';
 import { loadSettings, updateSettings } from '../core/settings.ts';
 import type { PairingState, Message } from '../core/types.ts';
+import { isSelfChatJid, extractPhoneFromJid, extractLidFromJid } from './self-chat.ts';
 
 const log = createChildLogger('whatsapp');
 
@@ -28,6 +29,7 @@ export class WhatsAppClient {
   private reconnectAttempts = 0;
   private maxReconnectAttempts = 5;
   private ownerJid: string | null = null;
+  private ownerLid: string | null = null;
 
   async connect(): Promise<void> {
     const authDir = join(config.dataDir, 'whatsapp-auth');
@@ -95,12 +97,16 @@ export class WhatsAppClient {
       }
 
       if (connection === 'open') {
+        const userJid = this.socket?.user?.id ?? null;
+        const userLid = (this.socket?.user as { lid?: string } | undefined)?.lid ?? null;
+        
         this.pairingState = {
           isPaired: true,
-          phoneNumber: this.socket?.user?.id?.split(':')[0],
+          phoneNumber: extractPhoneFromJid(userJid) ?? undefined,
           name: this.socket?.user?.name,
         };
-        this.ownerJid = this.socket?.user?.id ?? null;
+        this.ownerJid = userJid;
+        this.ownerLid = userLid ? extractLidFromJid(userLid) : null;
         this.reconnectAttempts = 0;
 
         const settings = loadSettings();
@@ -109,7 +115,11 @@ export class WhatsAppClient {
         }
 
         log.info(
-          { phone: this.pairingState.phoneNumber, name: this.pairingState.name },
+          { 
+            phone: this.pairingState.phoneNumber, 
+            name: this.pairingState.name,
+            ownerLid: this.ownerLid 
+          },
           'Connected to WhatsApp'
         );
       }
@@ -162,15 +172,28 @@ export class WhatsAppClient {
     }
   }
 
+  /**
+   * SECURITY: Validates that the message is from the owner's self-chat.
+   * 
+   * This function determines if the bot should process a message.
+   * It ONLY returns true if:
+   * 1. The message is in a self-chat (message-yourself) conversation
+   * 2. The remoteJid matches the owner's phone or LID
+   * 
+   * IMPORTANT: This function does NOT use isFromMe alone.
+   * The production incident occurred because the old implementation
+   * returned true for ALL isFromMe messages, causing the bot to
+   * respond in other people's chats.
+   */
   private isOwnerMessage(remoteJid: string, isFromMe: boolean): boolean {
-    if (isFromMe) return true;
-    if (remoteJid === this.ownerJid) return true;
-    if (remoteJid.endsWith('@s.whatsapp.net')) {
-      const phoneFromJid = remoteJid.split('@')[0];
-      const ownerPhone = this.pairingState.phoneNumber;
-      return phoneFromJid === ownerPhone;
+    const ownerPhone = this.pairingState.phoneNumber ?? null;
+    const isSelfChat = isSelfChatJid(remoteJid, ownerPhone, this.ownerLid);
+    
+    if (!isSelfChat) {
+      return false;
     }
-    return false;
+    
+    return true;
   }
 
   private extractMessageBody(message: proto.IMessage): string | null {
@@ -274,6 +297,14 @@ export class WhatsAppClient {
 
   getOwnerJid(): string | null {
     return this.ownerJid;
+  }
+
+  getOwnerLid(): string | null {
+    return this.ownerLid;
+  }
+
+  getOwnerPhone(): string | null {
+    return this.pairingState.phoneNumber ?? null;
   }
 
   isConnected(): boolean {

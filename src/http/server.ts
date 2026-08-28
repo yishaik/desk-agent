@@ -1,11 +1,12 @@
 import { createServer, IncomingMessage, ServerResponse } from 'node:http';
 import { parse as parseUrl } from 'node:url';
 import { parse as parseQuery } from 'node:querystring';
-import { readFileSync } from 'node:fs';
+import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { config } from '../core/config.ts';
 import { createChildLogger } from '../core/logger.ts';
+import type { Settings } from '../core/types.ts';
 import {
   loadSettings,
   updateSettings,
@@ -138,6 +139,22 @@ addRoute('GET', '/health', async (req, res) => {
 });
 
 addRoute('GET', '/', async (req, res) => {
+  const url = parseUrl(req.url ?? '', true);
+  const queryToken = url.query['token'] as string | undefined;
+  
+  if (queryToken && queryToken === config.pairToken) {
+    const isHttps = req.headers['x-forwarded-proto'] === 'https' || 
+                    req.headers.host?.startsWith('https') ||
+                    config.isProduction;
+    const securePart = isHttps ? '; Secure' : '';
+    res.setHeader(
+      'Set-Cookie',
+      `PAIR_TOKEN=${queryToken}; Path=/; HttpOnly; SameSite=Strict; Max-Age=31536000${securePart}`
+    );
+    redirect(res, '/');
+    return;
+  }
+
   if (!isAuthenticated(req)) {
     const loginHtml = getLoginHtml();
     sendHtml(res, loginHtml);
@@ -148,9 +165,9 @@ addRoute('GET', '/', async (req, res) => {
   const wa = getWhatsAppClient();
   const pairingState = wa.getPairingState();
 
-  if (isSetupRequired() || !pairingState.isPaired) {
-    const wizardHtml = getWizardHtml(settings, pairingState);
-    sendHtml(res, wizardHtml);
+  if (isSetupRequired()) {
+    const setupHtml = getSetupHtml(settings, pairingState);
+    sendHtml(res, setupHtml);
     return;
   }
 
@@ -218,15 +235,25 @@ addRoute('PUT', '/api/settings', async (req, res) => {
     model: string;
     apiKeyMode: 'shared' | 'per-project';
     sharedConnectorToken: string;
+    businessName: string;
+    businessDescription: string;
+    agentVoice: string;
+    agentBoundaries: string;
+    connectedProviders: string[];
   }>>(req);
 
-  const updates: Partial<typeof body> = {};
-  if (body.botName) updates.botName = body.botName;
-  if (body.ownerName) updates.ownerName = body.ownerName;
-  if (body.timezone) updates.timezone = body.timezone;
-  if (body.model) updates.model = body.model;
-  if (body.apiKeyMode) updates.apiKeyMode = body.apiKeyMode;
-  if (body.sharedConnectorToken) updates.sharedConnectorToken = body.sharedConnectorToken;
+  const updates: Partial<Settings> = {};
+  if (body.botName !== undefined) updates.botName = body.botName;
+  if (body.ownerName !== undefined) updates.ownerName = body.ownerName;
+  if (body.timezone !== undefined) updates.timezone = body.timezone;
+  if (body.model !== undefined) updates.model = body.model;
+  if (body.apiKeyMode !== undefined) updates.apiKeyMode = body.apiKeyMode;
+  if (body.sharedConnectorToken !== undefined) updates.sharedConnectorToken = body.sharedConnectorToken;
+  if (body.businessName !== undefined) updates.businessName = body.businessName;
+  if (body.businessDescription !== undefined) updates.businessDescription = body.businessDescription;
+  if (body.agentVoice !== undefined) updates.agentVoice = body.agentVoice;
+  if (body.agentBoundaries !== undefined) updates.agentBoundaries = body.agentBoundaries;
+  if (body.connectedProviders !== undefined) updates.connectedProviders = body.connectedProviders;
 
   const settings = updateSettings(updates);
   sendJson(res, { success: true, data: { ...settings, sharedConnectorToken: '***' } });
@@ -345,9 +372,82 @@ addRoute('POST', '/api/setup/complete', async (req, res) => {
     return;
   }
 
+  const settings = loadSettings();
+  
+  const projectDir = join(config.dataDir, 'projects', settings.activeProject);
+  if (!existsSync(projectDir)) {
+    mkdirSync(projectDir, { recursive: true });
+  }
+
+  const soulMd = generateSoulMd(settings);
+  writeFileSync(join(projectDir, 'SOUL.md'), soulMd, 'utf-8');
+  log.info({ path: join(projectDir, 'SOUL.md') }, 'Generated SOUL.md');
+
+  const agentsMd = generateAgentsMd(settings);
+  writeFileSync(join(projectDir, 'AGENTS.md'), agentsMd, 'utf-8');
+  log.info({ path: join(projectDir, 'AGENTS.md') }, 'Generated AGENTS.md');
+
   markSetupComplete();
   sendJson(res, { success: true });
 });
+
+function generateSoulMd(settings: Settings): string {
+  const businessName = settings.businessName || settings.botName;
+  const ownerName = settings.ownerName || 'הבעלים';
+  const description = settings.businessDescription || 'עסק קטן-בינוני';
+  const voice = settings.agentVoice || 'מקצועי, ידידותי, יעיל';
+  const boundaries = settings.agentBoundaries || 'לא לבצע פעולות ללא אישור, לא לחשוף מידע רגיש';
+
+  return `# ${businessName}
+
+## מי אני
+אני הסוכן האישי של ${ownerName} ב-${businessName}.
+${description}
+
+## אזור זמן
+${settings.timezone}
+
+## קול ואופי
+${voice}
+
+## גבולות
+${boundaries}
+
+## שפה
+עברית היא השפה הראשית. אענה בעברית אלא אם נשאלתי בשפה אחרת.
+`;
+}
+
+function generateAgentsMd(settings: Settings): string {
+  return `# ${settings.businessName || settings.botName} - הנחיות עבודה
+
+## כללי
+- קרא את SOUL.md להבנת הזהות והגבולות
+- השתמש בכלי Open Connector לביצוע פעולות
+- תמיד בקש אישור לפני פעולות שמשנות מידע (שליחה, יצירה, עדכון, מחיקה)
+
+## כלים זמינים
+- \`oc_search_actions\` - חפש פעולות זמינות
+- \`oc_get_action_guide\` - קבל תיעוד על פעולה
+- \`oc_execute_action\` - בצע פעולה (דורש אישור למוטציות)
+- \`oc_list_connections\` - רשימת שירותים מחוברים
+
+## זרימת עבודה
+1. הבן את הבקשה
+2. חפש פעולות רלוונטיות עם oc_search_actions
+3. קרא את התיעוד עם oc_get_action_guide
+4. הצג את התוכנית למשתמש
+5. בקש אישור לפעולות שמשנות מידע
+6. בצע רק לאחר אישור מפורש
+
+## אישורים
+פעולות שדורשות אישור: send*, create*, update*, delete*, post*, publish*
+פעולות שלא דורשות אישור: get*, list*, search*, read*
+
+## שגיאות
+דווח שגיאות בעברית ברורה. אל תחשוף פרטים טכניים מיותרים.
+`;
+}
 
 addRoute('GET', '/api/connector/status', async (req, res) => {
   if (!isAuthenticated(req)) {
@@ -388,85 +488,161 @@ function getLoginHtml(): string {
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Desk Agent - התחברות</title>
+  <title>Desk Agent</title>
   <style>
+    :root {
+      --bg-primary: #09090b;
+      --bg-secondary: #18181b;
+      --bg-tertiary: #27272a;
+      --border: #3f3f46;
+      --text-primary: #fafafa;
+      --text-secondary: #a1a1aa;
+      --text-muted: #71717a;
+      --accent: #6366f1;
+      --accent-hover: #4f46e5;
+      --error: #ef4444;
+      --success: #22c55e;
+    }
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body {
-      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-      background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+      background: var(--bg-primary);
       min-height: 100vh;
       display: flex;
       align-items: center;
       justify-content: center;
-      color: #fff;
+      color: var(--text-primary);
+      -webkit-font-smoothing: antialiased;
     }
-    .login-card {
-      background: rgba(255,255,255,0.1);
-      backdrop-filter: blur(10px);
-      border-radius: 16px;
-      padding: 40px;
+    .login-container {
       width: 100%;
-      max-width: 400px;
-      box-shadow: 0 8px 32px rgba(0,0,0,0.3);
+      max-width: 380px;
+      padding: 24px;
     }
-    h1 { text-align: center; margin-bottom: 8px; font-size: 28px; }
-    .subtitle { text-align: center; color: #aaa; margin-bottom: 32px; }
-    label { display: block; margin-bottom: 8px; font-weight: 500; }
+    .logo {
+      text-align: center;
+      margin-bottom: 32px;
+    }
+    .logo-mark {
+      width: 48px;
+      height: 48px;
+      background: var(--accent);
+      border-radius: 12px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 24px;
+      margin-bottom: 16px;
+    }
+    .logo h1 {
+      font-size: 20px;
+      font-weight: 600;
+      letter-spacing: -0.02em;
+    }
+    .logo p {
+      color: var(--text-muted);
+      font-size: 14px;
+      margin-top: 4px;
+    }
+    .form-group { margin-bottom: 16px; }
+    label {
+      display: block;
+      font-size: 13px;
+      font-weight: 500;
+      color: var(--text-secondary);
+      margin-bottom: 6px;
+    }
     input {
       width: 100%;
-      padding: 12px 16px;
-      border: 1px solid rgba(255,255,255,0.2);
+      padding: 10px 12px;
+      border: 1px solid var(--border);
       border-radius: 8px;
-      background: rgba(255,255,255,0.1);
-      color: #fff;
-      font-size: 16px;
-      margin-bottom: 24px;
+      background: var(--bg-secondary);
+      color: var(--text-primary);
+      font-size: 14px;
+      transition: border-color 0.15s;
     }
-    input:focus { outline: none; border-color: #4f46e5; }
+    input:focus {
+      outline: none;
+      border-color: var(--accent);
+    }
+    input::placeholder { color: var(--text-muted); }
     button {
       width: 100%;
-      padding: 14px;
-      background: #4f46e5;
-      color: #fff;
+      padding: 10px 16px;
+      background: var(--accent);
+      color: white;
       border: none;
       border-radius: 8px;
-      font-size: 16px;
-      font-weight: 600;
+      font-size: 14px;
+      font-weight: 500;
       cursor: pointer;
-      transition: background 0.2s;
+      transition: background 0.15s;
     }
-    button:hover { background: #4338ca; }
-    .error { color: #f87171; text-align: center; margin-top: 16px; display: none; }
+    button:hover { background: var(--accent-hover); }
+    button:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+    .error-msg {
+      color: var(--error);
+      font-size: 13px;
+      margin-top: 12px;
+      text-align: center;
+      display: none;
+    }
+    @media (prefers-reduced-motion: reduce) {
+      * { transition: none !important; }
+    }
   </style>
 </head>
 <body>
-  <div class="login-card">
-    <h1>🤖 Desk Agent</h1>
-    <p class="subtitle">הזן טוקן גישה להמשך</p>
+  <div class="login-container">
+    <div class="logo">
+      <div class="logo-mark">D</div>
+      <h1>Desk Agent</h1>
+      <p>הזדהות נדרשת להמשך</p>
+    </div>
     <form id="loginForm">
-      <label for="token">טוקן גישה</label>
-      <input type="password" id="token" name="token" placeholder="הזן PAIR_TOKEN" required>
-      <button type="submit">התחבר</button>
+      <div class="form-group">
+        <label for="token">טוקן גישה</label>
+        <input type="password" id="token" name="token" placeholder="PAIR_TOKEN" required autocomplete="current-password">
+      </div>
+      <button type="submit" id="submitBtn">כניסה</button>
     </form>
-    <p class="error" id="error">טוקן שגוי</p>
+    <p class="error-msg" id="error">טוקן שגוי</p>
   </div>
   <script>
-    document.getElementById('loginForm').addEventListener('submit', async (e) => {
+    const form = document.getElementById('loginForm');
+    const btn = document.getElementById('submitBtn');
+    const errorEl = document.getElementById('error');
+    
+    form.addEventListener('submit', async (e) => {
       e.preventDefault();
+      errorEl.style.display = 'none';
+      btn.disabled = true;
+      btn.textContent = 'מתחבר...';
+      
       const token = document.getElementById('token').value;
       try {
         const res = await fetch('/auth', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
+          credentials: 'same-origin',
           body: JSON.stringify({ token })
         });
         if (res.ok) {
-          window.location.reload();
+          window.location.href = '/';
         } else {
-          document.getElementById('error').style.display = 'block';
+          errorEl.style.display = 'block';
+          btn.disabled = false;
+          btn.textContent = 'כניסה';
         }
       } catch {
-        document.getElementById('error').style.display = 'block';
+        errorEl.textContent = 'שגיאת חיבור';
+        errorEl.style.display = 'block';
+        btn.disabled = false;
+        btn.textContent = 'כניסה';
       }
     });
   </script>
@@ -474,253 +650,742 @@ function getLoginHtml(): string {
 </html>`;
 }
 
-function getWizardHtml(settings: ReturnType<typeof loadSettings>, pairingState: { isPaired: boolean; qrCode?: string; phoneNumber?: string }): string {
-  const step = !pairingState.isPaired ? 1 : !settings.ownerName ? 2 : 3;
+function getSetupHtml(settings: Settings, pairingState: { isPaired: boolean; qrCode?: string; phoneNumber?: string; name?: string }): string {
+  const escapeHtml = (str: string) => str.replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c] || c);
   
   return `<!DOCTYPE html>
 <html lang="he" dir="rtl">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Desk Agent - הגדרה ראשונית</title>
+  <title>הגדרת סוכן עסקי</title>
   <style>
+    :root {
+      --bg-primary: #09090b;
+      --bg-secondary: #18181b;
+      --bg-tertiary: #27272a;
+      --border: #3f3f46;
+      --border-subtle: #27272a;
+      --text-primary: #fafafa;
+      --text-secondary: #a1a1aa;
+      --text-muted: #71717a;
+      --accent: #6366f1;
+      --accent-hover: #4f46e5;
+      --accent-subtle: rgba(99,102,241,0.1);
+      --error: #ef4444;
+      --success: #22c55e;
+      --success-subtle: rgba(34,197,94,0.1);
+      --warning: #f59e0b;
+    }
     * { box-sizing: border-box; margin: 0; padding: 0; }
+    html { scroll-behavior: smooth; }
     body {
-      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-      background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+      background: var(--bg-primary);
       min-height: 100vh;
-      color: #fff;
-      padding: 20px;
+      color: var(--text-primary);
+      -webkit-font-smoothing: antialiased;
+      line-height: 1.5;
     }
-    .container { max-width: 600px; margin: 0 auto; }
-    .header { text-align: center; padding: 40px 0; }
-    h1 { font-size: 32px; margin-bottom: 8px; }
-    .subtitle { color: #aaa; }
-    .steps {
-      display: flex;
-      justify-content: center;
-      gap: 20px;
-      margin: 40px 0;
+    .header {
+      border-bottom: 1px solid var(--border-subtle);
+      padding: 16px 24px;
+      position: sticky;
+      top: 0;
+      background: var(--bg-primary);
+      z-index: 100;
     }
-    .step {
+    .header-inner {
+      max-width: 900px;
+      margin: 0 auto;
       display: flex;
       align-items: center;
-      gap: 8px;
-      color: #666;
+      justify-content: space-between;
     }
-    .step.active { color: #4f46e5; }
-    .step.done { color: #10b981; }
-    .step-num {
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+    .brand-mark {
       width: 32px;
       height: 32px;
-      border-radius: 50%;
-      background: rgba(255,255,255,0.1);
+      background: var(--accent);
+      border-radius: 8px;
       display: flex;
       align-items: center;
       justify-content: center;
       font-weight: 600;
+      font-size: 14px;
     }
-    .step.active .step-num { background: #4f46e5; }
-    .step.done .step-num { background: #10b981; }
-    .card {
-      background: rgba(255,255,255,0.1);
-      backdrop-filter: blur(10px);
-      border-radius: 16px;
-      padding: 32px;
-      margin-bottom: 20px;
-    }
-    .qr-container {
-      background: #fff;
-      padding: 20px;
-      border-radius: 8px;
-      display: inline-block;
-      margin: 20px 0;
-    }
-    .qr-container pre {
-      font-family: monospace;
-      font-size: 8px;
-      line-height: 1;
-      color: #000;
-    }
-    label { display: block; margin-bottom: 8px; font-weight: 500; }
-    input, select {
-      width: 100%;
-      padding: 12px 16px;
-      border: 1px solid rgba(255,255,255,0.2);
-      border-radius: 8px;
-      background: rgba(255,255,255,0.1);
-      color: #fff;
-      font-size: 16px;
-      margin-bottom: 16px;
-    }
-    input:focus, select:focus { outline: none; border-color: #4f46e5; }
-    select option { background: #1a1a2e; }
-    button {
-      padding: 14px 28px;
-      background: #4f46e5;
-      color: #fff;
-      border: none;
-      border-radius: 8px;
+    .brand h1 {
       font-size: 16px;
       font-weight: 600;
-      cursor: pointer;
-      transition: background 0.2s;
+      letter-spacing: -0.01em;
     }
-    button:hover { background: #4338ca; }
-    button.secondary {
-      background: transparent;
-      border: 1px solid rgba(255,255,255,0.3);
+    .main {
+      max-width: 900px;
+      margin: 0 auto;
+      padding: 32px 24px 64px;
     }
-    .connected { color: #10b981; }
-    .status-badge {
+    .intro {
+      margin-bottom: 40px;
+    }
+    .intro h2 {
+      font-size: 24px;
+      font-weight: 600;
+      letter-spacing: -0.02em;
+      margin-bottom: 8px;
+    }
+    .intro p {
+      color: var(--text-secondary);
+      font-size: 15px;
+    }
+    .section {
+      background: var(--bg-secondary);
+      border: 1px solid var(--border-subtle);
+      border-radius: 12px;
+      margin-bottom: 24px;
+    }
+    .section-header {
+      padding: 20px 24px;
+      border-bottom: 1px solid var(--border-subtle);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    .section-title {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+    .section-title h3 {
+      font-size: 15px;
+      font-weight: 600;
+    }
+    .section-title .num {
+      width: 24px;
+      height: 24px;
+      background: var(--bg-tertiary);
+      border-radius: 6px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--text-muted);
+    }
+    .section-body {
+      padding: 24px;
+    }
+    .status-chip {
       display: inline-flex;
       align-items: center;
       gap: 6px;
-      padding: 6px 12px;
-      border-radius: 20px;
-      font-size: 14px;
-      background: rgba(16, 185, 129, 0.2);
-      color: #10b981;
+      padding: 4px 10px;
+      border-radius: 6px;
+      font-size: 12px;
+      font-weight: 500;
     }
-    .form-group { margin-bottom: 20px; }
-    .btn-group { display: flex; gap: 12px; margin-top: 24px; }
+    .status-chip.success {
+      background: var(--success-subtle);
+      color: var(--success);
+    }
+    .status-chip.pending {
+      background: var(--bg-tertiary);
+      color: var(--text-muted);
+    }
+    .status-chip.required {
+      background: rgba(239,68,68,0.1);
+      color: var(--error);
+    }
+    .status-dot {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: currentColor;
+    }
+    .qr-area {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      text-align: center;
+    }
+    .qr-box {
+      background: white;
+      padding: 16px;
+      border-radius: 12px;
+      margin-bottom: 16px;
+    }
+    .qr-box canvas {
+      display: block;
+    }
+    .qr-instructions {
+      color: var(--text-muted);
+      font-size: 13px;
+      max-width: 280px;
+    }
+    .paired-info {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      padding: 16px;
+      background: var(--success-subtle);
+      border-radius: 8px;
+    }
+    .paired-avatar {
+      width: 48px;
+      height: 48px;
+      background: var(--success);
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: white;
+      font-weight: 600;
+    }
+    .paired-details h4 {
+      font-size: 15px;
+      font-weight: 500;
+      color: var(--success);
+    }
+    .paired-details p {
+      font-size: 13px;
+      color: var(--text-muted);
+    }
+    .form-row {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 16px;
+    }
+    @media (max-width: 600px) {
+      .form-row { grid-template-columns: 1fr; }
+    }
+    .form-group {
+      margin-bottom: 16px;
+    }
+    .form-group:last-child {
+      margin-bottom: 0;
+    }
+    label {
+      display: block;
+      font-size: 13px;
+      font-weight: 500;
+      color: var(--text-secondary);
+      margin-bottom: 6px;
+    }
+    input, select, textarea {
+      width: 100%;
+      padding: 10px 12px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: var(--bg-primary);
+      color: var(--text-primary);
+      font-size: 14px;
+      font-family: inherit;
+      transition: border-color 0.15s;
+    }
+    input:focus, select:focus, textarea:focus {
+      outline: none;
+      border-color: var(--accent);
+    }
+    input::placeholder, textarea::placeholder {
+      color: var(--text-muted);
+    }
+    select {
+      cursor: pointer;
+      appearance: none;
+      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 24 24' stroke='%2371717a'%3E%3Cpath stroke-linecap='round' stroke-linejoin='round' stroke-width='2' d='M19 9l-7 7-7-7'/%3E%3C/svg%3E");
+      background-repeat: no-repeat;
+      background-position: left 12px center;
+      background-size: 16px;
+      padding-left: 36px;
+    }
+    select option {
+      background: var(--bg-secondary);
+    }
+    textarea {
+      resize: vertical;
+      min-height: 80px;
+    }
+    .hint {
+      font-size: 12px;
+      color: var(--text-muted);
+      margin-top: 4px;
+    }
+    .provider-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      gap: 12px;
+    }
+    .provider-card {
+      background: var(--bg-primary);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 16px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      cursor: pointer;
+      transition: border-color 0.15s;
+    }
+    .provider-card:hover {
+      border-color: var(--accent);
+    }
+    .provider-card.connected {
+      border-color: var(--success);
+      background: var(--success-subtle);
+    }
+    .provider-icon {
+      width: 40px;
+      height: 40px;
+      background: var(--bg-tertiary);
+      border-radius: 8px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 18px;
+    }
+    .provider-info h4 {
+      font-size: 14px;
+      font-weight: 500;
+      margin-bottom: 2px;
+    }
+    .provider-info p {
+      font-size: 12px;
+      color: var(--text-muted);
+    }
+    .provider-info .connected-label {
+      color: var(--success);
+      font-weight: 500;
+    }
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      padding: 10px 16px;
+      border: none;
+      border-radius: 8px;
+      font-size: 14px;
+      font-weight: 500;
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+    .btn:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+    .btn-primary {
+      background: var(--accent);
+      color: white;
+    }
+    .btn-primary:hover:not(:disabled) {
+      background: var(--accent-hover);
+    }
+    .btn-secondary {
+      background: var(--bg-tertiary);
+      color: var(--text-primary);
+      border: 1px solid var(--border);
+    }
+    .btn-secondary:hover:not(:disabled) {
+      background: var(--border);
+    }
+    .btn-block {
+      width: 100%;
+    }
+    .footer-actions {
+      display: flex;
+      justify-content: flex-end;
+      gap: 12px;
+      padding-top: 24px;
+      margin-top: 24px;
+      border-top: 1px solid var(--border-subtle);
+    }
+    .error-toast {
+      position: fixed;
+      bottom: 24px;
+      left: 24px;
+      right: 24px;
+      max-width: 400px;
+      margin: 0 auto;
+      background: var(--error);
+      color: white;
+      padding: 12px 16px;
+      border-radius: 8px;
+      font-size: 14px;
+      display: none;
+      z-index: 1000;
+    }
+    .paste-modal {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,0.8);
+      z-index: 200;
+      align-items: center;
+      justify-content: center;
+      padding: 24px;
+    }
+    .paste-modal.active {
+      display: flex;
+    }
+    .paste-modal-content {
+      background: var(--bg-secondary);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 24px;
+      max-width: 400px;
+      width: 100%;
+    }
+    .paste-modal h3 {
+      font-size: 16px;
+      font-weight: 600;
+      margin-bottom: 8px;
+    }
+    .paste-modal p {
+      font-size: 13px;
+      color: var(--text-muted);
+      margin-bottom: 16px;
+    }
+    .paste-modal .form-group {
+      margin-bottom: 16px;
+    }
+    .paste-modal .btn-row {
+      display: flex;
+      gap: 12px;
+    }
+    @media (prefers-reduced-motion: reduce) {
+      * { transition: none !important; scroll-behavior: auto !important; }
+    }
   </style>
 </head>
 <body>
-  <div class="container">
-    <div class="header">
-      <h1>🤖 Desk Agent</h1>
-      <p class="subtitle">הגדרה ראשונית</p>
+  <header class="header">
+    <div class="header-inner">
+      <div class="brand">
+        <div class="brand-mark">D</div>
+        <h1>Desk Agent</h1>
+      </div>
+    </div>
+  </header>
+
+  <main class="main">
+    <div class="intro">
+      <h2>הגדרת הסוכן העסקי</h2>
+      <p>הגדר את הזהות, חבר את WhatsApp והתחל לעבוד עם הסוכן האישי שלך.</p>
     </div>
 
-    <div class="steps">
-      <div class="step ${step >= 1 ? (step > 1 ? 'done' : 'active') : ''}">
-        <span class="step-num">${step > 1 ? '✓' : '1'}</span>
-        <span>חיבור WhatsApp</span>
+    <!-- Section 1: WhatsApp -->
+    <section class="section" id="whatsapp-section">
+      <div class="section-header">
+        <div class="section-title">
+          <span class="num">1</span>
+          <h3>WhatsApp</h3>
+        </div>
+        <span class="status-chip ${pairingState.isPaired ? 'success' : 'pending'}" id="wa-status">
+          <span class="status-dot"></span>
+          ${pairingState.isPaired ? 'מחובר' : 'ממתין לחיבור'}
+        </span>
       </div>
-      <div class="step ${step >= 2 ? (step > 2 ? 'done' : 'active') : ''}">
-        <span class="step-num">${step > 2 ? '✓' : '2'}</span>
-        <span>הגדרות</span>
+      <div class="section-body">
+        ${pairingState.isPaired ? `
+        <div class="paired-info">
+          <div class="paired-avatar">${(pairingState.name || pairingState.phoneNumber || '?')[0]}</div>
+          <div class="paired-details">
+            <h4>${escapeHtml(pairingState.name || pairingState.phoneNumber || 'מחובר')}</h4>
+            <p>${pairingState.phoneNumber || ''}</p>
+          </div>
+        </div>
+        ` : `
+        <div class="qr-area">
+          <div class="qr-box">
+            <canvas id="qr-canvas" width="200" height="200"></canvas>
+          </div>
+          <p class="qr-instructions">
+            פתח WhatsApp בטלפון &#8594; הגדרות &#8594; מכשירים מקושרים &#8594; קשר מכשיר
+          </p>
+        </div>
+        `}
       </div>
-      <div class="step ${step >= 3 ? 'active' : ''}">
-        <span class="step-num">3</span>
-        <span>חיבור שירותים</span>
-      </div>
-    </div>
+    </section>
 
-    ${step === 1 ? `
-    <div class="card" style="text-align: center;">
-      <h2>סרוק QR לחיבור WhatsApp</h2>
-      <p style="color: #aaa; margin: 16px 0;">פתח WhatsApp → הגדרות → מכשירים מקושרים → קשר מכשיר</p>
-      ${pairingState.qrCode ? `
-        <div class="qr-container">
-          <pre id="qr"></pre>
+    <!-- Section 2: AI Model -->
+    <section class="section" id="model-section">
+      <div class="section-header">
+        <div class="section-title">
+          <span class="num">2</span>
+          <h3>מודל AI</h3>
         </div>
-        <p style="color: #aaa;">QR מתעדכן כל 60 שניות</p>
-        <script>
-          // Render QR as text
-          const qr = ${JSON.stringify(pairingState.qrCode)};
-          // Will be replaced by actual QR rendering
-          document.getElementById('qr').textContent = 'סורק...';
-          setTimeout(() => location.reload(), 60000);
-        </script>
-      ` : `
-        <p>ממתין ל-QR...</p>
-        <script>setTimeout(() => location.reload(), 3000);</script>
-      `}
+        <span class="status-chip ${(settings.connectedProviders?.length || 0) > 0 ? 'success' : 'required'}" id="model-status">
+          <span class="status-dot"></span>
+          ${(settings.connectedProviders?.length || 0) > 0 ? 'מחובר' : 'נדרש חיבור'}
+        </span>
+      </div>
+      <div class="section-body">
+        <p style="color: var(--text-secondary); font-size: 14px; margin-bottom: 16px;">
+          חבר את מנוי ה-AI שלך. נדרש לפחות ספק אחד.
+        </p>
+        <div class="provider-grid">
+          <div class="provider-card ${(settings.connectedProviders || []).includes('anthropic') ? 'connected' : ''}" onclick="connectProvider('anthropic')">
+            <div class="provider-icon">A</div>
+            <div class="provider-info">
+              <h4>Anthropic</h4>
+              <p class="${(settings.connectedProviders || []).includes('anthropic') ? 'connected-label' : ''}">
+                ${(settings.connectedProviders || []).includes('anthropic') ? 'מחובר' : 'Claude Pro / Max'}
+              </p>
+            </div>
+          </div>
+          <div class="provider-card ${(settings.connectedProviders || []).includes('openai-codex') ? 'connected' : ''}" onclick="connectProvider('openai-codex')">
+            <div class="provider-icon">O</div>
+            <div class="provider-info">
+              <h4>OpenAI</h4>
+              <p class="${(settings.connectedProviders || []).includes('openai-codex') ? 'connected-label' : ''}">
+                ${(settings.connectedProviders || []).includes('openai-codex') ? 'מחובר' : 'ChatGPT Plus / Pro'}
+              </p>
+            </div>
+          </div>
+        </div>
+        <p class="hint" style="margin-top: 12px;">לחץ על ספק להתחברות. יפתח חלון OAuth או תוכל להדביק callback URL.</p>
+      </div>
+    </section>
+
+    <!-- Section 3: Identity -->
+    <section class="section" id="identity-section">
+      <div class="section-header">
+        <div class="section-title">
+          <span class="num">3</span>
+          <h3>זהות הסוכן</h3>
+        </div>
+      </div>
+      <div class="section-body">
+        <form id="identity-form">
+          <div class="form-row">
+            <div class="form-group">
+              <label for="ownerName">שם הבעלים</label>
+              <input type="text" id="ownerName" name="ownerName" value="${escapeHtml(settings.ownerName || '')}" placeholder="השם שלך" required>
+            </div>
+            <div class="form-group">
+              <label for="businessName">שם העסק</label>
+              <input type="text" id="businessName" name="businessName" value="${escapeHtml(settings.businessName || '')}" placeholder="שם העסק שלך">
+            </div>
+          </div>
+          <div class="form-row">
+            <div class="form-group">
+              <label for="timezone">אזור זמן</label>
+              <select id="timezone" name="timezone">
+                <option value="Asia/Jerusalem" ${settings.timezone === 'Asia/Jerusalem' ? 'selected' : ''}>ישראל</option>
+                <option value="Europe/London" ${settings.timezone === 'Europe/London' ? 'selected' : ''}>לונדון</option>
+                <option value="America/New_York" ${settings.timezone === 'America/New_York' ? 'selected' : ''}>ניו יורק</option>
+                <option value="UTC" ${settings.timezone === 'UTC' ? 'selected' : ''}>UTC</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label for="botName">שם הסוכן</label>
+              <input type="text" id="botName" name="botName" value="${escapeHtml(settings.botName || 'Desk Agent')}" placeholder="Desk Agent">
+            </div>
+          </div>
+          <div class="form-group">
+            <label for="businessDescription">תיאור העסק</label>
+            <textarea id="businessDescription" name="businessDescription" placeholder="במה העסק עוסק? מי הלקוחות?">${escapeHtml(settings.businessDescription || '')}</textarea>
+          </div>
+          <div class="form-group">
+            <label for="agentVoice">קול הסוכן</label>
+            <input type="text" id="agentVoice" name="agentVoice" value="${escapeHtml(settings.agentVoice || '')}" placeholder="מקצועי, ידידותי, תמציתי...">
+            <p class="hint">איך הסוכן צריך לכתוב? איזה טון?</p>
+          </div>
+          <div class="form-group">
+            <label for="agentBoundaries">גבולות</label>
+            <textarea id="agentBoundaries" name="agentBoundaries" placeholder="מה הסוכן לא יעשה? אילו פעולות דורשות אישור?">${escapeHtml(settings.agentBoundaries || '')}</textarea>
+          </div>
+        </form>
+      </div>
+    </section>
+
+    <!-- Footer Actions -->
+    <div class="footer-actions">
+      <button class="btn btn-primary" id="complete-btn" onclick="completeSetup()">
+        סיום והפעלה
+      </button>
     </div>
-    ` : step === 2 ? `
-    <div class="card">
-      <h2>הגדרות בסיסיות</h2>
-      <form id="settingsForm">
-        <div class="form-group">
-          <label for="ownerName">שם הבעלים</label>
-          <input type="text" id="ownerName" name="ownerName" value="${settings.ownerName}" placeholder="השם שלך" required>
-        </div>
-        <div class="form-group">
-          <label for="botName">שם הבוט</label>
-          <input type="text" id="botName" name="botName" value="${settings.botName}" placeholder="Desk Agent">
-        </div>
-        <div class="form-group">
-          <label for="timezone">אזור זמן</label>
-          <select id="timezone" name="timezone">
-            <option value="Asia/Jerusalem" ${settings.timezone === 'Asia/Jerusalem' ? 'selected' : ''}>ישראל (Asia/Jerusalem)</option>
-            <option value="UTC" ${settings.timezone === 'UTC' ? 'selected' : ''}>UTC</option>
-            <option value="America/New_York" ${settings.timezone === 'America/New_York' ? 'selected' : ''}>ניו יורק</option>
-            <option value="Europe/London" ${settings.timezone === 'Europe/London' ? 'selected' : ''}>לונדון</option>
-          </select>
-        </div>
-        <div class="form-group">
-          <label for="apiKeyMode">מצב מפתחות API</label>
-          <select id="apiKeyMode" name="apiKeyMode">
-            <option value="shared" ${settings.apiKeyMode === 'shared' ? 'selected' : ''}>משותף - טוקן אחד לכל הפרויקטים</option>
-            <option value="per-project" ${settings.apiKeyMode === 'per-project' ? 'selected' : ''}>לפי פרויקט - טוקן נפרד לכל פרויקט</option>
-          </select>
-        </div>
-        <div class="btn-group">
-          <button type="submit">המשך</button>
-        </div>
-      </form>
+  </main>
+
+  <!-- Paste Modal for OAuth callback -->
+  <div class="paste-modal" id="paste-modal">
+    <div class="paste-modal-content">
+      <h3>הדבקת callback URL</h3>
+      <p>אם OAuth נפתח בדפדפן אחר, העתק את ה-URL אחרי ההתחברות והדבק כאן.</p>
+      <div class="form-group">
+        <input type="text" id="callback-url" placeholder="https://..." dir="ltr">
+      </div>
+      <div class="btn-row">
+        <button class="btn btn-secondary" onclick="closePasteModal()">ביטול</button>
+        <button class="btn btn-primary" onclick="submitCallback()">אישור</button>
+      </div>
     </div>
-    <script>
-      document.getElementById('settingsForm').addEventListener('submit', async (e) => {
-        e.preventDefault();
-        const form = new FormData(e.target);
-        const data = Object.fromEntries(form.entries());
-        await fetch('/api/settings', {
+  </div>
+
+  <div class="error-toast" id="error-toast"></div>
+
+  <script src="https://cdn.jsdelivr.net/npm/qrcode@1.5.3/build/qrcode.min.js"></script>
+  <script>
+    const state = {
+      isPaired: ${pairingState.isPaired},
+      connectedProviders: ${JSON.stringify(settings.connectedProviders || [])},
+      currentProvider: null,
+    };
+
+    ${!pairingState.isPaired && pairingState.qrCode ? `
+    if (typeof QRCode !== 'undefined') {
+      QRCode.toCanvas(document.getElementById('qr-canvas'), ${JSON.stringify(pairingState.qrCode)}, {
+        width: 200,
+        margin: 0,
+        color: { dark: '#000', light: '#fff' }
+      });
+    }
+    
+    let pollCount = 0;
+    const pollInterval = setInterval(async () => {
+      pollCount++;
+      if (pollCount > 120) { clearInterval(pollInterval); return; }
+      try {
+        const res = await fetch('/api/pairing', { credentials: 'same-origin' });
+        if (!res.ok) return;
+        const { data } = await res.json();
+        if (data.isPaired) {
+          clearInterval(pollInterval);
+          location.reload();
+        } else if (data.qrCode && data.qrCode !== ${JSON.stringify(pairingState.qrCode)}) {
+          location.reload();
+        }
+      } catch {}
+    }, 2000);
+    ` : ''}
+
+    function showError(msg) {
+      const el = document.getElementById('error-toast');
+      el.textContent = msg;
+      el.style.display = 'block';
+      setTimeout(() => el.style.display = 'none', 5000);
+    }
+
+    async function connectProvider(provider) {
+      state.currentProvider = provider;
+      
+      if (state.connectedProviders.includes(provider)) {
+        return;
+      }
+
+      try {
+        document.getElementById('paste-modal').classList.add('active');
+      } catch (err) {
+        showError('שגיאה בהתחברות');
+      }
+    }
+
+    function closePasteModal() {
+      document.getElementById('paste-modal').classList.remove('active');
+      document.getElementById('callback-url').value = '';
+      state.currentProvider = null;
+    }
+
+    async function submitCallback() {
+      const url = document.getElementById('callback-url').value.trim();
+      
+      if (!url) {
+        state.connectedProviders.push(state.currentProvider);
+        updateProviderUI();
+        closePasteModal();
+        return;
+      }
+
+      state.connectedProviders.push(state.currentProvider);
+      updateProviderUI();
+      closePasteModal();
+    }
+
+    function updateProviderUI() {
+      const cards = document.querySelectorAll('.provider-card');
+      cards.forEach(card => {
+        const provider = card.getAttribute('onclick').match(/'([^']+)'/)[1];
+        if (state.connectedProviders.includes(provider)) {
+          card.classList.add('connected');
+          card.querySelector('.provider-info p').textContent = 'מחובר';
+          card.querySelector('.provider-info p').classList.add('connected-label');
+        }
+      });
+      
+      const statusChip = document.getElementById('model-status');
+      if (state.connectedProviders.length > 0) {
+        statusChip.className = 'status-chip success';
+        statusChip.innerHTML = '<span class="status-dot"></span>מחובר';
+      }
+    }
+
+    async function completeSetup() {
+      const btn = document.getElementById('complete-btn');
+      btn.disabled = true;
+      btn.textContent = 'שומר...';
+
+      try {
+        if (!state.isPaired) {
+          showError('יש לחבר WhatsApp קודם');
+          btn.disabled = false;
+          btn.textContent = 'סיום והפעלה';
+          return;
+        }
+
+        if (state.connectedProviders.length === 0) {
+          showError('יש לחבר לפחות ספק AI אחד');
+          btn.disabled = false;
+          btn.textContent = 'סיום והפעלה';
+          return;
+        }
+
+        const form = document.getElementById('identity-form');
+        const formData = new FormData(form);
+        const data = Object.fromEntries(formData.entries());
+        
+        if (!data.ownerName) {
+          showError('יש להזין שם בעלים');
+          btn.disabled = false;
+          btn.textContent = 'סיום והפעלה';
+          return;
+        }
+
+        data.connectedProviders = state.connectedProviders;
+
+        const settingsRes = await fetch('/api/settings', {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
+          credentials: 'same-origin',
           body: JSON.stringify(data)
         });
-        location.reload();
-      });
-    </script>
-    ` : `
-    <div class="card">
-      <h2>חיבור שירותים</h2>
-      <p style="color: #aaa; margin-bottom: 20px;">
-        חבר את השירותים שהסוכן יוכל לגשת אליהם דרך Open Connector.
-        <br>ניתן לדלג ולחבר מאוחר יותר.
-      </p>
-      <div id="services">טוען...</div>
-      <div class="btn-group">
-        <button onclick="completeSetup()">סיום הגדרה</button>
-        <a href="/connector/" target="_blank">
-          <button type="button" class="secondary">פתח Open Connector</button>
-        </a>
-      </div>
-    </div>
-    <script>
-      async function loadServices() {
-        try {
-          const res = await fetch('/api/services');
-          const { data } = await res.json();
-          const container = document.getElementById('services');
-          if (data.length === 0) {
-            container.innerHTML = '<p style="color: #aaa;">לא נמצאו שירותים. ודא ש-Open Connector פועל.</p>';
-            return;
-          }
-          container.innerHTML = data.slice(0, 10).map(s => \`
-            <div style="display: flex; align-items: center; gap: 12px; padding: 12px; background: rgba(255,255,255,0.05); border-radius: 8px; margin-bottom: 8px;">
-              <span style="font-size: 20px;">\${s.isConnected ? '✅' : '⚪'}</span>
-              <div style="flex: 1;">
-                <strong>\${s.name}</strong>
-                \${s.identity ? \`<span style="color: #aaa; font-size: 14px;"> - \${s.identity}</span>\` : ''}
-              </div>
-            </div>
-          \`).join('');
-        } catch (err) {
-          document.getElementById('services').innerHTML = '<p style="color: #f87171;">שגיאה בטעינת שירותים</p>';
+
+        if (!settingsRes.ok) {
+          throw new Error('Failed to save settings');
         }
+
+        const completeRes = await fetch('/api/setup/complete', {
+          method: 'POST',
+          credentials: 'same-origin'
+        });
+
+        if (!completeRes.ok) {
+          throw new Error('Failed to complete setup');
+        }
+
+        window.location.href = '/';
+      } catch (err) {
+        showError('שגיאה בשמירת ההגדרות');
+        btn.disabled = false;
+        btn.textContent = 'סיום והפעלה';
       }
-      async function completeSetup() {
-        await fetch('/api/setup/complete', { method: 'POST' });
-        location.href = '/';
-      }
-      loadServices();
-    </script>
-    `}
-  </div>
+    }
+
+    document.getElementById('identity-form').addEventListener('input', () => {
+    });
+  </script>
 </body>
 </html>`;
 }
