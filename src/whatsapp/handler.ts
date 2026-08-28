@@ -15,6 +15,7 @@ import {
   cancelConfirmation,
   cleanupOldConfirmations,
 } from '../agent/session.ts';
+import { resolveModelAlias, getModelAliases } from '../http/auth.ts';
 
 const log = createChildLogger('handler');
 
@@ -363,50 +364,58 @@ _היכנס לממשק הניהול לשינוי הגדרות_`,
     }
 
     case 'model': {
+      const aliases = getModelAliases();
+      const aliasHelp = Object.entries(aliases)
+        .filter(([k]) => ['claude', 'claude-opus', 'gpt', 'chatgpt'].includes(k))
+        .map(([k, v]) => `- ${k} → ${v.provider}/${v.model}`)
+        .join('\n');
+      
       if (args.length === 0) {
         return {
           handled: true,
-          response: `מודל נוכחי: *${settings.model}*\n\nלהחלפה: /model <שם-מודל>\n\nדוגמאות:\n- /model claude-3-5-sonnet-20241022\n- /model claude-sonnet-4-5\n- /model gpt-4o\n\n_או השתמש ב-pi /login ו-/model בטרמינל_`,
+          response: `מודל נוכחי: *${settings.model}*\n\nלהחלפה: /model <שם או כינוי>\n\n*כינויים נתמכים:*\n${aliasHelp}\n\n*דוגמאות:*\n- /model claude\n- /model gpt\n- /model claude-opus\n- /model anthropic/claude-sonnet-4-6`,
         };
       }
       
-      const model = args.join(' ');
+      const input = args.join(' ');
+      const resolved = resolveModelAlias(input);
+      const model = resolved ? `${resolved.provider}/${resolved.model}` : input;
       
       const success = await setSessionModel(settings.activeProject, model);
       
       if (success) {
         return {
           handled: true,
-          response: `✅ מודל שונה ל: *${model}*\n\n_Pi session נוצר מחדש עם המודל החדש._`,
+          response: `✅ מודל שונה ל: *${model}*${resolved ? ` (${input})` : ''}\n\n_Pi session נוצר מחדש עם המודל החדש._`,
         };
       } else {
         updateSettings({ model });
         return {
           handled: true,
-          response: `✅ מודל שונה ל: *${model}* (ישתנה בהודעה הבאה)`,
+          response: `✅ מודל שונה ל: *${model}*${resolved ? ` (${input})` : ''} (ישתנה בהודעה הבאה)`,
         };
       }
     }
 
     case 'login': {
+      const webUrl = config.isProduction 
+        ? `https://${process.env['DOMAIN'] || 'localhost'}:${config.port}/`
+        : `http://localhost:${config.port}/?token=${config.pairToken}`;
+      
       return {
         handled: true,
         response: `*התחברות לספק AI*
 
-1. פתח טרמינל בשרת
-2. הרץ: \`npx pi /login\`
-3. בחר ספק (Anthropic, OpenAI, וכו')
-4. עקוב אחרי ההוראות
+הכי קל - דרך ממשק הניהול:
+1. פתח: ${webUrl}
+2. לחץ על לשונית "מנויי AI"
+3. התחבר עם מנוי Claude או ChatGPT
 
-_או הגדר API key בקובץ .env:_
-\`MODEL_API_KEY=sk-ant-...\`
+*מנויים נתמכים:*
+- 🟣 Claude Pro/Max
+- 🟢 ChatGPT Plus/Pro
 
-ספקים נתמכים:
-- Anthropic (Claude Pro/Max subscription)
-- OpenAI (ChatGPT Plus/Pro)
-- GitHub Copilot
-- Google Gemini
-- ועוד...`,
+_השתמש במנוי הקיים שלך - ללא צורך במפתח API_`,
       };
     }
 

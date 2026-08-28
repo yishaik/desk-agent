@@ -11,6 +11,7 @@ import { loadSettings, getActiveConnectorToken, updateSettings } from '../core/s
 import { config } from '../core/config.ts';
 import { OpenConnectorClient } from '../open-connector/client.ts';
 import { join } from 'node:path';
+import { getModelRuntime as getSharedModelRuntime, resolveModelAlias } from '../http/auth.ts';
 
 const log = createChildLogger('pi-session');
 
@@ -89,32 +90,7 @@ async function getOrCreateModelRuntime(): Promise<ModelRuntime> {
     return sharedModelRuntime;
   }
 
-  const piAgentDir = join(config.dataDir, 'pi-agent');
-  const { existsSync, mkdirSync } = await import('node:fs');
-  if (!existsSync(piAgentDir)) {
-    mkdirSync(piAgentDir, { recursive: true });
-  }
-
-  const authPath = join(piAgentDir, 'auth.json');
-  const modelsPath = join(piAgentDir, 'models.json');
-
-  log.info({ piAgentDir, authPath }, 'Creating ModelRuntime');
-
-  const runtime = await ModelRuntime.create({
-    authPath,
-    modelsPath,
-    allowModelNetwork: true,
-  });
-
-  if (config.modelApiKey) {
-    try {
-      await runtime.setRuntimeApiKey('anthropic', config.modelApiKey);
-      log.info('Set Anthropic API key from MODEL_API_KEY env var');
-    } catch (err) {
-      log.warn({ err }, 'Failed to set runtime API key - will use stored credentials or ANTHROPIC_API_KEY env var');
-    }
-  }
-
+  const runtime = await getSharedModelRuntime();
   sharedModelRuntime = runtime;
   return runtime;
 }
@@ -362,10 +338,34 @@ For send/create/update/delete actions, always wait for the user to confirm befor
 
   let model;
   if (settings.model) {
-    const [providerId, ...modelParts] = settings.model.split('/');
-    const modelId = modelParts.join('/') || settings.model;
-    model = modelRuntime.getModel(providerId ?? 'anthropic', modelId) ?? 
-            modelRuntime.getModel('anthropic', settings.model);
+    const resolved = resolveModelAlias(settings.model);
+    if (resolved) {
+      model = modelRuntime.getModel(resolved.provider, resolved.model);
+    }
+    
+    if (!model) {
+      const [providerId, ...modelParts] = settings.model.split('/');
+      const modelId = modelParts.join('/') || settings.model;
+      model = modelRuntime.getModel(providerId ?? 'anthropic', modelId) ?? 
+              modelRuntime.getModel('anthropic', settings.model);
+    }
+  }
+  
+  if (!model) {
+    const credentialsPromise = modelRuntime.listCredentials?.();
+    const credentials = credentialsPromise ? await credentialsPromise : undefined;
+    if (credentials && credentials.length > 0) {
+      const anthropicCred = credentials.find((c) => c.providerId === 'anthropic');
+      const openaiCred = credentials.find((c) => c.providerId === 'openai-codex');
+      
+      if (anthropicCred) {
+        model = modelRuntime.getModel('anthropic', 'claude-sonnet-4-6');
+        log.info('Using default Claude model from OAuth credentials');
+      } else if (openaiCred) {
+        model = modelRuntime.getModel('openai-codex', 'gpt-5.5');
+        log.info('Using default GPT model from OAuth credentials');
+      }
+    }
   }
 
   const { session } = await createAgentSession({

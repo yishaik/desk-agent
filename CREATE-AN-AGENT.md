@@ -6,7 +6,7 @@
 
 - שרת עם Docker (VPS, מחשב מקומי, וכו׳)
 - דומיין עם גישת DNS (לייצור)
-- מפתח API של Anthropic (או ספק אחר)
+- מנוי Claude Pro/Max או ChatGPT Plus/Pro (ללא צורך במפתח API!)
 - WhatsApp על הטלפון
 
 ## שלב 1: הכנת השרת
@@ -71,11 +71,6 @@ nano .env
 # טוקן גישה לממשק (צור אקראי)
 PAIR_TOKEN=$(openssl rand -hex 32)
 
-# אפשרות א׳: מפתח API של Anthropic
-MODEL_API_KEY=sk-ant-...
-
-# אפשרות ב׳: השתמש ב-pi /login במקום (ראה למטה)
-
 # טוקן Open Connector (ייצור אחרי ההפעלה הראשונה)
 OPEN_CONNECTOR_TOKEN=
 
@@ -85,6 +80,9 @@ CONNECTOR_ENCRYPTION_KEY=$(openssl rand -hex 32)
 # הדומיין שלך
 DOMAIN=agent.example.com
 CONNECTOR_ORIGIN=https://agent.example.com
+
+# אופציונלי: מפתח API (אם לא רוצים להתחבר עם מנוי בממשק)
+# MODEL_API_KEY=sk-ant-...
 ```
 
 ## שלב 4: הפעלה ראשונה
@@ -107,19 +105,13 @@ docker compose logs -f
 
 ## שלב 6: התחברות לספק AI
 
-**אפשרות א׳ - מנוי (ללא API key):**
-```bash
-# בטרמינל בשרת
-docker compose exec agent npx pi /login
+**דרך הממשק (מומלץ):**
+1. בממשק הניהול, לך ללשונית "מנויי AI"
+2. לחץ "התחבר" ליד Claude Pro/Max או ChatGPT Plus/Pro
+3. היכנס עם המנוי שלך בחלון הדפדפן שנפתח
+4. אם הדפדפן לא על אותו מחשב, העתק את כתובת ה-callback והדבק בשדה
 
-# בחר ספק:
-# - Anthropic (Claude Pro/Max)
-# - OpenAI (ChatGPT Plus/Pro)
-# - GitHub Copilot
-# וכו׳
-```
-
-**אפשרות ב׳ - API key:**
+**אפשרות חלופית - API key:**
 ```bash
 # עדכן .env
 MODEL_API_KEY=sk-ant-...

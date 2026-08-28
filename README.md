@@ -8,7 +8,7 @@ Personal WhatsApp agent template for one SMB. Pair, connect tools, one gated sta
 1. `docker compose up`
 2. Open the URL, enter your pair token
 3. Scan QR with WhatsApp
-4. Log in to your AI provider: `pi /login` (or set `MODEL_API_KEY`)
+4. Connect your Claude or ChatGPT subscription in the WebUI
 5. Connect your services in Open Connector
 6. Message yourself to talk to your agent
 
@@ -27,7 +27,7 @@ Personal WhatsApp agent template for one SMB. Pair, connect tools, one gated sta
 
 - Node.js 22+ (for local development)
 - Docker and Docker Compose (for deployment)
-- An Anthropic API key (or other model provider)
+- A Claude Pro/Max or ChatGPT Plus/Pro subscription (no API key needed)
 - A domain with DNS (for production HTTPS)
 
 ### Local Development
@@ -36,18 +36,12 @@ Personal WhatsApp agent template for one SMB. Pair, connect tools, one gated sta
 # Install dependencies
 npm install
 
-# Log in to your AI provider (Claude, OpenAI, etc.)
-# Option A: Use your subscription
-npx pi /login
-
-# Option B: Use API key
-export MODEL_API_KEY=sk-ant-...
-
 # Start the agent (generates PAIR_TOKEN on first run)
 npm run dev
 
 # Open the URL shown in the terminal
-# Scan QR code with WhatsApp
+# 1. Scan QR code with WhatsApp
+# 2. Connect your AI subscription in the WebUI (Claude or ChatGPT)
 ```
 
 ### Docker Deployment
@@ -73,9 +67,14 @@ All configuration is via environment variables. See `.env.example` for the full 
 | Variable | Description |
 |----------|-------------|
 | `PAIR_TOKEN` | Access token for the Web UI (auto-generated if not set) |
-| `MODEL_API_KEY` | Your AI model API key (Anthropic recommended) |
 | `OPEN_CONNECTOR_TOKEN` | Runtime token for Open Connector API |
 | `CONNECTOR_ENCRYPTION_KEY` | Encryption key for stored credentials |
+
+### Optional Variables (AI Provider)
+
+| Variable | Description |
+|----------|-------------|
+| `MODEL_API_KEY` | Optional: Anthropic/OpenAI API key (overrides subscription login) |
 
 ### Optional Variables
 
@@ -163,28 +162,22 @@ Desk Agent uses Pi as its AI runtime:
 - **Sessions** - Each project gets a separate Pi session with history
 - **Skills** - Add capabilities via `.pi/skills/` 
 - **Extensions** - Custom tools via `.pi/extensions/`
-- **Model switching** - Use `/model` or `pi /login` for provider login
+- **Model switching** - Use `/model claude` or `/model gpt` in WhatsApp
 
-### Logging In
+### Connecting Your AI Subscription
 
-Pi supports subscription logins (no API key needed):
+Connect your existing Claude or ChatGPT subscription through the WebUI:
 
-```bash
-# In the terminal where the agent runs
-npx pi /login
+1. Open the Web UI and go to the "AI Subscriptions" tab (or complete the setup wizard)
+2. Click "Connect" next to Claude Pro/Max or ChatGPT Plus/Pro
+3. Sign in with your existing subscription in the browser popup
+4. If your browser is on a different machine, paste the callback URL in the provided field
 
-# Then select:
-# - Anthropic (Claude Pro/Max subscription)
-# - OpenAI (ChatGPT Plus/Pro)
-# - GitHub Copilot
-# etc.
-```
+**Supported subscriptions:**
+- 🟣 Claude Pro/Max (Anthropic)
+- 🟢 ChatGPT Plus/Pro (OpenAI)
 
-Or use API keys:
-```bash
-export MODEL_API_KEY=sk-ant-...
-export MODEL_API_URL=https://api.anthropic.com/v1/messages  # optional
-```
+No API key required - use your existing subscription!
 
 ## API Key Modes
 
@@ -240,8 +233,8 @@ Key points:
 # Create app
 fly launch --no-deploy
 
-# Set secrets
-fly secrets set PAIR_TOKEN=... MODEL_API_KEY=...
+# Set secrets (MODEL_API_KEY is optional - can use subscription login in WebUI)
+fly secrets set PAIR_TOKEN=...
 
 # Deploy
 fly deploy

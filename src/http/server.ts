@@ -4,6 +4,7 @@ import { parse as parseQuery } from 'node:querystring';
 import { readFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import QRCode from 'qrcode';
 import { config } from '../core/config.ts';
 import { createChildLogger } from '../core/logger.ts';
 import {
@@ -18,6 +19,16 @@ import {
 import { listProjects, createProject, getProject } from '../core/memory.ts';
 import { getWhatsAppClient } from '../whatsapp/client.ts';
 import { createClient } from '../open-connector/client.ts';
+import {
+  listProviders,
+  startLogin,
+  completeLogin,
+  getLoginStatusAsync,
+  logout,
+  hasAnyAuthConfigured,
+  getModelAliases,
+  type ProviderId,
+} from './auth.ts';
 
 const log = createChildLogger('http');
 
@@ -147,14 +158,15 @@ addRoute('GET', '/', async (req, res) => {
   const settings = loadSettings();
   const wa = getWhatsAppClient();
   const pairingState = wa.getPairingState();
+  const hasAuth = await hasAnyAuthConfigured();
 
-  if (isSetupRequired() || !pairingState.isPaired) {
-    const wizardHtml = getWizardHtml(settings, pairingState);
+  if (isSetupRequired() || !pairingState.isPaired || !hasAuth) {
+    const wizardHtml = await getWizardHtml(settings, pairingState);
     sendHtml(res, wizardHtml);
     return;
   }
 
-  const dashboardHtml = getDashboardHtml(settings, pairingState);
+  const dashboardHtml = await getDashboardHtml(settings, pairingState);
   sendHtml(res, dashboardHtml);
 });
 
@@ -382,6 +394,157 @@ addRoute('GET', '/api/connector/status', async (req, res) => {
   }
 });
 
+addRoute('GET', '/api/pairing/qr', async (req, res) => {
+  if (!isAuthenticated(req)) {
+    sendError(res, 'Unauthorized', 401);
+    return;
+  }
+
+  const wa = getWhatsAppClient();
+  const state = wa.getPairingState();
+
+  if (!state.qrCode) {
+    sendJson(res, { success: true, data: { qrDataUrl: null, isPaired: state.isPaired } });
+    return;
+  }
+
+  try {
+    const qrDataUrl = await QRCode.toDataURL(state.qrCode, {
+      width: 256,
+      margin: 2,
+      color: { dark: '#000000', light: '#ffffff' },
+    });
+    sendJson(res, { success: true, data: { qrDataUrl, isPaired: false } });
+  } catch (err) {
+    log.error({ err }, 'Failed to generate QR code');
+    sendError(res, 'Failed to generate QR code', 500);
+  }
+});
+
+addRoute('GET', '/api/auth/providers', async (req, res) => {
+  if (!isAuthenticated(req)) {
+    sendError(res, 'Unauthorized', 401);
+    return;
+  }
+
+  try {
+    const providers = await listProviders();
+    sendJson(res, { success: true, data: providers });
+  } catch (err) {
+    log.error({ err }, 'Failed to list auth providers');
+    sendError(res, 'Failed to list providers', 500);
+  }
+});
+
+addRoute('POST', '/api/auth/login', async (req, res) => {
+  if (!isAuthenticated(req)) {
+    sendError(res, 'Unauthorized', 401);
+    return;
+  }
+
+  const body = await parseBody<{ provider?: string }>(req).catch(() => ({ provider: undefined }));
+  const provider = body.provider as ProviderId | undefined;
+
+  if (!provider || (provider !== 'anthropic' && provider !== 'openai-codex')) {
+    sendError(res, 'Invalid provider. Use "anthropic" or "openai-codex"');
+    return;
+  }
+
+  try {
+    const result = await startLogin(provider);
+    sendJson(res, { success: true, data: result });
+  } catch (err) {
+    log.error({ err, provider }, 'Failed to start login');
+    sendError(res, `Failed to start login: ${err instanceof Error ? err.message : 'Unknown error'}`, 500);
+  }
+});
+
+addRoute('POST', '/api/auth/complete', async (req, res) => {
+  if (!isAuthenticated(req)) {
+    sendError(res, 'Unauthorized', 401);
+    return;
+  }
+
+  const body = await parseBody<{ provider?: string; codeOrRedirectUrl?: string }>(req).catch(() => ({ provider: undefined, codeOrRedirectUrl: undefined }));
+  const provider = body.provider as ProviderId | undefined;
+  const codeOrRedirectUrl = body.codeOrRedirectUrl;
+
+  if (!provider || (provider !== 'anthropic' && provider !== 'openai-codex')) {
+    sendError(res, 'Invalid provider. Use "anthropic" or "openai-codex"');
+    return;
+  }
+
+  if (!codeOrRedirectUrl) {
+    sendError(res, 'codeOrRedirectUrl is required');
+    return;
+  }
+
+  try {
+    const result = await completeLogin(provider, codeOrRedirectUrl);
+    if (result.success) {
+      sendJson(res, { success: true });
+    } else {
+      sendError(res, result.error ?? 'Login failed');
+    }
+  } catch (err) {
+    log.error({ err, provider }, 'Failed to complete login');
+    sendError(res, `Failed to complete login: ${err instanceof Error ? err.message : 'Unknown error'}`, 500);
+  }
+});
+
+addRoute('GET', '/api/auth/login/:provider/status', async (req, res, params) => {
+  if (!isAuthenticated(req)) {
+    sendError(res, 'Unauthorized', 401);
+    return;
+  }
+
+  const provider = params.provider as ProviderId;
+  if (provider !== 'anthropic' && provider !== 'openai-codex') {
+    sendError(res, 'Invalid provider. Use "anthropic" or "openai-codex"');
+    return;
+  }
+
+  const status = await getLoginStatusAsync(provider);
+  sendJson(res, { success: true, data: status });
+});
+
+addRoute('POST', '/api/auth/logout', async (req, res) => {
+  if (!isAuthenticated(req)) {
+    sendError(res, 'Unauthorized', 401);
+    return;
+  }
+
+  const body = await parseBody<{ provider?: string }>(req).catch(() => ({ provider: undefined }));
+  const provider = body.provider as ProviderId | undefined;
+
+  if (!provider || (provider !== 'anthropic' && provider !== 'openai-codex')) {
+    sendError(res, 'Invalid provider. Use "anthropic" or "openai-codex"');
+    return;
+  }
+
+  try {
+    const result = await logout(provider);
+    if (result.success) {
+      sendJson(res, { success: true });
+    } else {
+      sendError(res, result.error ?? 'Logout failed');
+    }
+  } catch (err) {
+    log.error({ err, provider }, 'Failed to logout');
+    sendError(res, `Failed to logout: ${err instanceof Error ? err.message : 'Unknown error'}`, 500);
+  }
+});
+
+addRoute('GET', '/api/auth/aliases', async (req, res) => {
+  if (!isAuthenticated(req)) {
+    sendError(res, 'Unauthorized', 401);
+    return;
+  }
+
+  const aliases = getModelAliases();
+  sendJson(res, { success: true, data: aliases });
+});
+
 function getLoginHtml(): string {
   return `<!DOCTYPE html>
 <html lang="he" dir="rtl">
@@ -474,8 +637,22 @@ function getLoginHtml(): string {
 </html>`;
 }
 
-function getWizardHtml(settings: ReturnType<typeof loadSettings>, pairingState: { isPaired: boolean; qrCode?: string; phoneNumber?: string }): string {
-  const step = !pairingState.isPaired ? 1 : !settings.ownerName ? 2 : 3;
+async function getWizardHtml(settings: ReturnType<typeof loadSettings>, pairingState: { isPaired: boolean; qrCode?: string; phoneNumber?: string }): Promise<string> {
+  const hasAuth = await hasAnyAuthConfigured();
+  const step = !pairingState.isPaired ? 1 : !settings.ownerName ? 2 : !hasAuth ? 3 : 4;
+  
+  let qrDataUrl = '';
+  if (pairingState.qrCode) {
+    try {
+      qrDataUrl = await QRCode.toDataURL(pairingState.qrCode, {
+        width: 256,
+        margin: 2,
+        color: { dark: '#000000', light: '#ffffff' },
+      });
+    } catch (err) {
+      log.error({ err }, 'Failed to generate QR code for wizard');
+    }
+  }
   
   return `<!DOCTYPE html>
 <html lang="he" dir="rtl">
@@ -492,15 +669,16 @@ function getWizardHtml(settings: ReturnType<typeof loadSettings>, pairingState: 
       color: #fff;
       padding: 20px;
     }
-    .container { max-width: 600px; margin: 0 auto; }
+    .container { max-width: 700px; margin: 0 auto; }
     .header { text-align: center; padding: 40px 0; }
     h1 { font-size: 32px; margin-bottom: 8px; }
     .subtitle { color: #aaa; }
     .steps {
       display: flex;
       justify-content: center;
-      gap: 20px;
+      gap: 16px;
       margin: 40px 0;
+      flex-wrap: wrap;
     }
     .step {
       display: flex;
@@ -531,16 +709,15 @@ function getWizardHtml(settings: ReturnType<typeof loadSettings>, pairingState: 
     }
     .qr-container {
       background: #fff;
-      padding: 20px;
-      border-radius: 8px;
+      padding: 16px;
+      border-radius: 12px;
       display: inline-block;
       margin: 20px 0;
     }
-    .qr-container pre {
-      font-family: monospace;
-      font-size: 8px;
-      line-height: 1;
-      color: #000;
+    .qr-container img {
+      display: block;
+      width: 256px;
+      height: 256px;
     }
     label { display: block; margin-bottom: 8px; font-weight: 500; }
     input, select {
@@ -567,10 +744,12 @@ function getWizardHtml(settings: ReturnType<typeof loadSettings>, pairingState: 
       transition: background 0.2s;
     }
     button:hover { background: #4338ca; }
+    button:disabled { background: #666; cursor: not-allowed; }
     button.secondary {
       background: transparent;
       border: 1px solid rgba(255,255,255,0.3);
     }
+    button.secondary:hover { background: rgba(255,255,255,0.1); }
     .connected { color: #10b981; }
     .status-badge {
       display: inline-flex;
@@ -579,11 +758,53 @@ function getWizardHtml(settings: ReturnType<typeof loadSettings>, pairingState: 
       padding: 6px 12px;
       border-radius: 20px;
       font-size: 14px;
-      background: rgba(16, 185, 129, 0.2);
-      color: #10b981;
     }
+    .status-badge.connected { background: rgba(16, 185, 129, 0.2); color: #10b981; }
+    .status-badge.pending { background: rgba(251, 191, 36, 0.2); color: #fbbf24; }
+    .status-badge.error { background: rgba(239, 68, 68, 0.2); color: #ef4444; }
     .form-group { margin-bottom: 20px; }
-    .btn-group { display: flex; gap: 12px; margin-top: 24px; }
+    .btn-group { display: flex; gap: 12px; margin-top: 24px; flex-wrap: wrap; }
+    .provider-card {
+      background: rgba(255,255,255,0.05);
+      border: 1px solid rgba(255,255,255,0.1);
+      border-radius: 12px;
+      padding: 20px;
+      margin-bottom: 16px;
+    }
+    .provider-card.connected { border-color: #10b981; }
+    .provider-header {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 12px;
+    }
+    .provider-icon { font-size: 32px; }
+    .provider-info { flex: 1; }
+    .provider-name { font-weight: 600; font-size: 18px; }
+    .provider-desc { color: #aaa; font-size: 14px; }
+    .provider-actions {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      flex-wrap: wrap;
+    }
+    .paste-input {
+      display: none;
+      margin-top: 12px;
+      padding-top: 12px;
+      border-top: 1px solid rgba(255,255,255,0.1);
+    }
+    .paste-input.show { display: block; }
+    .paste-input input { margin-bottom: 8px; }
+    .spinner {
+      width: 20px;
+      height: 20px;
+      border: 2px solid rgba(255,255,255,0.3);
+      border-top-color: #fff;
+      border-radius: 50%;
+      animation: spin 1s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
   </style>
 </head>
 <body>
@@ -596,39 +817,84 @@ function getWizardHtml(settings: ReturnType<typeof loadSettings>, pairingState: 
     <div class="steps">
       <div class="step ${step >= 1 ? (step > 1 ? 'done' : 'active') : ''}">
         <span class="step-num">${step > 1 ? '✓' : '1'}</span>
-        <span>חיבור WhatsApp</span>
+        <span>WhatsApp</span>
       </div>
       <div class="step ${step >= 2 ? (step > 2 ? 'done' : 'active') : ''}">
         <span class="step-num">${step > 2 ? '✓' : '2'}</span>
         <span>הגדרות</span>
       </div>
-      <div class="step ${step >= 3 ? 'active' : ''}">
-        <span class="step-num">3</span>
-        <span>חיבור שירותים</span>
+      <div class="step ${step >= 3 ? (step > 3 ? 'done' : 'active') : ''}">
+        <span class="step-num">${step > 3 ? '✓' : '3'}</span>
+        <span>מנוי AI</span>
+      </div>
+      <div class="step ${step >= 4 ? 'active' : ''}">
+        <span class="step-num">4</span>
+        <span>שירותים</span>
       </div>
     </div>
 
     ${step === 1 ? `
     <div class="card" style="text-align: center;">
       <h2>סרוק QR לחיבור WhatsApp</h2>
-      <p style="color: #aaa; margin: 16px 0;">פתח WhatsApp → הגדרות → מכשירים מקושרים → קשר מכשיר</p>
-      ${pairingState.qrCode ? `
-        <div class="qr-container">
-          <pre id="qr"></pre>
-        </div>
-        <p style="color: #aaa;">QR מתעדכן כל 60 שניות</p>
-        <script>
-          // Render QR as text
-          const qr = ${JSON.stringify(pairingState.qrCode)};
-          // Will be replaced by actual QR rendering
-          document.getElementById('qr').textContent = 'סורק...';
-          setTimeout(() => location.reload(), 60000);
-        </script>
-      ` : `
-        <p>ממתין ל-QR...</p>
-        <script>setTimeout(() => location.reload(), 3000);</script>
-      `}
+      <p style="color: #aaa; margin: 16px 0;">פתח WhatsApp ← הגדרות ← מכשירים מקושרים ← קשר מכשיר</p>
+      <div id="qr-area">
+        ${qrDataUrl ? `
+          <div class="qr-container">
+            <img id="qr-img" src="${qrDataUrl}" alt="WhatsApp QR Code" />
+          </div>
+          <p style="color: #aaa; font-size: 14px;">QR מתעדכן אוטומטית</p>
+        ` : `
+          <div style="padding: 40px;">
+            <div class="spinner" style="margin: 0 auto 16px;"></div>
+            <p style="color: #aaa;">ממתין ל-QR...</p>
+          </div>
+        `}
+      </div>
     </div>
+    <script>
+      let pollCount = 0;
+      const maxPolls = 120;
+      
+      async function pollPairing() {
+        if (pollCount++ > maxPolls) {
+          document.getElementById('qr-area').innerHTML = '<p style="color: #f87171;">זמן QR פג. רענן את הדף.</p>';
+          return;
+        }
+        
+        try {
+          const pairingRes = await fetch('/api/pairing');
+          const { data: pairingData } = await pairingRes.json();
+          
+          if (pairingData.isPaired) {
+            location.reload();
+            return;
+          }
+          
+          const qrRes = await fetch('/api/pairing/qr');
+          const { data: qrData } = await qrRes.json();
+          
+          if (qrData.qrDataUrl) {
+            const img = document.getElementById('qr-img');
+            if (img) {
+              img.src = qrData.qrDataUrl;
+            } else {
+              document.getElementById('qr-area').innerHTML = \`
+                <div class="qr-container">
+                  <img id="qr-img" src="\${qrData.qrDataUrl}" alt="WhatsApp QR Code" />
+                </div>
+                <p style="color: #aaa; font-size: 14px;">QR מתעדכן אוטומטית</p>
+              \`;
+            }
+          }
+        } catch (err) {
+          console.error('Polling error:', err);
+        }
+        
+        setTimeout(pollPairing, 3000);
+      }
+      
+      pollPairing();
+    </script>
     ` : step === 2 ? `
     <div class="card">
       <h2>הגדרות בסיסיות</h2>
@@ -650,13 +916,6 @@ function getWizardHtml(settings: ReturnType<typeof loadSettings>, pairingState: 
             <option value="Europe/London" ${settings.timezone === 'Europe/London' ? 'selected' : ''}>לונדון</option>
           </select>
         </div>
-        <div class="form-group">
-          <label for="apiKeyMode">מצב מפתחות API</label>
-          <select id="apiKeyMode" name="apiKeyMode">
-            <option value="shared" ${settings.apiKeyMode === 'shared' ? 'selected' : ''}>משותף - טוקן אחד לכל הפרויקטים</option>
-            <option value="per-project" ${settings.apiKeyMode === 'per-project' ? 'selected' : ''}>לפי פרויקט - טוקן נפרד לכל פרויקט</option>
-          </select>
-        </div>
         <div class="btn-group">
           <button type="submit">המשך</button>
         </div>
@@ -674,6 +933,197 @@ function getWizardHtml(settings: ReturnType<typeof loadSettings>, pairingState: 
         });
         location.reload();
       });
+    </script>
+    ` : step === 3 ? `
+    <div class="card">
+      <h2>התחבר עם מנוי AI</h2>
+      <p style="color: #aaa; margin-bottom: 24px;">
+        חבר את מנוי ה-Claude או ChatGPT שלך. הסוכן ישתמש במנוי שלך לתשובות.
+        <br><strong>צריך לפחות חיבור אחד כדי להמשיך.</strong>
+      </p>
+      
+      <div id="providers">
+        <div class="provider-card" id="anthropic-card">
+          <div class="provider-header">
+            <span class="provider-icon">🟣</span>
+            <div class="provider-info">
+              <div class="provider-name">Claude Pro/Max</div>
+              <div class="provider-desc">השתמש במנוי Claude Pro או Max שלך</div>
+            </div>
+            <div class="provider-actions">
+              <span id="anthropic-status" class="status-badge"></span>
+              <button id="anthropic-btn" onclick="startLogin('anthropic')">התחבר</button>
+            </div>
+          </div>
+          <div class="paste-input" id="anthropic-paste">
+            <p style="font-size: 14px; color: #aaa; margin-bottom: 8px;">
+              אם הדפדפן לא באותו מחשב, העתק את כתובת ה-callback והדבק כאן:
+            </p>
+            <input type="text" id="anthropic-code" placeholder="הדבק כתובת callback או קוד...">
+            <button onclick="completeLogin('anthropic')" class="secondary">אשר</button>
+          </div>
+        </div>
+        
+        <div class="provider-card" id="openai-card">
+          <div class="provider-header">
+            <span class="provider-icon">🟢</span>
+            <div class="provider-info">
+              <div class="provider-name">ChatGPT Plus/Pro</div>
+              <div class="provider-desc">השתמש במנוי ChatGPT Plus או Pro שלך</div>
+            </div>
+            <div class="provider-actions">
+              <span id="openai-status" class="status-badge"></span>
+              <button id="openai-btn" onclick="startLogin('openai-codex')">התחבר</button>
+            </div>
+          </div>
+          <div class="paste-input" id="openai-paste">
+            <p style="font-size: 14px; color: #aaa; margin-bottom: 8px;">
+              אם הדפדפן לא באותו מחשב, העתק את הקוד או כתובת ה-callback והדבק כאן:
+            </p>
+            <input type="text" id="openai-code" placeholder="הדבק כתובת callback או קוד...">
+            <button onclick="completeLogin('openai-codex')" class="secondary">אשר</button>
+          </div>
+        </div>
+      </div>
+      
+      <div class="btn-group">
+        <button id="continueBtn" onclick="continueSetup()" disabled>המשך</button>
+      </div>
+    </div>
+    <script>
+      const providerStatus = { anthropic: false, 'openai-codex': false };
+      
+      function updateUI() {
+        const canContinue = providerStatus.anthropic || providerStatus['openai-codex'];
+        document.getElementById('continueBtn').disabled = !canContinue;
+        
+        if (providerStatus.anthropic) {
+          document.getElementById('anthropic-card').classList.add('connected');
+          document.getElementById('anthropic-status').className = 'status-badge connected';
+          document.getElementById('anthropic-status').textContent = '✓ מחובר';
+          document.getElementById('anthropic-btn').textContent = 'מחובר';
+          document.getElementById('anthropic-btn').disabled = true;
+          document.getElementById('anthropic-paste').classList.remove('show');
+        }
+        
+        if (providerStatus['openai-codex']) {
+          document.getElementById('openai-card').classList.add('connected');
+          document.getElementById('openai-status').className = 'status-badge connected';
+          document.getElementById('openai-status').textContent = '✓ מחובר';
+          document.getElementById('openai-btn').textContent = 'מחובר';
+          document.getElementById('openai-btn').disabled = true;
+          document.getElementById('openai-paste').classList.remove('show');
+        }
+      }
+      
+      async function loadProviders() {
+        try {
+          const res = await fetch('/api/auth/providers');
+          const { data } = await res.json();
+          
+          for (const p of data) {
+            if (p.connected) {
+              providerStatus[p.id] = true;
+            }
+          }
+          
+          updateUI();
+        } catch (err) {
+          console.error('Failed to load providers:', err);
+        }
+      }
+      
+      async function startLogin(provider) {
+        const btn = document.getElementById(provider === 'anthropic' ? 'anthropic-btn' : 'openai-btn');
+        const status = document.getElementById(provider === 'anthropic' ? 'anthropic-status' : 'openai-status');
+        const pasteDiv = document.getElementById(provider === 'anthropic' ? 'anthropic-paste' : 'openai-paste');
+        
+        btn.disabled = true;
+        btn.innerHTML = '<div class="spinner" style="width: 16px; height: 16px; margin: 0 auto;"></div>';
+        status.className = 'status-badge pending';
+        status.textContent = 'מתחבר...';
+        
+        try {
+          const res = await fetch('/api/auth/login', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ provider })
+          });
+          const { success, data, error } = await res.json();
+          
+          if (!success) {
+            throw new Error(error || 'Login failed');
+          }
+          
+          window.open(data.authorizeUrl, '_blank');
+          
+          pasteDiv.classList.add('show');
+          
+          btn.textContent = 'ממתין לאישור...';
+          
+          pollLoginStatus(provider);
+        } catch (err) {
+          status.className = 'status-badge error';
+          status.textContent = 'שגיאה';
+          btn.textContent = 'נסה שוב';
+          btn.disabled = false;
+          console.error('Login error:', err);
+        }
+      }
+      
+      async function completeLogin(provider) {
+        const codeInput = document.getElementById(provider === 'anthropic' ? 'anthropic-code' : 'openai-code');
+        const code = codeInput.value.trim();
+        
+        if (!code) {
+          alert('הזן קוד או כתובת callback');
+          return;
+        }
+        
+        try {
+          const res = await fetch('/api/auth/complete', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ provider, codeOrRedirectUrl: code })
+          });
+          const { success, error } = await res.json();
+          
+          if (success) {
+            providerStatus[provider] = true;
+            updateUI();
+          } else {
+            alert('שגיאה: ' + (error || 'Unknown error'));
+          }
+        } catch (err) {
+          alert('שגיאה בהתחברות');
+          console.error('Complete login error:', err);
+        }
+      }
+      
+      async function pollLoginStatus(provider) {
+        for (let i = 0; i < 60; i++) {
+          await new Promise(r => setTimeout(r, 3000));
+          
+          try {
+            const res = await fetch('/api/auth/login/' + provider + '/status');
+            const { data } = await res.json();
+            
+            if (data.status === 'connected') {
+              providerStatus[provider] = true;
+              updateUI();
+              return;
+            }
+          } catch (err) {
+            console.error('Poll error:', err);
+          }
+        }
+      }
+      
+      function continueSetup() {
+        location.reload();
+      }
+      
+      loadProviders();
     </script>
     ` : `
     <div class="card">
@@ -725,7 +1175,14 @@ function getWizardHtml(settings: ReturnType<typeof loadSettings>, pairingState: 
 </html>`;
 }
 
-function getDashboardHtml(settings: ReturnType<typeof loadSettings>, pairingState: { isPaired: boolean; phoneNumber?: string; name?: string }): string {
+async function getDashboardHtml(settings: ReturnType<typeof loadSettings>, pairingState: { isPaired: boolean; phoneNumber?: string; name?: string }): Promise<string> {
+  const providers = await listProviders();
+  const modelAliases = getModelAliases();
+  
+  const currentModelAlias = Object.entries(modelAliases).find(([_, v]) => 
+    settings.model.includes(v.model) || settings.model.includes(v.provider)
+  )?.[0] || '';
+  
   return `<!DOCTYPE html>
 <html lang="he" dir="rtl">
 <head>
@@ -811,10 +1268,16 @@ function getDashboardHtml(settings: ReturnType<typeof loadSettings>, pairingStat
       transition: background 0.2s;
     }
     button:hover { background: #4338ca; }
+    button:disabled { background: #666; cursor: not-allowed; }
     button.secondary {
       background: transparent;
       border: 1px solid rgba(255,255,255,0.2);
     }
+    button.secondary:hover { background: rgba(255,255,255,0.1); }
+    button.danger {
+      background: #ef4444;
+    }
+    button.danger:hover { background: #dc2626; }
     .service-item {
       display: flex;
       align-items: center;
@@ -835,6 +1298,7 @@ function getDashboardHtml(settings: ReturnType<typeof loadSettings>, pairingStat
       background: rgba(255,255,255,0.05);
       padding: 4px;
       border-radius: 8px;
+      flex-wrap: wrap;
     }
     .tab {
       padding: 10px 20px;
@@ -866,6 +1330,74 @@ function getDashboardHtml(settings: ReturnType<typeof loadSettings>, pairingStat
       margin-top: 8px;
     }
     .token-input input { margin-bottom: 0; }
+    .provider-card {
+      background: rgba(255,255,255,0.03);
+      border: 1px solid rgba(255,255,255,0.1);
+      border-radius: 12px;
+      padding: 16px;
+      margin-bottom: 12px;
+    }
+    .provider-card.connected { border-color: #10b981; }
+    .provider-header {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+    .provider-icon { font-size: 28px; }
+    .provider-info { flex: 1; }
+    .provider-name { font-weight: 600; }
+    .provider-desc { color: #888; font-size: 13px; }
+    .provider-actions {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+    }
+    .status-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      padding: 4px 10px;
+      border-radius: 16px;
+      font-size: 12px;
+    }
+    .status-badge.connected { background: rgba(16, 185, 129, 0.2); color: #10b981; }
+    .status-badge.pending { background: rgba(251, 191, 36, 0.2); color: #fbbf24; }
+    .status-badge.disconnected { background: rgba(239, 68, 68, 0.2); color: #ef4444; }
+    .paste-input {
+      display: none;
+      margin-top: 12px;
+      padding-top: 12px;
+      border-top: 1px solid rgba(255,255,255,0.1);
+    }
+    .paste-input.show { display: block; }
+    .paste-input input { margin-bottom: 8px; }
+    .model-picker {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      margin-bottom: 12px;
+    }
+    .model-btn {
+      padding: 8px 16px;
+      background: rgba(255,255,255,0.05);
+      border: 1px solid rgba(255,255,255,0.2);
+      color: #aaa;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 14px;
+      transition: all 0.2s;
+    }
+    .model-btn:hover { background: rgba(255,255,255,0.1); color: #fff; }
+    .model-btn.active { background: #4f46e5; border-color: #4f46e5; color: #fff; }
+    .spinner {
+      width: 16px;
+      height: 16px;
+      border: 2px solid rgba(255,255,255,0.3);
+      border-top-color: #fff;
+      border-radius: 50%;
+      animation: spin 1s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
   </style>
 </head>
 <body>
@@ -881,6 +1413,7 @@ function getDashboardHtml(settings: ReturnType<typeof loadSettings>, pairingStat
     <div class="tabs">
       <button class="tab active" onclick="showTab('dashboard')">לוח בקרה</button>
       <button class="tab" onclick="showTab('settings')">הגדרות</button>
+      <button class="tab" onclick="showTab('ai')">מנויי AI</button>
       <button class="tab" onclick="showTab('projects')">פרויקטים</button>
       <button class="tab" onclick="showTab('services')">שירותים</button>
     </div>
@@ -894,9 +1427,9 @@ function getDashboardHtml(settings: ReturnType<typeof loadSettings>, pairingStat
           ${pairingState.phoneNumber ? `<p style="margin-top: 12px; color: #888;">${pairingState.phoneNumber}</p>` : ''}
         </div>
         <div class="card">
-          <h2>📁 פרויקט פעיל</h2>
-          <div class="stat" style="font-size: 24px;">${settings.activeProject}</div>
-          <div class="stat-label">מצב מפתחות: ${settings.apiKeyMode === 'shared' ? 'משותף' : 'לפי פרויקט'}</div>
+          <h2>🧠 מודל AI</h2>
+          <div class="stat" style="font-size: 20px;">${currentModelAlias || 'claude'}</div>
+          <div class="stat-label">${settings.model}</div>
         </div>
         <div class="card">
           <h2>🔌 Open Connector</h2>
@@ -934,7 +1467,12 @@ function getDashboardHtml(settings: ReturnType<typeof loadSettings>, pairingStat
           </select>
           
           <label>מודל AI</label>
-          <input type="text" name="model" value="${settings.model}">
+          <div class="model-picker">
+            <button type="button" class="model-btn ${currentModelAlias === 'claude' || currentModelAlias === 'claude-sonnet' ? 'active' : ''}" onclick="selectModel('claude')">Claude</button>
+            <button type="button" class="model-btn ${currentModelAlias === 'claude-opus' ? 'active' : ''}" onclick="selectModel('claude-opus')">Claude Opus</button>
+            <button type="button" class="model-btn ${currentModelAlias === 'gpt' || currentModelAlias === 'chatgpt' ? 'active' : ''}" onclick="selectModel('gpt')">GPT</button>
+          </div>
+          <input type="text" name="model" id="modelInput" value="${settings.model}" style="font-size: 12px;">
           
           <label>מצב מפתחות API</label>
           <select name="apiKeyMode">
@@ -951,6 +1489,42 @@ function getDashboardHtml(settings: ReturnType<typeof loadSettings>, pairingStat
         <p style="color: #888; margin-bottom: 12px;">משמש כברירת מחדל אם לא הוגדר טוקן ספציפי לפרויקט</p>
         <input type="password" id="sharedToken" placeholder="הזן טוקן משותף" value="${settings.sharedConnectorToken ? '********' : ''}">
         <button onclick="saveSharedToken()">שמור טוקן</button>
+      </div>
+    </div>
+
+    <div id="ai" class="tab-content" style="display: none;">
+      <div class="card">
+        <h2>🧠 מנויי AI</h2>
+        <p style="color: #aaa; margin-bottom: 20px;">התחבר עם מנוי ה-Claude או ChatGPT שלך. הסוכן ישתמש במנוי שלך לתשובות.</p>
+        
+        <div id="ai-providers">
+          ${providers.map(p => `
+            <div class="provider-card ${p.connected ? 'connected' : ''}" id="${p.id}-card">
+              <div class="provider-header">
+                <span class="provider-icon">${p.id === 'anthropic' ? '🟣' : '🟢'}</span>
+                <div class="provider-info">
+                  <div class="provider-name">${p.name}</div>
+                  <div class="provider-desc">${p.description}</div>
+                </div>
+                <div class="provider-actions">
+                  ${p.connected 
+                    ? `<span class="status-badge connected">✓ מחובר</span>
+                       <button class="secondary danger" onclick="logoutProvider('${p.id}')">התנתק</button>`
+                    : `<span class="status-badge disconnected" id="${p.id}-status">לא מחובר</span>
+                       <button id="${p.id}-btn" onclick="startLogin('${p.id}')">התחבר</button>`
+                  }
+                </div>
+              </div>
+              <div class="paste-input" id="${p.id}-paste">
+                <p style="font-size: 13px; color: #aaa; margin-bottom: 8px;">
+                  אם הדפדפן לא באותו מחשב, העתק את כתובת ה-callback והדבק כאן:
+                </p>
+                <input type="text" id="${p.id}-code" placeholder="הדבק כתובת callback או קוד...">
+                <button onclick="completeLogin('${p.id}')" class="secondary">אשר</button>
+              </div>
+            </div>
+          `).join('')}
+        </div>
       </div>
     </div>
 
@@ -971,7 +1545,7 @@ function getDashboardHtml(settings: ReturnType<typeof loadSettings>, pairingStat
         <h2>🔌 שירותים מחוברים</h2>
         <p style="color: #888; margin-bottom: 16px;">
           ניהול חיבורים ל-Open Connector
-          <a href="/connector/" target="_blank" style="color: #4f46e5;">פתח קונסול →</a>
+          <a href="/connector/" target="_blank" style="color: #4f46e5;">פתח קונסול ←</a>
         </p>
         <div id="servicesList">טוען...</div>
       </div>
@@ -979,6 +1553,17 @@ function getDashboardHtml(settings: ReturnType<typeof loadSettings>, pairingStat
   </div>
 
   <script>
+    const modelAliases = ${JSON.stringify(modelAliases)};
+    
+    function selectModel(alias) {
+      const config = modelAliases[alias];
+      if (config) {
+        document.getElementById('modelInput').value = config.provider + '/' + config.model;
+        document.querySelectorAll('.model-btn').forEach(btn => btn.classList.remove('active'));
+        event.target.classList.add('active');
+      }
+    }
+    
     function showTab(name) {
       document.querySelectorAll('.tab-content').forEach(el => el.style.display = 'none');
       document.querySelectorAll('.tab').forEach(el => el.classList.remove('active'));
@@ -1078,6 +1663,116 @@ function getDashboardHtml(settings: ReturnType<typeof loadSettings>, pairingStat
         body: JSON.stringify({ sharedConnectorToken: token })
       });
       alert('נשמר!');
+    }
+
+    async function startLogin(provider) {
+      const btn = document.getElementById(provider + '-btn');
+      const status = document.getElementById(provider + '-status');
+      const pasteDiv = document.getElementById(provider + '-paste');
+      
+      if (!btn) return;
+      
+      btn.disabled = true;
+      btn.innerHTML = '<div class="spinner"></div>';
+      if (status) {
+        status.className = 'status-badge pending';
+        status.textContent = 'מתחבר...';
+      }
+      
+      try {
+        const res = await fetch('/api/auth/login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ provider })
+        });
+        const { success, data, error } = await res.json();
+        
+        if (!success) {
+          throw new Error(error || 'Login failed');
+        }
+        
+        window.open(data.authorizeUrl, '_blank');
+        pasteDiv.classList.add('show');
+        btn.textContent = 'ממתין...';
+        
+        pollLoginStatus(provider);
+      } catch (err) {
+        if (status) {
+          status.className = 'status-badge disconnected';
+          status.textContent = 'שגיאה';
+        }
+        btn.textContent = 'נסה שוב';
+        btn.disabled = false;
+        console.error('Login error:', err);
+      }
+    }
+    
+    async function completeLogin(provider) {
+      const codeInput = document.getElementById(provider + '-code');
+      const code = codeInput?.value.trim();
+      
+      if (!code) {
+        alert('הזן קוד או כתובת callback');
+        return;
+      }
+      
+      try {
+        const res = await fetch('/api/auth/complete', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ provider, codeOrRedirectUrl: code })
+        });
+        const { success, error } = await res.json();
+        
+        if (success) {
+          location.reload();
+        } else {
+          alert('שגיאה: ' + (error || 'Unknown error'));
+        }
+      } catch (err) {
+        alert('שגיאה בהתחברות');
+        console.error('Complete login error:', err);
+      }
+    }
+    
+    async function pollLoginStatus(provider) {
+      for (let i = 0; i < 60; i++) {
+        await new Promise(r => setTimeout(r, 3000));
+        
+        try {
+          const res = await fetch('/api/auth/login/' + provider + '/status');
+          const { data } = await res.json();
+          
+          if (data.status === 'connected') {
+            location.reload();
+            return;
+          }
+        } catch (err) {
+          console.error('Poll error:', err);
+        }
+      }
+    }
+    
+    async function logoutProvider(provider) {
+      if (!confirm('האם אתה בטוח שברצונך להתנתק?')) return;
+      
+      try {
+        const res = await fetch('/api/auth/logout', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ provider })
+        });
+        const { success, error } = await res.json();
+        
+        if (success) {
+          location.reload();
+        } else {
+          alert('שגיאה: ' + (error || 'Unknown error'));
+        }
+      } catch (err) {
+        alert('שגיאה בהתנתקות');
+        console.error('Logout error:', err);
+      }
     }
 
     document.getElementById('settingsForm').addEventListener('submit', async (e) => {

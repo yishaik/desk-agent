@@ -1,157 +1,168 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { IncomingMessage, ServerResponse } from 'node:http';
-import { existsSync, rmSync, mkdirSync } from 'node:fs';
-import { parse as parseUrl } from 'node:url';
 
-const TEST_DATA_DIR = './test-data-auth';
-const TEST_PORT = 3999;
-const TEST_PAIR_TOKEN = 'test-token-12345';
+vi.mock('@earendil-works/pi-coding-agent', () => ({
+  ModelRuntime: {
+    create: vi.fn().mockResolvedValue({
+      listCredentials: vi.fn().mockReturnValue([]),
+      checkAuth: vi.fn().mockReturnValue(false),
+      isUsingSubscription: vi.fn().mockReturnValue(false),
+      login: vi.fn(),
+      logout: vi.fn(),
+      getModel: vi.fn(),
+      setRuntimeApiKey: vi.fn(),
+    }),
+  },
+}));
 
-function isAuthenticated(req: IncomingMessage, expectedToken: string): boolean {
-  const url = parseUrl(req.url ?? '', true);
-  const queryToken = url.query['token'] as string | undefined;
-  
-  const cookies = req.headers.cookie ?? '';
-  const cookieToken = cookies
-    .split(';')
-    .map((c) => c.trim().split('='))
-    .find(([key]) => key === 'PAIR_TOKEN')?.[1];
-
-  const authHeader = req.headers.authorization;
-  const bearerToken = authHeader?.startsWith('Bearer ')
-    ? authHeader.slice(7)
-    : undefined;
-
-  const token = queryToken ?? cookieToken ?? bearerToken;
-  return token === expectedToken;
-}
+const TEST_DATA_DIR = './test-data-auth-module';
 
 beforeEach(() => {
   vi.resetModules();
   process.env['DATA_DIR'] = TEST_DATA_DIR;
-  process.env['PAIR_TOKEN'] = TEST_PAIR_TOKEN;
-  process.env['PORT'] = String(TEST_PORT);
-  
-  if (existsSync(TEST_DATA_DIR)) {
-    rmSync(TEST_DATA_DIR, { recursive: true });
-  }
-  mkdirSync(TEST_DATA_DIR, { recursive: true });
+  process.env['PAIR_TOKEN'] = 'test-token';
 });
 
 afterEach(() => {
-  if (existsSync(TEST_DATA_DIR)) {
-    rmSync(TEST_DATA_DIR, { recursive: true });
-  }
   delete process.env['DATA_DIR'];
   delete process.env['PAIR_TOKEN'];
-  delete process.env['PORT'];
+  delete process.env['MODEL_API_KEY'];
+  vi.clearAllMocks();
 });
 
-describe('Authentication Helper', () => {
-  it('rejects requests without token', () => {
-    const req = { url: '/api/settings', headers: {} } as IncomingMessage;
-    expect(isAuthenticated(req, TEST_PAIR_TOKEN)).toBe(false);
+describe('Auth Module - Model Aliases', () => {
+  it('provides model aliases', async () => {
+    const { getModelAliases } = await import('./auth.ts');
+    const aliases = getModelAliases();
+    
+    expect(aliases).toHaveProperty('claude');
+    expect(aliases).toHaveProperty('gpt');
+    expect(aliases).toHaveProperty('chatgpt');
+    expect(aliases['claude']).toEqual({ provider: 'anthropic', model: 'claude-sonnet-4-6' });
+    expect(aliases['gpt']).toEqual({ provider: 'openai-codex', model: 'gpt-5.5' });
   });
-
-  it('accepts requests with valid query token', () => {
-    const req = { url: `/api/settings?token=${TEST_PAIR_TOKEN}`, headers: {} } as IncomingMessage;
-    expect(isAuthenticated(req, TEST_PAIR_TOKEN)).toBe(true);
+  
+  it('resolves model aliases', async () => {
+    const { resolveModelAlias } = await import('./auth.ts');
+    
+    expect(resolveModelAlias('claude')).toEqual({ provider: 'anthropic', model: 'claude-sonnet-4-6' });
+    expect(resolveModelAlias('gpt')).toEqual({ provider: 'openai-codex', model: 'gpt-5.5' });
+    expect(resolveModelAlias('chatgpt')).toEqual({ provider: 'openai-codex', model: 'gpt-5.5' });
+    expect(resolveModelAlias('claude-opus')).toEqual({ provider: 'anthropic', model: 'claude-opus-4-8' });
   });
-
-  it('accepts requests with valid bearer token', () => {
-    const req = { 
-      url: '/api/settings', 
-      headers: { authorization: `Bearer ${TEST_PAIR_TOKEN}` } 
-    } as IncomingMessage;
-    expect(isAuthenticated(req, TEST_PAIR_TOKEN)).toBe(true);
+  
+  it('resolves provider/model format', async () => {
+    const { resolveModelAlias } = await import('./auth.ts');
+    
+    expect(resolveModelAlias('anthropic/claude-3-5-sonnet')).toEqual({ 
+      provider: 'anthropic', 
+      model: 'claude-3-5-sonnet' 
+    });
+    expect(resolveModelAlias('openai-codex/gpt-4o')).toEqual({ 
+      provider: 'openai-codex', 
+      model: 'gpt-4o' 
+    });
   });
-
-  it('accepts requests with valid cookie token', () => {
-    const req = { 
-      url: '/api/settings', 
-      headers: { cookie: `PAIR_TOKEN=${TEST_PAIR_TOKEN}` } 
-    } as IncomingMessage;
-    expect(isAuthenticated(req, TEST_PAIR_TOKEN)).toBe(true);
-  });
-
-  it('rejects requests with invalid token', () => {
-    const req = { url: '/api/settings?token=wrong-token', headers: {} } as IncomingMessage;
-    expect(isAuthenticated(req, TEST_PAIR_TOKEN)).toBe(false);
-  });
-
-  it('prefers query token over cookie', () => {
-    const req = { 
-      url: `/api/settings?token=${TEST_PAIR_TOKEN}`, 
-      headers: { cookie: 'PAIR_TOKEN=wrong-token' } 
-    } as IncomingMessage;
-    expect(isAuthenticated(req, TEST_PAIR_TOKEN)).toBe(true);
-  });
-
-  it('prefers cookie token over bearer', () => {
-    const req = { 
-      url: '/api/settings', 
-      headers: { 
-        cookie: `PAIR_TOKEN=${TEST_PAIR_TOKEN}`,
-        authorization: 'Bearer wrong-token'
-      } 
-    } as IncomingMessage;
-    expect(isAuthenticated(req, TEST_PAIR_TOKEN)).toBe(true);
+  
+  it('returns null for unknown aliases', async () => {
+    const { resolveModelAlias } = await import('./auth.ts');
+    
+    expect(resolveModelAlias('unknown-model')).toBeNull();
+    expect(resolveModelAlias('invalid/provider/model')).toBeNull();
   });
 });
 
-describe('Secure Cookie Setting', () => {
-  it('sets Secure flag when X-Forwarded-Proto is https', async () => {
-    const isHttps = (headers: Record<string, string | undefined>, isProduction: boolean): boolean => {
-      return headers['x-forwarded-proto'] === 'https' || 
-             (headers.host?.startsWith('https') ?? false) ||
-             isProduction;
-    };
-
-    expect(isHttps({ 'x-forwarded-proto': 'https' }, false)).toBe(true);
+describe('Auth Module - Provider Listing', () => {
+  it('lists supported providers', async () => {
+    const { listProviders, getModelRuntime } = await import('./auth.ts');
+    
+    await getModelRuntime();
+    
+    const providers = await listProviders();
+    
+    expect(providers).toHaveLength(2);
+    expect(providers[0]).toMatchObject({
+      id: 'anthropic',
+      name: 'Claude Pro/Max',
+      connected: false,
+    });
+    expect(providers[1]).toMatchObject({
+      id: 'openai-codex',
+      name: 'ChatGPT Plus/Pro',
+      connected: false,
+    });
   });
+});
 
-  it('sets Secure flag in production', async () => {
-    const isHttps = (headers: Record<string, string | undefined>, isProduction: boolean): boolean => {
-      return headers['x-forwarded-proto'] === 'https' || 
-             (headers.host?.startsWith('https') ?? false) ||
-             isProduction;
+describe('Auth Module - Login Status', () => {
+  it('returns error status when not connected', async () => {
+    const { getLoginStatus } = await import('./auth.ts');
+    
+    const status = getLoginStatus('anthropic');
+    
+    expect(status).toMatchObject({
+      provider: 'anthropic',
+      status: 'error',
+    });
+  });
+});
+
+describe('Auth Module - hasAnyAuthConfigured', () => {
+  it('returns true when MODEL_API_KEY is set', async () => {
+    process.env['MODEL_API_KEY'] = 'test-api-key';
+    
+    vi.resetModules();
+    const { hasAnyAuthConfigured } = await import('./auth.ts');
+    
+    const result = await hasAnyAuthConfigured();
+    expect(result).toBe(true);
+  });
+  
+  it('returns false when no auth is configured', async () => {
+    delete process.env['MODEL_API_KEY'];
+    
+    vi.resetModules();
+    const { hasAnyAuthConfigured, getModelRuntime } = await import('./auth.ts');
+    
+    await getModelRuntime();
+    
+    const result = await hasAnyAuthConfigured();
+    expect(result).toBe(false);
+  });
+});
+
+describe('Auth API Endpoint Validation', () => {
+  const validProviders = ['anthropic', 'openai-codex'];
+  const invalidProviders = ['invalid', 'google', 'github', '', undefined];
+  
+  it('validates provider IDs correctly', () => {
+    const isValidProvider = (provider: string | undefined): boolean => {
+      return provider === 'anthropic' || provider === 'openai-codex';
     };
     
-    expect(isHttps({}, true)).toBe(true);
-    expect(isHttps({}, false)).toBe(false);
+    for (const provider of validProviders) {
+      expect(isValidProvider(provider)).toBe(true);
+    }
+    
+    for (const provider of invalidProviders) {
+      expect(isValidProvider(provider as string)).toBe(false);
+    }
   });
 });
 
-describe('Self-Chat Gate', () => {
-  it('identifies self-chat messages correctly', () => {
-    const isSelfChat = (message: { isFromMe: boolean; to: string }, ownerJid: string): boolean => {
-      const ownerPhone = ownerJid.split(':')[0]?.split('@')[0];
-      const toJid = message.to;
-      const toPhone = toJid.split(':')[0]?.split('@')[0];
-      
-      return message.isFromMe && toPhone === ownerPhone;
-    };
-
-    const ownerJid = '972501234567:0@s.whatsapp.net';
-
-    expect(isSelfChat({ 
-      isFromMe: true, 
-      to: '972501234567@s.whatsapp.net' 
-    }, ownerJid)).toBe(true);
-
-    expect(isSelfChat({ 
-      isFromMe: true, 
-      to: '972509876543@s.whatsapp.net' 
-    }, ownerJid)).toBe(false);
-
-    expect(isSelfChat({ 
-      isFromMe: false, 
-      to: '972501234567@s.whatsapp.net' 
-    }, ownerJid)).toBe(false);
-
-    expect(isSelfChat({ 
-      isFromMe: true, 
-      to: '1234567890-1234567890@g.us' 
-    }, ownerJid)).toBe(false);
+describe('Auth Security', () => {
+  it('never exposes tokens in provider info', async () => {
+    const { listProviders, getModelRuntime } = await import('./auth.ts');
+    
+    await getModelRuntime();
+    
+    const providers = await listProviders();
+    
+    for (const provider of providers) {
+      const json = JSON.stringify(provider);
+      expect(json).not.toContain('token');
+      expect(json).not.toContain('apiKey');
+      expect(json).not.toContain('secret');
+      expect(json).not.toContain('credential');
+    }
   });
 });
