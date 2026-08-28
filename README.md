@@ -227,7 +227,15 @@ Key points:
 
 ## Deployment Options
 
-### Cheap VPS (Hetzner, Oracle Free Tier)
+### Cheap VPS (Hetzner CX23 / OVH / Netcup)
+
+**Recommended:** Hetzner CX23 (2 vCPU, 4GB RAM, IPv4) ~€5.99/mo in Falkenstein or Helsinki.
+
+**Alternatives if sold out:**
+- OVH VPS-1 (2027) - 2 vCPU, 4GB RAM
+- Netcup VPS 500 G12 - 2 vCPU, 4GB RAM
+
+> ⚠️ The stack needs 4GB RAM. Do not use 1GB VPS instances.
 
 1. Provision a VM with Docker
 2. Point your domain DNS to the VM
