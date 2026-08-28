@@ -7,6 +7,8 @@ export interface Config {
   pairToken: string;
   openConnectorUrl: string;
   openConnectorToken?: string;
+  connectorOrigin: string;
+  connectorAdminToken?: string;
   modelApiKey?: string;
   modelApiUrl?: string;
   logLevel: string;
@@ -32,13 +34,17 @@ export function loadConfig(): Config {
     console.log('[config] Save this token for future use or set PAIR_TOKEN env var');
   }
 
+  const openConnectorUrl = getEnvOrDefault('OPEN_CONNECTOR_URL', 'http://localhost:3000');
+  
   return {
     port: parseInt(getEnvOrDefault('PORT', '3001'), 10),
     host: getEnvOrDefault('HOST', isProduction ? '0.0.0.0' : '127.0.0.1'),
     dataDir,
     pairToken,
-    openConnectorUrl: getEnvOrDefault('OPEN_CONNECTOR_URL', 'http://localhost:3000'),
+    openConnectorUrl,
     openConnectorToken: process.env['OPEN_CONNECTOR_TOKEN'],
+    connectorOrigin: getEnvOrDefault('CONNECTOR_ORIGIN', openConnectorUrl),
+    connectorAdminToken: process.env['CONNECTOR_ADMIN_TOKEN'],
     modelApiKey: process.env['MODEL_API_KEY'],
     modelApiUrl: process.env['MODEL_API_URL'],
     logLevel: getEnvOrDefault('LOG_LEVEL', 'info'),
