@@ -641,6 +641,7 @@ addRoute('POST', '/api/connector/services/:service/connect', async (req, res) =>
 
   const settings = loadSettings();
   const connector = createClient(settings.activeProject);
+  const consoleUrl = getConsoleUrl(req);
 
   try {
     const providers = await connector.listProviders();
@@ -650,7 +651,7 @@ addRoute('POST', '/api/connector/services/:service/connect', async (req, res) =>
       sendJson(res, {
         success: false,
         error: `Service '${service}' not found in Open Connector catalog`,
-        consoleUrl: getConsoleUrl(),
+        ...(consoleUrl ? { consoleUrl } : {}),
       }, 404);
       return;
     }
@@ -662,7 +663,7 @@ addRoute('POST', '/api/connector/services/:service/connect', async (req, res) =>
       sendJson(res, {
         success: false,
         error: `Service '${service}' does not support OAuth2 (supports: ${authTypesDisplay}). Configure it in Open Connector console.`,
-        consoleUrl: getConsoleUrl(),
+        ...(consoleUrl ? { consoleUrl } : {}),
         authTypes: provider.authTypes,
       }, 400);
       return;
@@ -683,7 +684,7 @@ addRoute('POST', '/api/connector/services/:service/connect', async (req, res) =>
       sendJson(res, {
         success: false,
         error: `OAuth not configured for '${service}'. Configure OAuth credentials in Open Connector console.`,
-        consoleUrl: getConsoleUrl(),
+        ...(consoleUrl ? { consoleUrl } : {}),
       }, 400);
       return;
     }

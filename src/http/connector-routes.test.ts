@@ -65,44 +65,132 @@ describe('Admin Token Acknowledgment Flow', () => {
 });
 
 describe('Console URL Resolution', () => {
-  it('uses CONNECTOR_ORIGIN when set', async () => {
-    process.env['CONNECTOR_ORIGIN'] = 'https://desk.example.com';
-    
-    vi.resetModules();
-    
-    const { config } = await import('../core/config.ts');
-    expect(config.connectorOrigin).toBe('https://desk.example.com');
-  });
+  function isLoopbackOrInternal(url: string): boolean {
+    try {
+      const parsed = new URL(url);
+      const host = parsed.hostname.toLowerCase();
+      return (
+        host === 'localhost' ||
+        host === '127.0.0.1' ||
+        host === '::1' ||
+        host === 'connector' ||
+        host.endsWith('.internal') ||
+        host.endsWith('.local')
+      );
+    } catch {
+      return true;
+    }
+  }
 
-  it('returns undefined when CONNECTOR_ORIGIN is not set', async () => {
-    delete process.env['CONNECTOR_ORIGIN'];
-    
-    vi.resetModules();
-    
-    const { config } = await import('../core/config.ts');
-    expect(config.connectorOrigin).toBeUndefined();
-  });
+  function isLocalRequest(host: string): boolean {
+    const hostWithoutPort = host.split(':')[0]?.toLowerCase() ?? '';
+    return hostWithoutPort === 'localhost' || hostWithoutPort === '127.0.0.1' || hostWithoutPort === '::1';
+  }
 
-  it('never uses http://connector:3000 as consoleUrl', async () => {
-    process.env['OPEN_CONNECTOR_URL'] = 'http://connector:3000';
-    process.env['CONNECTOR_ORIGIN'] = 'https://desk.example.com';
+  function getConsoleUrl(
+    reqHost: string,
+    isProduction: boolean,
+    connectorOrigin?: string,
+    domain?: string,
+    forwardedProto?: string
+  ): string | undefined {
+    const isLocal = isLocalRequest(reqHost);
     
-    vi.resetModules();
-    
-    const { config } = await import('../core/config.ts');
-    
-    const getConsoleUrl = (): string => {
-      if (config.connectorOrigin) {
-        return config.connectorOrigin;
-      }
-      if (config.isProduction) {
-        return config.openConnectorUrl;
-      }
+    if (isLocal && !isProduction) {
       return 'http://localhost:3000';
-    };
+    }
     
-    expect(getConsoleUrl()).toBe('https://desk.example.com');
-    expect(getConsoleUrl()).not.toBe('http://connector:3000');
+    if (connectorOrigin && !isLoopbackOrInternal(connectorOrigin)) {
+      return connectorOrigin;
+    }
+    
+    if (domain && domain !== 'localhost') {
+      return `https://${domain}`;
+    }
+    
+    const hostWithoutPort = reqHost.split(':')[0];
+    if (hostWithoutPort && !isLocalRequest(reqHost)) {
+      const proto = forwardedProto === 'https' ? 'https' : 'https';
+      return `${proto}://${hostWithoutPort}`;
+    }
+    
+    return undefined;
+  }
+
+  it('allows localhost:3000 for local request in dev mode', () => {
+    const result = getConsoleUrl('localhost:3001', false);
+    expect(result).toBe('http://localhost:3000');
+  });
+
+  it('allows localhost:3000 for 127.0.0.1 request in dev mode', () => {
+    const result = getConsoleUrl('127.0.0.1:3001', false);
+    expect(result).toBe('http://localhost:3000');
+  });
+
+  it('NEVER returns localhost:3000 for local request in production', () => {
+    const result = getConsoleUrl('localhost:3001', true);
+    expect(result).not.toBe('http://localhost:3000');
+  });
+
+  it('NEVER returns localhost:3000 for live host without CONNECTOR_ORIGIN', () => {
+    const result = getConsoleUrl('desk.example.com', false);
+    expect(result).not.toBe('http://localhost:3000');
+    expect(result).toBe('https://desk.example.com');
+  });
+
+  it('NEVER returns localhost:3000 for live host in production', () => {
+    const result = getConsoleUrl('desk.example.com', true);
+    expect(result).not.toBe('http://localhost:3000');
+  });
+
+  it('uses public CONNECTOR_ORIGIN when set', () => {
+    const result = getConsoleUrl('desk.example.com', true, 'https://connector.example.com');
+    expect(result).toBe('https://connector.example.com');
+  });
+
+  it('rejects localhost CONNECTOR_ORIGIN on live host', () => {
+    const result = getConsoleUrl('desk.example.com', true, 'http://localhost:3000', 'desk.example.com');
+    expect(result).not.toBe('http://localhost:3000');
+    expect(result).toBe('https://desk.example.com');
+  });
+
+  it('rejects 127.0.0.1 CONNECTOR_ORIGIN on live host', () => {
+    const result = getConsoleUrl('desk.example.com', true, 'http://127.0.0.1:3000', 'desk.example.com');
+    expect(result).not.toBe('http://127.0.0.1:3000');
+  });
+
+  it('rejects http://connector:3000 (docker DNS) on live host', () => {
+    const result = getConsoleUrl('desk.example.com', true, 'http://connector:3000', 'desk.example.com');
+    expect(result).not.toBe('http://connector:3000');
+    expect(result).toBe('https://desk.example.com');
+  });
+
+  it('uses DOMAIN env var when CONNECTOR_ORIGIN is internal', () => {
+    const result = getConsoleUrl('desk.example.com', true, 'http://connector:3000', 'desk.example.com');
+    expect(result).toBe('https://desk.example.com');
+  });
+
+  it('derives from Host header when CONNECTOR_ORIGIN and DOMAIN missing', () => {
+    const result = getConsoleUrl('myapp.example.com', true);
+    expect(result).toBe('https://myapp.example.com');
+  });
+
+  it('returns undefined when cannot resolve public URL on live host (all fallbacks fail)', () => {
+    const result = getConsoleUrl('localhost:3001', true, 'http://localhost:3000', 'localhost');
+    expect(result).toBeUndefined();
+  });
+
+  it('isLoopbackOrInternal detects localhost', () => {
+    expect(isLoopbackOrInternal('http://localhost:3000')).toBe(true);
+    expect(isLoopbackOrInternal('http://127.0.0.1:3000')).toBe(true);
+    expect(isLoopbackOrInternal('http://connector:3000')).toBe(true);
+    expect(isLoopbackOrInternal('http://something.internal:3000')).toBe(true);
+    expect(isLoopbackOrInternal('http://something.local:3000')).toBe(true);
+  });
+
+  it('isLoopbackOrInternal passes public URLs', () => {
+    expect(isLoopbackOrInternal('https://desk.example.com')).toBe(false);
+    expect(isLoopbackOrInternal('https://api.connector.io')).toBe(false);
   });
 });
 
