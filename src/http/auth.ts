@@ -3,6 +3,7 @@ import { config } from '../core/config.ts';
 import { createChildLogger } from '../core/logger.ts';
 import { join } from 'node:path';
 import { existsSync, mkdirSync } from 'node:fs';
+import { applySuccessfulProviderLogin } from './apply-provider-login.ts';
 
 const log = createChildLogger('auth');
 
@@ -128,6 +129,14 @@ export async function startLogin(provider: string): Promise<LoginResult> {
     },
   });
   
+  loginPromise.then(() => {
+    applySuccessfulProviderLogin(provider).catch((err) => {
+      log.warn({ err, provider }, 'Failed to apply provider login from startLogin');
+    });
+  }).catch(() => {
+    // Error handled elsewhere
+  });
+  
   pendingLogins.set(provider, {
     loginPromise,
     manualCodeResolver,
@@ -181,6 +190,11 @@ export async function completeLogin(provider: string, codeOrRedirectUrl: string)
     await loginPromise;
     pendingLogins.delete(provider);
     log.info({ provider }, 'Login completed successfully');
+    
+    await applySuccessfulProviderLogin(provider).catch((err) => {
+      log.warn({ err, provider }, 'Failed to apply provider login from completeLogin');
+    });
+    
     return { success: true };
   } catch (err) {
     pendingLogins.delete(provider);

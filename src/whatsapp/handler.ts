@@ -7,6 +7,7 @@ import { getWhatsAppClient } from './client.ts';
 import { createClient, isRealConnection } from '../open-connector/client.ts';
 import { OpenConnectorClient } from '../open-connector/client.ts';
 import { listProviders, resolveActiveModelLabel } from '../http/auth.ts';
+import { formatCaughtError, rewriteCustomerFacingModelError } from '../http/apply-provider-login.ts';
 import { 
   runPromptWithCallbacks, 
   clearSession, 
@@ -115,7 +116,7 @@ async function checkForConfirmationResponse(text: string): Promise<CommandResult
         } catch (err) {
           return {
             handled: true,
-            response: `❌ Error: ${err instanceof Error ? err.message : String(err)}`,
+            response: `❌ שגיאה: ${formatCaughtError(err)}`,
           };
         }
       }
@@ -200,7 +201,7 @@ export async function handleMessage(message: Message): Promise<void> {
   } catch (err) {
     log.error({ err }, 'Error processing message');
     await updateReaction(tracker, 'error');
-    await wa.sendMessage(ownerJid, `שגיאה: ${err instanceof Error ? err.message : 'Unknown error'}`);
+    await wa.sendMessage(ownerJid, `שגיאה: ${formatCaughtError(err)}`);
   }
 }
 
@@ -208,12 +209,14 @@ async function sendSplitMessage(jid: string, text: string, _replyToId?: string):
   const wa = getWhatsAppClient();
   const MAX_LENGTH = 4000;
   
-  if (text.length <= MAX_LENGTH) {
-    await wa.sendMessage(jid, text);
+  const rewrittenText = rewriteCustomerFacingModelError(text);
+  
+  if (rewrittenText.length <= MAX_LENGTH) {
+    await wa.sendMessage(jid, rewrittenText);
     return;
   }
 
-  const parts = splitMessage(text, MAX_LENGTH);
+  const parts = splitMessage(rewrittenText, MAX_LENGTH);
   for (let i = 0; i < parts.length; i++) {
     const part = parts[i];
     const prefix = parts.length > 1 ? `[${i + 1}/${parts.length}]\n\n` : '';
