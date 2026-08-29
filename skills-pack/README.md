@@ -56,10 +56,10 @@ Answer common business questions from your knowledge base.
    cp skills-pack/inbox-calendar.json .pi/skills/
    ```
 
-2. **Enable in settings:**
-   - Go to Web UI → Settings
+2. **Enable in Settings:**
+   - Open the Web UI Settings page
    - Enable the skill pack
-   - Connect required services
+   - Connect required services in Open Connector
 
 3. **Customize prompts:**
    Edit the JSON file to adjust prompts for your business context.

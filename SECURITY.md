@@ -7,7 +7,7 @@ Desk Agent is designed for single-tenant deployments where one business owner op
 ### What We Protect Against
 
 1. **Unauthorized access to the agent** - PAIR_TOKEN gates all Web UI and API access
-2. **Message eavesdropping** - Only processes messages from the owner's WhatsApp
+2. **Message eavesdropping** - Only processes messages from the owner's WhatsApp (self-chat only)
 3. **Credential exposure to AI** - Open Connector holds secrets; agent only sees action results
 4. **Cross-customer data leaks** - One Docker stack per customer, no shared state
 
@@ -23,7 +23,7 @@ Desk Agent is designed for single-tenant deployments where one business owner op
 ### Per-Customer Isolation
 
 Each customer gets their own:
-- Docker Compose stack
+- Docker Compose stack (agent + Open Connector + Caddy)
 - SQLite database files
 - WhatsApp session
 - Open Connector instance
@@ -31,13 +31,13 @@ Each customer gets their own:
 
 There is no shared database or multi-tenant architecture. A compromise of one customer's stack does not affect others.
 
-### Owner-Only Message Gate
+### Owner-Only Message Gate (Self-Chat)
 
 The WhatsApp client only processes messages that are:
-1. Sent by the owner (messages to yourself)
+1. Sent by the owner to themselves (messages to yourself / self-chat)
 2. From the phone number that paired the WhatsApp session
 
-This prevents the agent from responding to messages from other people. Group messages are ignored.
+**The agent never responds to messages from other people.** Group messages are ignored. Direct messages from others are ignored. The agent only activates when you message yourself.
 
 ### Open Connector Credential Boundary
 
@@ -109,6 +109,10 @@ Open Connector adds the authentication and executes the action.
 3. Update `.env` with new `OPEN_CONNECTOR_TOKEN`
 4. Restart: `docker compose restart agent`
 
+### Admin Token (First-Run)
+
+During first-run setup, an admin token is shown **once** for Open Connector console access. The owner must acknowledge saving it before completing setup. This token is never shown again.
+
 ### CONNECTOR_ENCRYPTION_KEY
 
 **What it protects:** Encrypted credentials in Open Connector's database
@@ -122,6 +126,17 @@ Open Connector adds the authentication and executes the action.
 4. Remove `OOMOL_CONNECT_NEW_ENCRYPTION_KEY`
 5. Restart: `docker compose restart connector`
 
+## AI Provider OAuth Security
+
+AI provider login uses OAuth in the browser:
+- User clicks Connect in Settings
+- Browser popup opens to provider (OpenAI or Anthropic)
+- User authorizes access
+- Callback returns to the agent
+- Pi session is created with the provider credentials
+
+If the OAuth session expires, Settings shows a reconnect prompt. The credentials are managed by the Pi runtime, not stored in plain text.
+
 ## WhatsApp Session Security
 
 ### Session Storage
@@ -130,6 +145,14 @@ The WhatsApp session is stored in `data/whatsapp-auth/`. This contains:
 - Session keys
 - Device registration
 - Encryption keys for the WhatsApp E2E protocol
+
+### Graceful Disconnect on Restart
+
+When the agent restarts, it calls `socket.end()` (not `logout`). This preserves the WhatsApp pairing. The session reconnects automatically on next start.
+
+### 515 Error Handling
+
+If a 515 error occurs after QR scan, the system reconnects with existing credentials rather than wiping the session.
 
 ### Rotating the Session
 
@@ -162,6 +185,14 @@ In production, always use HTTPS:
 - Caddy provides automatic Let's Encrypt certificates
 - Set `DOMAIN` environment variable
 - Never expose the agent on port 80 without HTTPS in production
+
+### Caddy Routing
+
+Caddy routes:
+- `/*` → `agent:3001`
+- `/oauth/*` → `connector:3000` (for OAuth callbacks)
+
+Set `CONNECTOR_ORIGIN` to the public HTTPS URL so OAuth callbacks work correctly.
 
 ### Binding Address
 
@@ -268,7 +299,8 @@ Before going live:
 - [ ] Open Connector has ADMIN_TOKEN set
 - [ ] Encryption key is set and backed up securely
 - [ ] Action allow/block policies configured
-- [ ] WhatsApp session working (test message)
+- [ ] WhatsApp session working (test message to yourself)
+- [ ] AI provider connected via OAuth
 - [ ] Logs are being written and monitored
 
 ## Reporting Security Issues
