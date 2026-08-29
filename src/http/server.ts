@@ -16,6 +16,8 @@ import {
   isSetupRequired,
   acknowledgeAdminToken,
   isAdminTokenAcknowledged,
+  addService,
+  removeService,
 } from '../core/settings.ts';
 import { listProjects, createProject, getProject } from '../core/memory.ts';
 import { getWhatsAppClient } from '../whatsapp/client.ts';
@@ -521,6 +523,7 @@ interface ToolInfo {
   icon: string;
   serviceId: string;
   identity?: string;
+  enabled: boolean;
 }
 
 const SERVICE_HEBREW_OVERLAY: Record<string, { name: string; description: string; icon: string }> = {
@@ -568,6 +571,7 @@ addRoute('GET', '/api/connector/tools', async (req, res) => {
 
   const settings = loadSettings();
   const connector = createClient(settings.activeProject);
+  const serviceConfigMap = new Map(settings.services.map((s) => [s.id, s]));
 
   try {
     const connections = await connector.listConnections();
@@ -576,6 +580,7 @@ addRoute('GET', '/api/connector/tools', async (req, res) => {
     const tools: ToolInfo[] = realConnections.map((conn) => {
       const serviceId = conn.service;
       const overlay = SERVICE_HEBREW_OVERLAY[serviceId];
+      const serviceConfig = serviceConfigMap.get(serviceId);
       
       return {
         id: serviceId,
@@ -584,6 +589,7 @@ addRoute('GET', '/api/connector/tools', async (req, res) => {
         icon: overlay?.icon ?? getDefaultIcon(),
         serviceId,
         identity: conn.identity?.label ?? conn.identity?.email,
+        enabled: serviceConfig?.enabled ?? true,
       };
     });
 
@@ -591,6 +597,68 @@ addRoute('GET', '/api/connector/tools', async (req, res) => {
   } catch (err) {
     log.error({ err }, 'Failed to fetch tools');
     sendError(res, 'Failed to fetch tools', 500);
+  }
+});
+
+addRoute('PATCH', '/api/connector/tools/:service/enabled', async (req, res) => {
+  if (!isAuthenticated(req)) {
+    sendError(res, 'Unauthorized', 401);
+    return;
+  }
+
+  const url = parseUrl(req.url ?? '', true);
+  const pathParts = (url.pathname ?? '').split('/');
+  const service = pathParts[4];
+
+  if (!service) {
+    sendError(res, 'Service ID required', 400);
+    return;
+  }
+
+  let body: { enabled?: boolean };
+  try {
+    body = await parseBody<{ enabled?: boolean }>(req);
+  } catch {
+    sendError(res, 'Invalid JSON body', 400);
+    return;
+  }
+
+  if (typeof body.enabled !== 'boolean') {
+    sendError(res, 'enabled (boolean) is required', 400);
+    return;
+  }
+
+  const settings = loadSettings();
+  const connector = createClient(settings.activeProject);
+
+  try {
+    const connections = await connector.listConnections();
+    const realConnection = connections.find(
+      (c) => c.service === service && isRealConnection(c)
+    );
+
+    if (!realConnection) {
+      sendJson(res, {
+        success: false,
+        error: 'Service not found or is a no_auth virtual tool',
+      }, 404);
+      return;
+    }
+
+    const overlay = SERVICE_HEBREW_OVERLAY[service];
+    addService({
+      id: service,
+      name: overlay?.name ?? service,
+      enabled: body.enabled,
+    });
+
+    sendJson(res, {
+      success: true,
+      data: { service, enabled: body.enabled },
+    });
+  } catch (err) {
+    log.error({ err, service }, 'Failed to update tool enabled state');
+    sendError(res, 'Failed to update tool', 500);
   }
 });
 
@@ -734,6 +802,7 @@ addRoute('DELETE', '/api/connector/services/:service', async (req, res) => {
     }
 
     await connector.disconnectService(service, targetConnection.connectionName);
+    removeService(service);
     sendJson(res, { success: true });
   } catch (err) {
     log.error({ err, service }, 'Failed to disconnect service');

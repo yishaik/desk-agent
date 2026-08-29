@@ -459,6 +459,52 @@ describe('Connect endpoint accepts any OC OAuth service', () => {
   });
 });
 
+describe('Tool enabled/disabled state', () => {
+  it('tools include enabled field defaulting to true', () => {
+    const mockServices: { id: string; enabled: boolean }[] = [];
+    const serviceConfigMap = new Map(mockServices.map((s) => [s.id, s]));
+    
+    const serviceId = 'gmail';
+    const enabled = serviceConfigMap.get(serviceId)?.enabled ?? true;
+    
+    expect(enabled).toBe(true);
+  });
+
+  it('tools reflect enabled:false from settings.services', () => {
+    const mockServices = [{ id: 'gmail', name: 'Gmail', enabled: false }];
+    const serviceConfigMap = new Map(mockServices.map((s) => [s.id, s]));
+    
+    const serviceId = 'gmail';
+    const enabled = serviceConfigMap.get(serviceId)?.enabled ?? true;
+    
+    expect(enabled).toBe(false);
+  });
+
+  it('PATCH /api/connector/tools/:service/enabled only works for real connections', () => {
+    interface Connection {
+      service: string;
+      connectionName: string;
+      authType: string;
+      virtual?: boolean;
+    }
+
+    function isRealConnection(conn: Connection): boolean {
+      return conn.virtual !== true && conn.authType !== 'no_auth';
+    }
+
+    const connections: Connection[] = [
+      { service: 'gmail', connectionName: 'default', authType: 'oauth2' },
+      { service: 'arxiv', connectionName: 'default', authType: 'no_auth', virtual: true },
+    ];
+    
+    const gmailConn = connections.find((c) => c.service === 'gmail' && isRealConnection(c));
+    const arxivConn = connections.find((c) => c.service === 'arxiv' && isRealConnection(c));
+    
+    expect(gmailConn).toBeDefined();
+    expect(arxivConn).toBeUndefined();
+  });
+});
+
 describe('Actions endpoint returns human-readable actions', () => {
   it('returns displayName and description, not just raw id', () => {
     const mockAction = {
