@@ -246,4 +246,27 @@ describe('getSettingsHtml', () => {
     expect(html).toContain('function getToolLogo');
     expect(html).toContain('tool-logo');
   });
+
+  it('includes canDisconnect logic for no_auth/virtual tools', () => {
+    const html = getSettingsHtml(createTestData());
+    
+    expect(html).toContain('function canDisconnect');
+    expect(html).toContain('virtual !== true');
+    expect(html).toContain("authType !== 'no_auth'");
+  });
+
+  it('conditionally shows ניתוק button based on canDisconnect', () => {
+    const html = getSettingsHtml(createTestData());
+    
+    expect(html).toContain('showDisconnect = canDisconnect(tool)');
+    expect(html).toContain('showDisconnect ?');
+    expect(html).toContain('ניתוק');
+  });
+
+  it('maps virtual and authType fields from tool response', () => {
+    const html = getSettingsHtml(createTestData());
+    
+    expect(html).toContain('t.virtual');
+    expect(html).toContain('t.authType');
+  });
 });

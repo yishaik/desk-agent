@@ -940,8 +940,14 @@ export function getSettingsHtml(data: SettingsPageData): string {
           name: t.hebrewName || t.name || t.id || t.serviceId,
           description: t.hebrewDescription || t.description || '',
           icon: t.icon || '',
-          identity: t.identity || null
+          identity: t.identity || null,
+          virtual: t.virtual || false,
+          authType: t.authType || ''
         }));
+        
+        function canDisconnect(tool) {
+          return tool.virtual !== true && tool.authType !== 'no_auth';
+        }
         
         const toolsWithActions = await Promise.all(
           connectedTools.map(async (tool) => {
@@ -958,6 +964,7 @@ export function getSettingsHtml(data: SettingsPageData): string {
             : '';
           const displayActions = tool.actions.slice(0, MAX_ACTIONS);
           const moreCount = tool.actions.length - MAX_ACTIONS;
+          const showDisconnect = canDisconnect(tool);
           
           return \`
             <div class="tool-card">
@@ -969,7 +976,7 @@ export function getSettingsHtml(data: SettingsPageData): string {
                     \${identityStr ? \`<div class="tool-card-identity">✓ \${escapeHtml(identityStr)}</div>\` : ''}
                   </div>
                 </div>
-                <button type="button" class="danger" onclick="disconnectTool('\${escapeHtml(tool.id)}', '\${escapeHtml(tool.name)}')">ניתוק</button>
+                \${showDisconnect ? \`<button type="button" class="danger" onclick="disconnectTool('\${escapeHtml(tool.id)}', '\${escapeHtml(tool.name)}')">ניתוק</button>\` : ''}
               </div>
               \${displayActions.length > 0 ? \`
                 <div class="tool-card-actions-header">פעולות זמינות</div>
