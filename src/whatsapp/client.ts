@@ -27,6 +27,7 @@ export class WhatsAppClient {
   private reconnectAttempts = 0;
   private maxReconnectAttempts = 5;
   private ownerJid: string | null = null;
+  private ownerLid: string | null = null;
 
   async connect(): Promise<void> {
     const authDir = join(config.dataDir, 'whatsapp-auth');
@@ -104,6 +105,8 @@ export class WhatsAppClient {
           name: this.socket?.user?.name,
         };
         this.ownerJid = this.socket?.user?.id ?? null;
+        // "Message yourself" chats use the account's LID, not the phone JID.
+        this.ownerLid = (this.socket?.user as { lid?: string } | undefined)?.lid ?? null;
         this.reconnectAttempts = 0;
 
         const settings = loadSettings();
@@ -173,6 +176,13 @@ export class WhatsAppClient {
         log.error({ err, messageId: message.id }, 'Message handler error');
       }
     }
+  }
+
+  isSelfJid(jid: string | null | undefined): boolean {
+    const bare = (j: string | null | undefined) => j?.split(':')[0]?.split('@')[0];
+    const target = bare(jid);
+    if (!target) return false;
+    return target === bare(this.ownerJid) || target === bare(this.ownerLid);
   }
 
   private isOwnerMessage(remoteJid: string, isFromMe: boolean): boolean {

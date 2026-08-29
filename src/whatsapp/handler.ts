@@ -137,12 +137,10 @@ async function checkForConfirmationResponse(text: string): Promise<CommandResult
   return { handled: false };
 }
 
-function isSelfChat(message: Message, ownerJid: string): boolean {
-  const ownerPhone = ownerJid.split(':')[0]?.split('@')[0];
-  const toJid = message.to;
-  const toPhone = toJid.split(':')[0]?.split('@')[0];
-  
-  return message.isFromMe && toPhone === ownerPhone;
+function isSelfChat(message: Message): boolean {
+  // The self-chat may be addressed by phone JID or by LID — the client knows both.
+  const wa = getWhatsAppClient();
+  return message.isFromMe && wa.isSelfJid(message.to);
 }
 
 export async function handleMessage(message: Message): Promise<void> {
@@ -155,10 +153,14 @@ export async function handleMessage(message: Message): Promise<void> {
     return;
   }
 
-  if (!isSelfChat(message, ownerJid)) {
+  if (!isSelfChat(message)) {
     log.debug({ from: message.from, to: message.to, isFromMe: message.isFromMe }, 'Ignoring non-self-chat message');
     return;
   }
+
+  // Reply into the chat the message arrived in (LID self-chat and phone-JID
+  // self-chat are different conversations on the phone).
+  const chatJid = message.messageKey?.remoteJid ?? ownerJid;
 
   const projectId = settings.activeProject;
   message.projectId = projectId;
@@ -175,7 +177,7 @@ export async function handleMessage(message: Message): Promise<void> {
       if (tracker) {
         await updateReaction(tracker, 'finished');
       }
-      await wa.sendMessage(ownerJid, result.response);
+      await wa.sendMessage(chatJid, result.response);
     }
     return;
   }
@@ -189,7 +191,7 @@ export async function handleMessage(message: Message): Promise<void> {
       if (tracker) {
         await updateReaction(tracker, 'finished');
       }
-      await wa.sendMessage(ownerJid, confirmResponse.response);
+      await wa.sendMessage(chatJid, confirmResponse.response);
     }
     return;
   }
@@ -200,12 +202,12 @@ export async function handleMessage(message: Message): Promise<void> {
     const response = await processWithPi(message, settings, tracker);
     if (response) {
       await updateReaction(tracker, 'finished');
-      await sendSplitMessage(ownerJid, response, message.id);
+      await sendSplitMessage(chatJid, response, message.id);
     }
   } catch (err) {
     log.error({ err }, 'Error processing message');
     await updateReaction(tracker, 'error');
-    await wa.sendMessage(ownerJid, `שגיאה: ${err instanceof Error ? err.message : 'Unknown error'}`);
+    await wa.sendMessage(chatJid, `שגיאה: ${err instanceof Error ? err.message : 'Unknown error'}`);
   }
 }
 
