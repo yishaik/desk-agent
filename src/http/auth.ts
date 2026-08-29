@@ -109,8 +109,12 @@ export async function resolveActiveModel(settingsModel: string): Promise<ModelRe
   const targetProvider = providerId ?? extractProviderFromModelId(settingsModel);
   
   const hasProviderCredential = await providerHasLiveCredential(targetProvider);
-  
-  if (hasProviderCredential) {
+
+  // Guard against a stored model the provider will reject at request time
+  // (spark models are API-key-only; ChatGPT-account Codex logins get a 4xx).
+  const storedModelUnusable = targetProvider === 'openai-codex' && modelId.includes('spark');
+
+  if (hasProviderCredential && !storedModelUnusable) {
     const model = runtime.getModel(targetProvider, modelId) ??
                   runtime.getModel(targetProvider, settingsModel);
     

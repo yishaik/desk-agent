@@ -667,7 +667,7 @@ export function getSettingsHtml(data: SettingsPageData): string {
         <span class="info-value">${connectorStatus.connectionCount}</span>
       </div>
       <div class="btn-group">
-        <a href="${escapeHtml(connectorStatus.consoleUrl || '/connector/')}" target="_blank">
+        <a href="${escapeHtml(connectorStatus.consoleUrl || '#')}" target="_blank">
           <button type="button" class="secondary">פתח את הקונסול</button>
         </a>
       </div>

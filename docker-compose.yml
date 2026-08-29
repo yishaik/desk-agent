@@ -26,9 +26,9 @@ services:
       - CONNECTOR_ADMIN_TOKEN=${CONNECTOR_ADMIN_TOKEN}
       - DOMAIN=${DOMAIN}
       - CONSOLE_URL=${CONSOLE_URL:-}
-      - MODEL_API_KEY=${MODEL_API_KEY}
+      - MODEL_API_KEY=${MODEL_API_KEY:-}
       - MODEL_API_URL=${MODEL_API_URL:-https://api.anthropic.com/v1/messages}
-      - ANTHROPIC_API_KEY=${MODEL_API_KEY}
+      - ANTHROPIC_API_KEY=${MODEL_API_KEY:-}
       - LOG_LEVEL=${LOG_LEVEL:-info}
     volumes:
       - agent-data:/app/data
