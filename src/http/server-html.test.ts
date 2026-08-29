@@ -71,6 +71,24 @@ describe('Server HTML Source Code Requirements', () => {
     it('getWizardHtml calls getThemeCss()', () => {
       expect(serverCode).toContain('getThemeCss()');
     });
+
+    it('ChatGPT Connect uses openai-codex provider ID', () => {
+      expect(serverCode).toContain("connectProvider('openai-codex')");
+      expect(serverCode).not.toMatch(/connectProvider\('openai'\)/);
+    });
+
+    it('provider element IDs match API provider IDs', () => {
+      expect(serverCode).toContain('id="anthropic-status"');
+      expect(serverCode).toContain('id="anthropic-btn"');
+      expect(serverCode).toContain('id="openai-codex-status"');
+      expect(serverCode).toContain('id="openai-codex-btn"');
+    });
+
+    it('step 2 uses hasAiProvider from listProviders, not settings.model', () => {
+      expect(serverCode).toContain('hasAiProvider');
+      expect(serverCode).toContain('listProviders()');
+      expect(serverCode).not.toContain("settings.model === 'claude-3-5-sonnet");
+    });
   });
 
   describe('getDashboardHtml requirements', () => {
