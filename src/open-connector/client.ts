@@ -146,7 +146,10 @@ export class OpenConnectorClient {
 
   async listActions(serviceId?: string): Promise<Action[]> {
     const path = serviceId ? `/v1/actions?service=${encodeURIComponent(serviceId)}` : '/v1/actions';
-    const response = await this.request<{ success: boolean; data: Action[] }>(path);
+    const response = await this.request<Action[] | { success: boolean; data: Action[] }>(path);
+    if (Array.isArray(response)) {
+      return response;
+    }
     return response.data;
   }
 

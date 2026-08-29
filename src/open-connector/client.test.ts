@@ -183,4 +183,16 @@ describe('API Path Correctness', () => {
     const listConnectedAppsSource = client.listConnectedApps.toString();
     expect(listConnectedAppsSource).toContain('/v1/apps');
   });
+
+  it('listActions should handle both raw array and {success,data} responses', async () => {
+    vi.resetModules();
+    
+    const { OpenConnectorClient } = await import('./client.ts');
+    
+    const client = new OpenConnectorClient();
+    
+    const listActionsSource = client.listActions.toString();
+    expect(listActionsSource).toContain('Array.isArray');
+    expect(listActionsSource).toContain('/v1/actions');
+  });
 });

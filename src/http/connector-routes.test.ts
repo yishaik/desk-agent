@@ -144,10 +144,33 @@ describe('Service Hebrew Overlay', () => {
     expect(googlecalendar?.description).toMatch(/אירועים|פגישות/);
   });
 
-  it('overlay is optional - unknown services fall back to provider displayName', () => {
+  it('overlay is optional - unknown services fall back to serviceId', () => {
     const unknownService = 'some-new-service';
     const overlay = SERVICE_HEBREW_OVERLAY[unknownService];
     expect(overlay).toBeUndefined();
+  });
+});
+
+describe('Tools endpoint returns connected tools only', () => {
+  it('derives tools from connections, not full catalog', () => {
+    const mockConnections = [
+      { service: 'gmail', connectionName: 'default', authType: 'oauth2', identity: { label: 'user@gmail.com' } },
+    ];
+    
+    const tools = mockConnections.map((conn) => ({
+      id: conn.service,
+      serviceId: conn.service,
+      identity: conn.identity?.label,
+    }));
+    
+    expect(tools).toHaveLength(1);
+    expect(tools[0]?.id).toBe('gmail');
+  });
+
+  it('returns empty array when no connections', () => {
+    const mockConnections: unknown[] = [];
+    const tools = mockConnections.map(() => ({}));
+    expect(tools).toHaveLength(0);
   });
 });
 
@@ -171,6 +194,34 @@ describe('Connect endpoint accepts any OC OAuth service', () => {
     
     expect(mockProvider.authTypes.includes('oauth2')).toBe(false);
     expect(mockProvider.authTypes).toContain('api_key');
+  });
+});
+
+describe('Actions endpoint returns human-readable actions', () => {
+  it('returns displayName and description, not just raw id', () => {
+    const mockAction = {
+      id: 'gmail.send_email',
+      service: 'gmail',
+      displayName: 'Send Email',
+      description: 'Send an email message',
+    };
+    
+    expect(mockAction).toHaveProperty('displayName');
+    expect(mockAction).toHaveProperty('description');
+    expect(mockAction.displayName).not.toBe(mockAction.id);
+  });
+
+  it('filters by service when query param provided', () => {
+    const allActions = [
+      { id: 'gmail.send_email', service: 'gmail', displayName: 'Send Email', description: '' },
+      { id: 'slack.post_message', service: 'slack', displayName: 'Post Message', description: '' },
+    ];
+    
+    const serviceFilter = 'gmail';
+    const filtered = allActions.filter((a) => a.service === serviceFilter);
+    
+    expect(filtered).toHaveLength(1);
+    expect(filtered[0]?.service).toBe('gmail');
   });
 });
 

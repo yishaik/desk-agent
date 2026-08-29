@@ -515,7 +515,6 @@ interface ToolInfo {
   hebrewDescription: string;
   icon: string;
   serviceId: string;
-  isConnected: boolean;
   identity?: string;
 }
 
@@ -552,9 +551,8 @@ const SERVICE_HEBREW_OVERLAY: Record<string, { name: string; description: string
   },
 };
 
-function getDefaultIcon(serviceId: string): string {
-  const firstChar = serviceId.charAt(0).toUpperCase();
-  return `🔌`;
+function getDefaultIcon(): string {
+  return '🔌';
 }
 
 addRoute('GET', '/api/connector/tools', async (req, res) => {
@@ -567,26 +565,19 @@ addRoute('GET', '/api/connector/tools', async (req, res) => {
   const connector = createClient(settings.activeProject);
 
   try {
-    const [providers, connections] = await Promise.all([
-      connector.listProviders(),
-      connector.listConnections(),
-    ]);
+    const connections = await connector.listConnections();
     
-    const connectionMap = new Map(connections.map((c) => [c.service, c]));
-
-    const tools: ToolInfo[] = providers.map((provider) => {
-      const serviceId = provider.id;
-      const conn = connectionMap.get(serviceId);
+    const tools: ToolInfo[] = connections.map((conn) => {
+      const serviceId = conn.service;
       const overlay = SERVICE_HEBREW_OVERLAY[serviceId];
       
       return {
         id: serviceId,
-        hebrewName: overlay?.name ?? provider.displayName,
-        hebrewDescription: overlay?.description ?? provider.description ?? '',
-        icon: overlay?.icon ?? getDefaultIcon(serviceId),
+        hebrewName: overlay?.name ?? serviceId,
+        hebrewDescription: overlay?.description ?? '',
+        icon: overlay?.icon ?? getDefaultIcon(),
         serviceId,
-        isConnected: !!conn,
-        identity: conn?.identity?.label ?? conn?.identity?.email,
+        identity: conn.identity?.label ?? conn.identity?.email,
       };
     });
 
@@ -594,6 +585,42 @@ addRoute('GET', '/api/connector/tools', async (req, res) => {
   } catch (err) {
     log.error({ err }, 'Failed to fetch tools');
     sendError(res, 'Failed to fetch tools', 500);
+  }
+});
+
+interface ActionInfo {
+  id: string;
+  service: string;
+  displayName: string;
+  description: string;
+}
+
+addRoute('GET', '/api/connector/actions', async (req, res) => {
+  if (!isAuthenticated(req)) {
+    sendError(res, 'Unauthorized', 401);
+    return;
+  }
+
+  const url = parseUrl(req.url ?? '', true);
+  const serviceFilter = url.query['service'] as string | undefined;
+
+  const settings = loadSettings();
+  const connector = createClient(settings.activeProject);
+
+  try {
+    const actions = await connector.listActions(serviceFilter);
+    
+    const data: ActionInfo[] = actions.map((action) => ({
+      id: action.id,
+      service: action.service,
+      displayName: action.displayName,
+      description: action.description,
+    }));
+
+    sendJson(res, { success: true, data });
+  } catch (err) {
+    log.error({ err, service: serviceFilter }, 'Failed to fetch actions');
+    sendError(res, 'Failed to fetch actions', 500);
   }
 });
 
