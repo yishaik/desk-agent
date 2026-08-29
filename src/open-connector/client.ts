@@ -124,8 +124,17 @@ export class OpenConnectorClient {
   }
 
   async listProviders(): Promise<Provider[]> {
-    const response = await this.request<Provider[]>('/v1/providers');
-    return response;
+    // /v1/providers responds {success, data: [{service, displayName, authTypes, scenario, ...}]}
+    const response = await this.request<
+      Provider[] | { success: boolean; data: Array<Record<string, unknown>> }
+    >('/v1/providers');
+    const items = Array.isArray(response) ? response : (response.data ?? []);
+    return (items as Array<Record<string, unknown>>).map((p) => ({
+      id: (p['service'] ?? p['id']) as string,
+      displayName: (p['displayName'] ?? p['service']) as string,
+      description: (p['scenario'] ?? p['description']) as string | undefined,
+      authTypes: (p['authTypes'] as string[] | undefined) ?? [],
+    }));
   }
 
   async getProvider(serviceId: string): Promise<Provider | null> {
@@ -140,8 +149,11 @@ export class OpenConnectorClient {
   }
 
   async listConnections(): Promise<Connection[]> {
-    const response = await this.request<Connection[]>('/api/connections');
-    return response;
+    const response = await this.request<
+      Connection[] | { success?: boolean; data?: Connection[]; connections?: Connection[] }
+    >('/api/connections');
+    if (Array.isArray(response)) return response;
+    return response.data ?? response.connections ?? [];
   }
 
   async getAuthenticatedServices(services: string[]): Promise<string[]> {
