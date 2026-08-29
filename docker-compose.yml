@@ -69,7 +69,7 @@ services:
     networks:
       - desk-network
     healthcheck:
-      test: ["CMD", "node", "-e", "require('http').get('http://localhost:3000/v1/health', r => process.exit(r.statusCode === 200 ? 0 : 1)).on('error', () => process.exit(1))"]
+      test: ["CMD", "node", "-e", "require('http').get('http://localhost:3000/health', r => process.exit(r.statusCode === 200 ? 0 : 1)).on('error', () => process.exit(1))"]
       interval: 30s
       timeout: 10s
       retries: 3

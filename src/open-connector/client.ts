@@ -89,7 +89,11 @@ export class OpenConnectorClient {
     path: string,
     options: RequestInit = {}
   ): Promise<T> {
-    const token = this.getToken();
+    // Console endpoints (/api/*) require the admin token; runtime endpoints
+    // (/v1/*) take the runtime token.
+    const token = path.startsWith('/api/')
+      ? (config.connectorAdminToken ?? this.getToken())
+      : this.getToken();
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
       ...(options.headers as Record<string, string> | undefined),
