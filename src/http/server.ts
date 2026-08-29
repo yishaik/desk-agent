@@ -19,6 +19,8 @@ import {
   addService,
   removeService,
   setActionEnabled,
+  getService,
+  setServiceEnabled,
 } from '../core/settings.ts';
 import { listProjects, createProject, getProject } from '../core/memory.ts';
 import { getWhatsAppClient } from '../whatsapp/client.ts';
@@ -1069,7 +1071,6 @@ addRoute('DELETE', '/api/connector/services/:service', async (req, res) => {
     sendError(res, 'Failed to disconnect service', 500);
   }
 });
-
 
 function getLoginHtml(): string {
   return `<!DOCTYPE html>

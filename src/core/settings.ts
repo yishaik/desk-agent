@@ -153,6 +153,22 @@ export function setActionEnabled(serviceId: string, actionId: string, enabled: b
   return settings;
 }
 
+export function getService(serviceId: string): ServiceConfig | undefined {
+  const settings = loadSettings();
+  return settings.services.find((s) => s.id === serviceId);
+}
+
+export function setServiceEnabled(serviceId: string, enabled: boolean): Settings {
+  const settings = loadSettings();
+  const service = settings.services.find((s) => s.id === serviceId);
+  if (service) {
+    service.enabled = enabled;
+    saveSettings(settings);
+    log.info({ serviceId, enabled }, 'Set service enabled state');
+  }
+  return settings;
+}
+
 export function markSetupComplete(): Settings {
   const settings = loadSettings();
   settings.setupComplete = true;

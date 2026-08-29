@@ -448,6 +448,57 @@ export function getSettingsHtml(data: SettingsPageData): string {
       font-style: italic;
     }
     
+    .tool-switch {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      cursor: pointer;
+      user-select: none;
+    }
+    
+    .tool-switch-track {
+      width: 36px;
+      height: 20px;
+      background: var(--border);
+      border-radius: 10px;
+      position: relative;
+      transition: background 0.2s;
+    }
+    
+    .tool-switch-track.enabled {
+      background: var(--accent);
+    }
+    
+    .tool-switch-thumb {
+      width: 16px;
+      height: 16px;
+      background: white;
+      border-radius: 50%;
+      position: absolute;
+      top: 2px;
+      right: 18px;
+      transition: right 0.2s;
+    }
+    
+    .tool-switch-track.enabled .tool-switch-thumb {
+      right: 2px;
+    }
+    
+    .tool-switch-label {
+      font-size: 13px;
+      color: var(--text-secondary);
+    }
+    
+    .tool-card.disabled {
+      opacity: 0.5;
+    }
+    
+    .tool-card-controls {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+    
     .empty-state {
       text-align: center;
       padding: 32px 16px;
@@ -942,7 +993,8 @@ export function getSettingsHtml(data: SettingsPageData): string {
           icon: t.icon || '',
           identity: t.identity || null,
           virtual: t.virtual || false,
-          authType: t.authType || ''
+          authType: t.authType || '',
+          enabled: t.enabled !== false
         }));
         
         function canDisconnect(tool) {
@@ -965,9 +1017,10 @@ export function getSettingsHtml(data: SettingsPageData): string {
           const displayActions = tool.actions.slice(0, MAX_ACTIONS);
           const moreCount = tool.actions.length - MAX_ACTIONS;
           const showDisconnect = canDisconnect(tool);
+          const isRealTool = canDisconnect(tool);
           
           return \`
-            <div class="tool-card">
+            <div class="tool-card\${tool.enabled ? '' : ' disabled'}">
               <div class="tool-card-header">
                 <div class="tool-card-info">
                   <div class="tool-logo">\${getToolLogo(tool)}</div>
@@ -976,7 +1029,17 @@ export function getSettingsHtml(data: SettingsPageData): string {
                     \${identityStr ? \`<div class="tool-card-identity">✓ \${escapeHtml(identityStr)}</div>\` : ''}
                   </div>
                 </div>
-                \${showDisconnect ? \`<button type="button" class="danger" onclick="disconnectTool('\${escapeHtml(tool.id)}', '\${escapeHtml(tool.name)}')">ניתוק</button>\` : ''}
+                <div class="tool-card-controls">
+                  \${isRealTool ? \`
+                    <div class="tool-switch" role="switch" aria-checked="\${tool.enabled}" onclick="toggleToolEnabled('\${escapeHtml(tool.id)}', \${!tool.enabled})">
+                      <div class="tool-switch-track\${tool.enabled ? ' enabled' : ''}">
+                        <div class="tool-switch-thumb"></div>
+                      </div>
+                      <span class="tool-switch-label">\${tool.enabled ? 'מופעל' : 'כבוי'}</span>
+                    </div>
+                  \` : ''}
+                  \${showDisconnect ? \`<button type="button" class="danger" onclick="disconnectTool('\${escapeHtml(tool.id)}', '\${escapeHtml(tool.name)}')">ניתוק</button>\` : ''}
+                </div>
               </div>
               \${displayActions.length > 0 ? \`
                 <div class="tool-card-actions-header">פעולות זמינות</div>
@@ -1022,6 +1085,27 @@ export function getSettingsHtml(data: SettingsPageData): string {
         }
       } catch (err) {
         showToast('שגיאה בניתוק הכלי', 'error');
+      }
+    }
+
+    async function toggleToolEnabled(serviceId, enabled) {
+      try {
+        const res = await fetch(\`/api/connector/tools/\${encodeURIComponent(serviceId)}/enabled\`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ enabled })
+        });
+        
+        const json = await res.json();
+        
+        if (json.success) {
+          showToast(enabled ? 'הכלי הופעל' : 'הכלי כובה');
+          loadTools();
+        } else {
+          showToast(json.error || 'שגיאה בעדכון מצב הכלי', 'error');
+        }
+      } catch (err) {
+        showToast('שגיאה בעדכון מצב הכלי', 'error');
       }
     }
 

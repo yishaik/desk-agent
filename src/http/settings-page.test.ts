@@ -269,4 +269,34 @@ describe('getSettingsHtml', () => {
     expect(html).toContain('t.virtual');
     expect(html).toContain('t.authType');
   });
+
+  it('includes enabled toggle switch with Hebrew labels', () => {
+    const html = getSettingsHtml(createTestData());
+    
+    expect(html).toContain('tool-switch');
+    expect(html).toContain('מופעל');
+    expect(html).toContain('כבוי');
+    expect(html).toContain("role=\"switch\"");
+  });
+
+  it('includes toggleToolEnabled function', () => {
+    const html = getSettingsHtml(createTestData());
+    
+    expect(html).toContain('async function toggleToolEnabled');
+    expect(html).toContain('/api/connector/tools/');
+    expect(html).toContain('/enabled');
+    expect(html).toContain("method: 'PATCH'");
+  });
+
+  it('maps enabled field from tool response with default true', () => {
+    const html = getSettingsHtml(createTestData());
+    
+    expect(html).toContain('t.enabled !== false');
+  });
+
+  it('applies disabled class to tool card when not enabled', () => {
+    const html = getSettingsHtml(createTestData());
+    
+    expect(html).toContain("tool-card${tool.enabled ? '' : ' disabled'}");
+  });
 });
