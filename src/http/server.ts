@@ -37,6 +37,7 @@ import {
 } from './auth.ts';
 import { writeIdentityFiles } from '../core/identity-files.ts';
 import { getSettingsHtml, type SettingsPageData } from './settings-page.ts';
+import { getThemeCss } from './theme.ts';
 
 const log = createChildLogger('http');
 
@@ -1211,7 +1212,7 @@ addRoute('PATCH', '/api/connector/tools/:service/actions/:action/enabled', async
   }
 });
 
-function getLoginHtml(): string {
+export function getLoginHtml(): string {
   return `<!DOCTYPE html>
 <html lang="he" dir="rtl">
 <head>
@@ -1219,19 +1220,16 @@ function getLoginHtml(): string {
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Desk Agent - התחברות</title>
   <style>
-    * { box-sizing: border-box; margin: 0; padding: 0; }
+    ${getThemeCss()}
+    
     body {
-      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-      background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
-      min-height: 100vh;
       display: flex;
       align-items: center;
       justify-content: center;
-      color: #fff;
     }
     .login-card {
-      background: rgba(255,255,255,0.1);
-      backdrop-filter: blur(10px);
+      background: var(--bg-secondary);
+      border: 1px solid var(--border-subtle);
       border-radius: 16px;
       padding: 40px;
       width: 100%;
@@ -1239,23 +1237,23 @@ function getLoginHtml(): string {
       box-shadow: 0 8px 32px rgba(0,0,0,0.3);
     }
     h1 { text-align: center; margin-bottom: 8px; font-size: 28px; }
-    .subtitle { text-align: center; color: #aaa; margin-bottom: 32px; }
+    .subtitle { text-align: center; color: var(--text-secondary); margin-bottom: 32px; }
     label { display: block; margin-bottom: 8px; font-weight: 500; }
     input {
       width: 100%;
       padding: 12px 16px;
-      border: 1px solid rgba(255,255,255,0.2);
+      border: 1px solid var(--border);
       border-radius: 8px;
-      background: rgba(255,255,255,0.1);
-      color: #fff;
+      background: var(--bg-tertiary);
+      color: var(--text-primary);
       font-size: 16px;
       margin-bottom: 24px;
     }
-    input:focus { outline: none; border-color: #4f46e5; }
+    input:focus { outline: none; border-color: var(--accent); }
     button {
       width: 100%;
       padding: 14px;
-      background: #4f46e5;
+      background: var(--accent);
       color: #fff;
       border: none;
       border-radius: 8px;
@@ -1264,8 +1262,8 @@ function getLoginHtml(): string {
       cursor: pointer;
       transition: background 0.2s;
     }
-    button:hover { background: #4338ca; }
-    .error { color: #f87171; text-align: center; margin-top: 16px; display: none; }
+    button:hover { background: var(--accent-hover); }
+    .error { color: var(--error); text-align: center; margin-top: 16px; display: none; }
   </style>
 </head>
 <body>
@@ -1303,7 +1301,7 @@ function getLoginHtml(): string {
 </html>`;
 }
 
-function getWizardHtml(settings: ReturnType<typeof loadSettings>, pairingState: { isPaired: boolean; qrCode?: string; phoneNumber?: string }): string {
+export function getWizardHtml(settings: ReturnType<typeof loadSettings>, pairingState: { isPaired: boolean; qrCode?: string; qrDataUrl?: string; phoneNumber?: string }): string {
   const hasAdminToken = !!config.connectorAdminToken;
   const adminTokenAcked = settings.connectorAdminTokenAcknowledged;
   const needsConnectorAck = hasAdminToken && !adminTokenAcked;
@@ -1311,12 +1309,14 @@ function getWizardHtml(settings: ReturnType<typeof loadSettings>, pairingState: 
   let step: number;
   if (!pairingState.isPaired) {
     step = 1;
-  } else if (!settings.ownerName) {
+  } else if (!settings.model || settings.model === 'claude-3-5-sonnet-20241022') {
     step = 2;
   } else if (needsConnectorAck) {
     step = 3;
-  } else {
+  } else if (!settings.ownerName) {
     step = 4;
+  } else {
+    step = 5;
   }
   
   return `<!DOCTYPE html>
@@ -1326,47 +1326,44 @@ function getWizardHtml(settings: ReturnType<typeof loadSettings>, pairingState: 
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Desk Agent - הגדרה ראשונית</title>
   <style>
-    * { box-sizing: border-box; margin: 0; padding: 0; }
-    body {
-      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-      background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
-      min-height: 100vh;
-      color: #fff;
-      padding: 20px;
-    }
+    ${getThemeCss()}
+    
+    body { padding: 20px; }
     .container { max-width: 600px; margin: 0 auto; }
     .header { text-align: center; padding: 40px 0; }
     h1 { font-size: 32px; margin-bottom: 8px; }
-    .subtitle { color: #aaa; }
+    .subtitle { color: var(--text-secondary); }
     .steps {
       display: flex;
       justify-content: center;
-      gap: 20px;
+      gap: 16px;
       margin: 40px 0;
+      flex-wrap: wrap;
     }
     .step {
       display: flex;
       align-items: center;
       gap: 8px;
-      color: #666;
+      color: var(--text-muted);
     }
-    .step.active { color: #4f46e5; }
-    .step.done { color: #10b981; }
+    .step.active { color: var(--accent); }
+    .step.done { color: var(--success); }
     .step-num {
-      width: 32px;
-      height: 32px;
+      width: 28px;
+      height: 28px;
       border-radius: 50%;
-      background: rgba(255,255,255,0.1);
+      background: var(--bg-tertiary);
       display: flex;
       align-items: center;
       justify-content: center;
       font-weight: 600;
+      font-size: 14px;
     }
-    .step.active .step-num { background: #4f46e5; }
-    .step.done .step-num { background: #10b981; }
+    .step.active .step-num { background: var(--accent); color: #fff; }
+    .step.done .step-num { background: var(--success); color: #fff; }
     .card {
-      background: rgba(255,255,255,0.1);
-      backdrop-filter: blur(10px);
+      background: var(--bg-secondary);
+      border: 1px solid var(--border-subtle);
       border-radius: 16px;
       padding: 32px;
       margin-bottom: 20px;
@@ -1378,28 +1375,27 @@ function getWizardHtml(settings: ReturnType<typeof loadSettings>, pairingState: 
       display: inline-block;
       margin: 20px 0;
     }
-    .qr-container pre {
-      font-family: monospace;
-      font-size: 8px;
-      line-height: 1;
-      color: #000;
+    .qr-container img {
+      display: block;
+      max-width: 200px;
     }
     label { display: block; margin-bottom: 8px; font-weight: 500; }
-    input, select {
+    input, select, textarea {
       width: 100%;
       padding: 12px 16px;
-      border: 1px solid rgba(255,255,255,0.2);
+      border: 1px solid var(--border);
       border-radius: 8px;
-      background: rgba(255,255,255,0.1);
-      color: #fff;
+      background: var(--bg-tertiary);
+      color: var(--text-primary);
       font-size: 16px;
       margin-bottom: 16px;
     }
-    input:focus, select:focus { outline: none; border-color: #4f46e5; }
-    select option { background: #1a1a2e; }
+    input:focus, select:focus, textarea:focus { outline: none; border-color: var(--accent); }
+    select option { background: var(--bg-tertiary); }
+    textarea { resize: vertical; min-height: 80px; }
     button {
       padding: 14px 28px;
-      background: #4f46e5;
+      background: var(--accent);
       color: #fff;
       border: none;
       border-radius: 8px;
@@ -1408,22 +1404,27 @@ function getWizardHtml(settings: ReturnType<typeof loadSettings>, pairingState: 
       cursor: pointer;
       transition: background 0.2s;
     }
-    button:hover { background: #4338ca; }
+    button:hover { background: var(--accent-hover); }
+    button:disabled { opacity: 0.5; cursor: not-allowed; }
     button.secondary {
       background: transparent;
-      border: 1px solid rgba(255,255,255,0.3);
+      border: 1px solid var(--border);
+      color: var(--text-primary);
     }
-    .connected { color: #10b981; }
-    .status-badge {
-      display: inline-flex;
+    .provider-card {
+      background: var(--bg-tertiary);
+      border-radius: 12px;
+      padding: 20px;
+      margin-bottom: 16px;
+      display: flex;
       align-items: center;
-      gap: 6px;
-      padding: 6px 12px;
-      border-radius: 20px;
-      font-size: 14px;
-      background: rgba(16, 185, 129, 0.2);
-      color: #10b981;
+      justify-content: space-between;
     }
+    .provider-info { display: flex; align-items: center; gap: 12px; }
+    .provider-icon { font-size: 32px; }
+    .provider-name { font-weight: 600; }
+    .provider-status { font-size: 13px; color: var(--text-muted); }
+    .provider-status.connected { color: var(--success); }
     .form-group { margin-bottom: 20px; }
     .btn-group { display: flex; gap: 12px; margin-top: 24px; }
   </style>
@@ -1442,122 +1443,251 @@ function getWizardHtml(settings: ReturnType<typeof loadSettings>, pairingState: 
       </div>
       <div class="step ${step >= 2 ? (step > 2 ? 'done' : 'active') : ''}">
         <span class="step-num">${step > 2 ? '✓' : '2'}</span>
-        <span>הגדרות</span>
+        <span>AI</span>
       </div>
       <div class="step ${step >= 3 ? (step > 3 ? 'done' : 'active') : ''}">
         <span class="step-num">${step > 3 ? '✓' : '3'}</span>
         <span>Open Connector</span>
       </div>
-      <div class="step ${step >= 4 ? 'active' : ''}">
-        <span class="step-num">4</span>
-        <span>שירותים</span>
+      <div class="step ${step >= 4 ? (step > 4 ? 'done' : 'active') : ''}">
+        <span class="step-num">${step > 4 ? '✓' : '4'}</span>
+        <span>זהות</span>
       </div>
     </div>
 
     ${step === 1 ? `
     <div class="card" style="text-align: center;">
       <h2>סרוק QR לחיבור WhatsApp</h2>
-      <p style="color: #aaa; margin: 16px 0;">פתח WhatsApp → הגדרות → מכשירים מקושרים → קשר מכשיר</p>
-      ${pairingState.qrCode ? `
-        <div class="qr-container">
-          <pre id="qr"></pre>
-        </div>
-        <p style="color: #aaa;">QR מתעדכן כל 60 שניות</p>
-        <script>
-          // Render QR as text
-          const qr = ${JSON.stringify(pairingState.qrCode)};
-          // Will be replaced by actual QR rendering
-          document.getElementById('qr').textContent = 'סורק...';
-          setTimeout(() => location.reload(), 60000);
-        </script>
-      ` : `
-        <p>ממתין ל-QR...</p>
-        <script>setTimeout(() => location.reload(), 3000);</script>
-      `}
+      <p style="color: var(--text-secondary); margin: 16px 0;">פתח WhatsApp → הגדרות → מכשירים מקושרים → קשר מכשיר</p>
+      <div class="qr-container">
+        <img id="qr-img" src="" alt="QR Code" style="display: none;">
+        <p id="qr-loading" style="color: #000;">טוען QR...</p>
+      </div>
+      <p style="color: var(--text-muted);">QR מתעדכן אוטומטית</p>
+      <script>
+        async function pollPairing() {
+          try {
+            const res = await fetch('/api/pairing');
+            const { data } = await res.json();
+            
+            if (data.isPaired) {
+              location.reload();
+              return;
+            }
+            
+            if (data.qrDataUrl) {
+              document.getElementById('qr-img').src = data.qrDataUrl;
+              document.getElementById('qr-img').style.display = 'block';
+              document.getElementById('qr-loading').style.display = 'none';
+            }
+          } catch (err) {
+            console.error('Pairing poll error:', err);
+          }
+          setTimeout(pollPairing, 3000);
+        }
+        pollPairing();
+      </script>
     </div>
     ` : step === 2 ? `
     <div class="card">
-      <h2>הגדרות בסיסיות</h2>
-      <form id="settingsForm">
-        <div class="form-group">
-          <label for="ownerName">שם הבעלים</label>
-          <input type="text" id="ownerName" name="ownerName" value="${settings.ownerName}" placeholder="השם שלך" required>
+      <h2>🧠 התחבר לספק AI</h2>
+      <p style="color: var(--text-secondary); margin-bottom: 24px;">
+        התחבר ל-ChatGPT או Claude כדי להפעיל את הסוכן
+      </p>
+      
+      <div id="providersContainer">
+        <div class="provider-card">
+          <div class="provider-info">
+            <span class="provider-icon">🤖</span>
+            <div>
+              <div class="provider-name">Claude (Anthropic)</div>
+              <div class="provider-status" id="claude-status">בודק...</div>
+            </div>
+          </div>
+          <button id="claude-btn" onclick="connectProvider('anthropic')">התחבר</button>
         </div>
-        <div class="form-group">
-          <label for="botName">שם הבוט</label>
-          <input type="text" id="botName" name="botName" value="${settings.botName}" placeholder="Desk Agent">
+        
+        <div class="provider-card">
+          <div class="provider-info">
+            <span class="provider-icon">💬</span>
+            <div>
+              <div class="provider-name">ChatGPT (OpenAI)</div>
+              <div class="provider-status" id="openai-status">בודק...</div>
+            </div>
+          </div>
+          <button id="openai-btn" onclick="connectProvider('openai-codex')">התחבר</button>
         </div>
-        <div class="form-group">
-          <label for="timezone">אזור זמן</label>
-          <select id="timezone" name="timezone">
-            <option value="Asia/Jerusalem" ${settings.timezone === 'Asia/Jerusalem' ? 'selected' : ''}>ישראל (Asia/Jerusalem)</option>
-            <option value="UTC" ${settings.timezone === 'UTC' ? 'selected' : ''}>UTC</option>
-            <option value="America/New_York" ${settings.timezone === 'America/New_York' ? 'selected' : ''}>ניו יורק</option>
-            <option value="Europe/London" ${settings.timezone === 'Europe/London' ? 'selected' : ''}>לונדון</option>
-          </select>
-        </div>
-        <div class="form-group">
-          <label for="apiKeyMode">מצב מפתחות API</label>
-          <select id="apiKeyMode" name="apiKeyMode">
-            <option value="shared" ${settings.apiKeyMode === 'shared' ? 'selected' : ''}>משותף - טוקן אחד לכל הפרויקטים</option>
-            <option value="per-project" ${settings.apiKeyMode === 'per-project' ? 'selected' : ''}>לפי פרויקט - טוקן נפרד לכל פרויקט</option>
-          </select>
-        </div>
+      </div>
+      
+      <div id="pasteModal" style="display: none; margin-top: 24px; padding: 16px; background: var(--bg-tertiary); border-radius: 8px;">
+        <p style="margin-bottom: 12px; color: var(--text-secondary);">אם החלון לא נפתח, הדבק את הקוד או URL שחזר:</p>
+        <input type="text" id="callbackUrl" placeholder="הדבק כאן..." style="margin-bottom: 12px;">
         <div class="btn-group">
-          <button type="submit">המשך</button>
+          <button onclick="submitCallback()">אשר</button>
+          <button class="secondary" onclick="closePasteModal()">ביטול</button>
         </div>
-      </form>
+      </div>
     </div>
     <script>
-      document.getElementById('settingsForm').addEventListener('submit', async (e) => {
-        e.preventDefault();
-        const form = new FormData(e.target);
-        const data = Object.fromEntries(form.entries());
-        await fetch('/api/settings', {
-          method: 'PUT',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(data)
-        });
-        location.reload();
-      });
+      let currentProvider = null;
+      let loginPollInterval = null;
+
+      async function loadProviders() {
+        try {
+          const res = await fetch('/api/auth/providers');
+          const { data } = await res.json();
+          
+          for (const p of data) {
+            const statusEl = document.getElementById(p.id + '-status');
+            const btnEl = document.getElementById(p.id + '-btn');
+            if (statusEl && btnEl) {
+              if (p.isConnected) {
+                statusEl.textContent = '✓ מחובר';
+                statusEl.classList.add('connected');
+                btnEl.textContent = 'מחובר ✓';
+                btnEl.disabled = true;
+              } else {
+                statusEl.textContent = 'לא מחובר';
+              }
+            }
+          }
+          
+          const anyConnected = data.some(p => p.isConnected);
+          if (anyConnected) {
+            setTimeout(() => location.reload(), 1000);
+          }
+        } catch (err) {
+          console.error('Failed to load providers:', err);
+        }
+      }
+
+      async function connectProvider(providerId) {
+        currentProvider = providerId;
+        const popup = window.open('about:blank', '_blank', 'noopener');
+        
+        try {
+          const res = await fetch('/api/auth/login', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ provider: providerId })
+          });
+          
+          const json = await res.json();
+          
+          if (json.authorizeUrl) {
+            if (popup && !popup.closed) {
+              popup.location = json.authorizeUrl;
+            } else {
+              window.open(json.authorizeUrl, '_blank');
+            }
+            
+            startLoginPoll(providerId);
+            setTimeout(() => {
+              document.getElementById('pasteModal').style.display = 'block';
+            }, 2000);
+          } else {
+            if (popup && !popup.closed) popup.close();
+            alert(json.error || 'שגיאה בהתחברות');
+          }
+        } catch (err) {
+          if (popup && !popup.closed) popup.close();
+          alert('שגיאה בהתחברות');
+        }
+      }
+
+      function startLoginPoll(providerId) {
+        if (loginPollInterval) clearInterval(loginPollInterval);
+        
+        loginPollInterval = setInterval(async () => {
+          try {
+            const res = await fetch('/api/auth/login/' + providerId + '/status');
+            const { data } = await res.json();
+            
+            if (data.status === 'success') {
+              clearInterval(loginPollInterval);
+              closePasteModal();
+              location.reload();
+            } else if (data.status === 'failed') {
+              clearInterval(loginPollInterval);
+              closePasteModal();
+              alert(data.error || 'ההתחברות נכשלה');
+            }
+          } catch (err) {}
+        }, 2000);
+        
+        setTimeout(() => {
+          if (loginPollInterval) clearInterval(loginPollInterval);
+        }, 120000);
+      }
+
+      async function submitCallback() {
+        const callbackUrl = document.getElementById('callbackUrl').value;
+        if (!callbackUrl || !currentProvider) return;
+        
+        try {
+          const res = await fetch('/api/auth/complete', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ provider: currentProvider, codeOrRedirectUrl: callbackUrl })
+          });
+          
+          const json = await res.json();
+          
+          if (json.success) {
+            closePasteModal();
+            location.reload();
+          } else {
+            alert(json.error || 'שגיאה באישור');
+          }
+        } catch (err) {
+          alert('שגיאה באישור');
+        }
+      }
+
+      function closePasteModal() {
+        document.getElementById('pasteModal').style.display = 'none';
+        document.getElementById('callbackUrl').value = '';
+        currentProvider = null;
+      }
+
+      loadProviders();
     </script>
     ` : step === 3 ? `
     <div class="card">
       <h2>🔌 Open Connector</h2>
-      <p style="color: #aaa; margin-bottom: 20px;">
+      <p style="color: var(--text-secondary); margin-bottom: 20px;">
         Open Connector מאפשר לסוכן להתחבר לשירותים חיצוניים כמו Gmail, Calendar ועוד.
-        <br>יש לוודא שהחיבור תקין ולשמור את טוקן הניהול.
       </p>
       
       <div id="connectorStatus" style="margin-bottom: 24px;">
-        <div style="display: flex; align-items: center; gap: 12px; padding: 16px; background: rgba(255,255,255,0.05); border-radius: 8px;">
+        <div style="display: flex; align-items: center; gap: 12px; padding: 16px; background: var(--bg-tertiary); border-radius: 8px;">
           <span id="healthIcon" style="font-size: 24px;">⏳</span>
           <div>
             <div id="healthText" style="font-weight: 500;">בודק חיבור...</div>
-            <div id="healthDetails" style="color: #888; font-size: 14px;"></div>
+            <div id="healthDetails" style="color: var(--text-muted); font-size: 14px;"></div>
           </div>
         </div>
       </div>
 
       <div id="adminTokenSection" style="display: none; margin-bottom: 24px;">
-        <div style="background: rgba(79, 70, 229, 0.1); border: 1px solid rgba(79, 70, 229, 0.3); border-radius: 8px; padding: 16px;">
+        <div style="background: rgba(99, 102, 241, 0.1); border: 1px solid rgba(99, 102, 241, 0.3); border-radius: 8px; padding: 16px;">
           <h3 style="margin-bottom: 12px; color: #a5b4fc;">🔑 טוקן ניהול (חד-פעמי)</h3>
-          <p style="color: #aaa; margin-bottom: 12px; font-size: 14px;">
+          <p style="color: var(--text-secondary); margin-bottom: 12px; font-size: 14px;">
             שמור את הטוקן הבא במקום בטוח. הוא משמש להתחברות לקונסולת Open Connector ולא יוצג שוב.
           </p>
-          <div style="background: rgba(0,0,0,0.3); padding: 12px; border-radius: 6px; font-family: monospace; word-break: break-all; margin-bottom: 16px;">
+          <div style="background: var(--bg-primary); padding: 12px; border-radius: 6px; font-family: monospace; word-break: break-all; margin-bottom: 16px;">
             <span id="adminTokenValue"></span>
             <button onclick="copyToken()" style="margin-right: 8px; padding: 4px 8px; font-size: 12px;">העתק</button>
           </div>
           <label style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
             <input type="checkbox" id="ackCheckbox" style="width: 18px; height: 18px;">
-            <span>שמרתי את האסימון</span>
+            <span>שמרתי את הטוקן</span>
           </label>
         </div>
       </div>
 
       <div id="consoleLink" style="margin-bottom: 24px; display: none;">
-        <a id="consoleLinkHref" href="#" target="_blank" style="display: inline-flex; align-items: center; gap: 8px; color: #a5b4fc; text-decoration: none;">
+        <a id="consoleLinkHref" href="#" target="_blank" style="display: inline-flex; align-items: center; gap: 8px; color: var(--accent); text-decoration: none;">
           <span>פתח קונסולת Open Connector</span>
           <span>←</span>
         </a>
@@ -1641,62 +1771,68 @@ function getWizardHtml(settings: ReturnType<typeof loadSettings>, pairingState: 
 
       loadConnectorStatus();
     </script>
-    ` : `
+    ` : step === 4 ? `
     <div class="card">
-      <h2>חיבור שירותים</h2>
-      <p style="color: #aaa; margin-bottom: 20px;">
-        חבר את השירותים שהסוכן יוכל לגשת אליהם דרך Open Connector.
-        <br>ניתן לדלג ולחבר מאוחר יותר.
+      <h2>👤 זהות</h2>
+      <p style="color: var(--text-secondary); margin-bottom: 20px;">
+        הזן את פרטי הזהות שלך והעסק. פרטים אלו ישמשו את הסוכן.
       </p>
-      <div id="services">טוען...</div>
-      <div class="btn-group">
-        <button onclick="completeSetup()">סיום הגדרה</button>
-        <a href="${config.connectorOrigin}" target="_blank">
-          <button type="button" class="secondary">פתח Open Connector</button>
-        </a>
-      </div>
+      <form id="identityForm">
+        <div class="form-group">
+          <label for="ownerName">שם הבעלים *</label>
+          <input type="text" id="ownerName" name="ownerName" value="${settings.ownerName || ''}" placeholder="השם שלך" required>
+        </div>
+        <div class="form-group">
+          <label for="businessName">שם העסק</label>
+          <input type="text" id="businessName" name="businessName" value="${settings.businessName || ''}" placeholder="שם החברה או העסק">
+        </div>
+        <div class="form-group">
+          <label for="timezone">אזור זמן</label>
+          <select id="timezone" name="timezone">
+            <option value="Asia/Jerusalem" ${settings.timezone === 'Asia/Jerusalem' ? 'selected' : ''}>ישראל (Asia/Jerusalem)</option>
+            <option value="UTC" ${settings.timezone === 'UTC' ? 'selected' : ''}>UTC</option>
+            <option value="America/New_York" ${settings.timezone === 'America/New_York' ? 'selected' : ''}>ניו יורק</option>
+            <option value="Europe/London" ${settings.timezone === 'Europe/London' ? 'selected' : ''}>לונדון</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label for="businessDescription">תיאור העסק</label>
+          <textarea id="businessDescription" name="businessDescription" placeholder="תאר את העסק שלך בקצרה...">${settings.businessDescription || ''}</textarea>
+        </div>
+        <div class="btn-group">
+          <button type="submit">סיום הגדרה</button>
+        </div>
+      </form>
     </div>
     <script>
-      async function loadServices() {
-        try {
-          const res = await fetch('/api/services');
-          const { data } = await res.json();
-          const container = document.getElementById('services');
-          if (data.length === 0) {
-            container.innerHTML = '<p style="color: #aaa;">לא נמצאו שירותים. ודא ש-Open Connector פועל.</p>';
-            return;
-          }
-          container.innerHTML = data.slice(0, 10).map(s => \`
-            <div style="display: flex; align-items: center; gap: 12px; padding: 12px; background: rgba(255,255,255,0.05); border-radius: 8px; margin-bottom: 8px;">
-              <span style="font-size: 20px;">\${s.isConnected ? '✅' : '⚪'}</span>
-              <div style="flex: 1;">
-                <strong>\${s.name}</strong>
-                \${s.identity ? \`<span style="color: #aaa; font-size: 14px;"> - \${s.identity}</span>\` : ''}
-              </div>
-            </div>
-          \`).join('');
-        } catch (err) {
-          document.getElementById('services').innerHTML = '<p style="color: #f87171;">שגיאה בטעינת שירותים</p>';
-        }
-      }
-      async function completeSetup() {
-        const res = await fetch('/api/setup/complete', { method: 'POST' });
-        if (res.ok) {
-          location.href = '/';
-        } else {
-          const { error } = await res.json();
-          alert(error || 'שגיאה בסיום ההגדרה');
-        }
-      }
-      loadServices();
+      document.getElementById('identityForm').addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const form = new FormData(e.target);
+        const data = Object.fromEntries(form.entries());
+        
+        await fetch('/api/settings', {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(data)
+        });
+        
+        await fetch('/api/setup/complete', { method: 'POST' });
+        location.href = '/';
+      });
     </script>
+    ` : `
+    <div class="card" style="text-align: center;">
+      <h2>✅ ההגדרה הושלמה</h2>
+      <p style="color: var(--text-secondary); margin: 20px 0;">הסוכן שלך מוכן לשימוש!</p>
+      <button onclick="location.href='/'">עבור ללוח הבקרה</button>
+    </div>
     `}
   </div>
 </body>
 </html>`;
 }
 
-function getDashboardHtml(settings: ReturnType<typeof loadSettings>, pairingState: { isPaired: boolean; phoneNumber?: string; name?: string }): string {
+export function getDashboardHtml(settings: ReturnType<typeof loadSettings>, pairingState: { isPaired: boolean; phoneNumber?: string; name?: string }): string {
   return `<!DOCTYPE html>
 <html lang="he" dir="rtl">
 <head>
@@ -1704,20 +1840,15 @@ function getDashboardHtml(settings: ReturnType<typeof loadSettings>, pairingStat
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>${settings.botName} - לוח בקרה</title>
   <style>
-    * { box-sizing: border-box; margin: 0; padding: 0; }
-    body {
-      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-      background: #0f0f1a;
-      min-height: 100vh;
-      color: #fff;
-    }
+    ${getThemeCss()}
+    
     .navbar {
-      background: rgba(255,255,255,0.05);
+      background: var(--bg-secondary);
       padding: 16px 24px;
       display: flex;
       align-items: center;
       justify-content: space-between;
-      border-bottom: 1px solid rgba(255,255,255,0.1);
+      border-bottom: 1px solid var(--border);
     }
     .navbar h1 { font-size: 20px; }
     .nav-links {
@@ -1726,12 +1857,12 @@ function getDashboardHtml(settings: ReturnType<typeof loadSettings>, pairingStat
       gap: 24px;
     }
     .nav-link {
-      color: #a1a1aa;
+      color: var(--text-secondary);
       text-decoration: none;
       font-size: 14px;
       transition: color 0.2s;
     }
-    .nav-link:hover { color: #fff; }
+    .nav-link:hover { color: var(--text-primary); }
     .nav-status {
       display: flex;
       align-items: center;
@@ -1741,9 +1872,9 @@ function getDashboardHtml(settings: ReturnType<typeof loadSettings>, pairingStat
       width: 10px;
       height: 10px;
       border-radius: 50%;
-      background: #10b981;
+      background: var(--success);
     }
-    .status-dot.offline { background: #ef4444; }
+    .status-dot.offline { background: var(--error); }
     .container { max-width: 1200px; margin: 0 auto; padding: 24px; }
     .grid {
       display: grid;
@@ -1751,10 +1882,10 @@ function getDashboardHtml(settings: ReturnType<typeof loadSettings>, pairingStat
       gap: 20px;
     }
     .card {
-      background: rgba(255,255,255,0.05);
+      background: var(--bg-secondary);
       border-radius: 12px;
       padding: 24px;
-      border: 1px solid rgba(255,255,255,0.1);
+      border: 1px solid var(--border);
     }
     .card h2 {
       font-size: 18px;
@@ -1766,25 +1897,12 @@ function getDashboardHtml(settings: ReturnType<typeof loadSettings>, pairingStat
     .stat {
       font-size: 32px;
       font-weight: 700;
-      color: #4f46e5;
+      color: var(--accent);
     }
-    .stat-label { color: #888; font-size: 14px; }
-    label { display: block; margin-bottom: 8px; font-weight: 500; color: #aaa; }
-    input, select {
-      width: 100%;
-      padding: 10px 14px;
-      border: 1px solid rgba(255,255,255,0.2);
-      border-radius: 8px;
-      background: rgba(255,255,255,0.05);
-      color: #fff;
-      font-size: 14px;
-      margin-bottom: 12px;
-    }
-    input:focus, select:focus { outline: none; border-color: #4f46e5; }
-    select option { background: #1a1a2e; }
+    .stat-label { color: var(--text-muted); font-size: 14px; }
     button {
       padding: 10px 20px;
-      background: #4f46e5;
+      background: var(--accent);
       color: #fff;
       border: none;
       border-radius: 8px;
@@ -1793,62 +1911,12 @@ function getDashboardHtml(settings: ReturnType<typeof loadSettings>, pairingStat
       cursor: pointer;
       transition: background 0.2s;
     }
-    button:hover { background: #4338ca; }
+    button:hover { background: var(--accent-hover); }
     button.secondary {
       background: transparent;
-      border: 1px solid rgba(255,255,255,0.2);
+      border: 1px solid var(--border);
+      color: var(--text-primary);
     }
-    .service-item {
-      display: flex;
-      align-items: center;
-      gap: 12px;
-      padding: 12px;
-      background: rgba(255,255,255,0.03);
-      border-radius: 8px;
-      margin-bottom: 8px;
-    }
-    .service-icon { font-size: 24px; }
-    .service-info { flex: 1; }
-    .service-name { font-weight: 500; }
-    .service-status { font-size: 12px; color: #888; }
-    .tabs {
-      display: flex;
-      gap: 4px;
-      margin-bottom: 24px;
-      background: rgba(255,255,255,0.05);
-      padding: 4px;
-      border-radius: 8px;
-    }
-    .tab {
-      padding: 10px 20px;
-      background: transparent;
-      border: none;
-      color: #888;
-      cursor: pointer;
-      border-radius: 6px;
-      transition: all 0.2s;
-    }
-    .tab.active { background: #4f46e5; color: #fff; }
-    .tab:hover:not(.active) { color: #fff; }
-    .project-item {
-      display: flex;
-      align-items: center;
-      gap: 12px;
-      padding: 12px;
-      background: rgba(255,255,255,0.03);
-      border-radius: 8px;
-      margin-bottom: 8px;
-      cursor: pointer;
-      border: 2px solid transparent;
-    }
-    .project-item.active { border-color: #4f46e5; }
-    .project-item:hover { background: rgba(255,255,255,0.08); }
-    .token-input {
-      display: flex;
-      gap: 8px;
-      margin-top: 8px;
-    }
-    .token-input input { margin-bottom: 0; }
   </style>
 </head>
 <body>
@@ -1864,126 +1932,45 @@ function getDashboardHtml(settings: ReturnType<typeof loadSettings>, pairingStat
   </nav>
 
   <div class="container">
-    <div class="tabs">
-      <button class="tab active" onclick="showTab('dashboard')">לוח בקרה</button>
-      <button class="tab" onclick="showTab('settings')">הגדרות</button>
-      <button class="tab" onclick="showTab('projects')">פרויקטים</button>
-      <button class="tab" onclick="showTab('services')">שירותים</button>
-    </div>
-
-    <div id="dashboard" class="tab-content">
-      <div class="grid">
-        <div class="card">
-          <h2>📱 WhatsApp</h2>
-          <div class="stat">${pairingState.isPaired ? '✅' : '❌'}</div>
-          <div class="stat-label">${pairingState.isPaired ? 'מחובר' : 'מנותק'}</div>
-          ${pairingState.phoneNumber ? `<p style="margin-top: 12px; color: #888;">${pairingState.phoneNumber}</p>` : ''}
-        </div>
-        <div class="card">
-          <h2>📁 פרויקט פעיל</h2>
-          <div class="stat" style="font-size: 24px;">${settings.activeProject}</div>
-          <div class="stat-label">מצב מפתחות: ${settings.apiKeyMode === 'shared' ? 'משותף' : 'לפי פרויקט'}</div>
-        </div>
-        <div class="card">
-          <h2>🔌 Open Connector</h2>
-          <div id="connectorStatus">בודק...</div>
-          <div id="connectorAdminToken" style="display: none; margin-top: 16px; background: rgba(79, 70, 229, 0.1); border: 1px solid rgba(79, 70, 229, 0.3); border-radius: 8px; padding: 12px;">
-            <h4 style="margin-bottom: 8px; color: #a5b4fc;">🔑 טוקן ניהול (חד-פעמי)</h4>
-            <p style="color: #888; font-size: 12px; margin-bottom: 8px;">שמור את הטוקן הזה - לא יוצג שוב!</p>
-            <div style="background: rgba(0,0,0,0.3); padding: 8px; border-radius: 4px; font-family: monospace; word-break: break-all; margin-bottom: 8px; font-size: 12px;">
-              <span id="dashboardAdminToken"></span>
-            </div>
-            <button onclick="copyDashboardToken()" class="secondary" style="padding: 6px 12px; font-size: 12px;">העתק</button>
-            <button onclick="ackDashboardToken()" style="padding: 6px 12px; font-size: 12px;">שמרתי את האסימון</button>
+    <div class="grid">
+      <div class="card">
+        <h2>📱 WhatsApp</h2>
+        <div class="stat">${pairingState.isPaired ? '✅' : '❌'}</div>
+        <div class="stat-label">${pairingState.isPaired ? 'מחובר' : 'מנותק'}</div>
+        ${pairingState.phoneNumber ? `<p style="margin-top: 12px; color: var(--text-muted);">${pairingState.phoneNumber}</p>` : ''}
+      </div>
+      <div class="card">
+        <h2>📁 פרויקט פעיל</h2>
+        <div class="stat" style="font-size: 24px;">${settings.activeProject}</div>
+        <div class="stat-label">מצב מפתחות: ${settings.apiKeyMode === 'shared' ? 'משותף' : 'לפי פרויקט'}</div>
+      </div>
+      <div class="card">
+        <h2>🔌 Open Connector</h2>
+        <div id="connectorStatus">בודק...</div>
+        <div id="connectorAdminToken" style="display: none; margin-top: 16px; background: rgba(99, 102, 241, 0.1); border: 1px solid rgba(99, 102, 241, 0.3); border-radius: 8px; padding: 12px;">
+          <h4 style="margin-bottom: 8px; color: #a5b4fc;">🔑 טוקן ניהול (חד-פעמי)</h4>
+          <p style="color: var(--text-muted); font-size: 12px; margin-bottom: 8px;">שמור את הטוקן הזה - לא יוצג שוב!</p>
+          <div style="background: var(--bg-primary); padding: 8px; border-radius: 4px; font-family: monospace; word-break: break-all; margin-bottom: 8px; font-size: 12px;">
+            <span id="dashboardAdminToken"></span>
           </div>
+          <button onclick="copyDashboardToken()" class="secondary" style="padding: 6px 12px; font-size: 12px;">העתק</button>
+          <button onclick="ackDashboardToken()" style="padding: 6px 12px; font-size: 12px;">שמרתי את הטוקן</button>
         </div>
       </div>
-
-      <div class="card" style="margin-top: 20px;">
-        <h2>📖 איך להשתמש</h2>
-        <ol style="color: #aaa; line-height: 2; padding-right: 20px;">
-          <li>פתח את WhatsApp בטלפון שחיברת</li>
-          <li>שלח הודעה לעצמך (לשיחה שלך)</li>
-          <li>הסוכן יענה לך בצ'אט הפרטי</li>
-          <li>השתמש ב-/help לראות פקודות זמינות</li>
-        </ol>
-      </div>
     </div>
 
-    <div id="settings" class="tab-content" style="display: none;">
-      <div class="card">
-        <h2>⚙️ הגדרות כלליות</h2>
-        <form id="settingsForm">
-          <label>שם הבוט</label>
-          <input type="text" name="botName" value="${settings.botName}">
-          
-          <label>שם הבעלים</label>
-          <input type="text" name="ownerName" value="${settings.ownerName}">
-          
-          <label>אזור זמן</label>
-          <select name="timezone">
-            <option value="Asia/Jerusalem" ${settings.timezone === 'Asia/Jerusalem' ? 'selected' : ''}>ישראל</option>
-            <option value="UTC" ${settings.timezone === 'UTC' ? 'selected' : ''}>UTC</option>
-            <option value="America/New_York" ${settings.timezone === 'America/New_York' ? 'selected' : ''}>ניו יורק</option>
-            <option value="Europe/London" ${settings.timezone === 'Europe/London' ? 'selected' : ''}>לונדון</option>
-          </select>
-          
-          <label>מודל AI</label>
-          <input type="text" name="model" value="${settings.model}">
-          
-          <label>מצב מפתחות API</label>
-          <select name="apiKeyMode">
-            <option value="shared" ${settings.apiKeyMode === 'shared' ? 'selected' : ''}>משותף - טוקן אחד לכל הפרויקטים</option>
-            <option value="per-project" ${settings.apiKeyMode === 'per-project' ? 'selected' : ''}>לפי פרויקט - טוקן נפרד לכל פרויקט</option>
-          </select>
-          
-          <button type="submit" style="margin-top: 12px;">שמור</button>
-        </form>
-      </div>
-
-      <div class="card" style="margin-top: 20px;">
-        <h2>🔑 טוקן Open Connector (משותף)</h2>
-        <p style="color: #888; margin-bottom: 12px;">משמש כברירת מחדל אם לא הוגדר טוקן ספציפי לפרויקט</p>
-        <input type="password" id="sharedToken" placeholder="הזן טוקן משותף" value="${settings.sharedConnectorToken ? '********' : ''}">
-        <button onclick="saveSharedToken()">שמור טוקן</button>
-      </div>
-    </div>
-
-    <div id="projects" class="tab-content" style="display: none;">
-      <div class="card">
-        <h2>📁 פרויקטים</h2>
-        <p style="color: #888; margin-bottom: 16px;">ניהול פרויקטים וטוקנים לכל פרויקט</p>
-        <div id="projectsList">טוען...</div>
-        <hr style="border-color: rgba(255,255,255,0.1); margin: 20px 0;">
-        <h3 style="margin-bottom: 12px;">צור פרויקט חדש</h3>
-        <input type="text" id="newProjectName" placeholder="שם הפרויקט">
-        <button onclick="createProject()">צור</button>
-      </div>
-    </div>
-
-    <div id="services" class="tab-content" style="display: none;">
-      <div class="card">
-        <h2>🔌 שירותים מחוברים</h2>
-        <p style="color: #888; margin-bottom: 16px;">
-          ניהול חיבורים ל-Open Connector
-          <a href="/connector/" target="_blank" style="color: #4f46e5;">פתח קונסול →</a>
-        </p>
-        <div id="servicesList">טוען...</div>
-      </div>
+    <div class="card" style="margin-top: 20px;">
+      <h2>📖 איך להשתמש</h2>
+      <ol style="color: var(--text-secondary); line-height: 2; padding-right: 20px;">
+        <li>פתח את WhatsApp בטלפון שחיברת</li>
+        <li>שלח הודעה לעצמך (לשיחה שלך)</li>
+        <li>הסוכן יענה לך בצ'אט הפרטי</li>
+        <li>השתמש ב-/help לראות פקודות זמינות</li>
+      </ol>
     </div>
   </div>
 
   <script>
-    function showTab(name) {
-      document.querySelectorAll('.tab-content').forEach(el => el.style.display = 'none');
-      document.querySelectorAll('.tab').forEach(el => el.classList.remove('active'));
-      document.getElementById(name).style.display = 'block';
-      document.querySelector(\`[onclick="showTab('\${name}')"]\`).classList.add('active');
-      
-      if (name === 'projects') loadProjects();
-      if (name === 'services') loadServices();
-    }
-
     async function loadConnectorStatus() {
       try {
         const res = await fetch('/api/connector/onboarding');
@@ -1991,7 +1978,7 @@ function getDashboardHtml(settings: ReturnType<typeof loadSettings>, pairingStat
         document.getElementById('connectorStatus').innerHTML = \`
           <div class="stat">\${data.healthy ? '✅' : '❌'}</div>
           <div class="stat-label">\${data.healthy ? \`\${data.connectionCount} חיבורים\` : 'לא זמין'}</div>
-          <a href="\${data.consoleUrl}" target="_blank" style="display: block; margin-top: 12px; color: #a5b4fc; font-size: 14px;">
+          <a href="\${data.consoleUrl}" target="_blank" style="display: block; margin-top: 12px; color: var(--accent); font-size: 14px;">
             פתח קונסול →
           </a>
         \`;
@@ -2014,94 +2001,6 @@ function getDashboardHtml(settings: ReturnType<typeof loadSettings>, pairingStat
       await fetch('/api/connector/ack-admin-token', { method: 'POST' });
       document.getElementById('connectorAdminToken').style.display = 'none';
     }
-
-    async function loadProjects() {
-      try {
-        const res = await fetch('/api/projects');
-        const { data } = await res.json();
-        document.getElementById('projectsList').innerHTML = data.map(p => \`
-          <div class="project-item \${p.isActive ? 'active' : ''}" onclick="activateProject('\${p.id}')">
-            <div style="flex: 1;">
-              <div class="service-name">\${p.name}</div>
-              <div class="service-status">\${p.hasToken ? '🔑 יש טוקן' : '⚪ ללא טוקן'}</div>
-            </div>
-            \${p.isActive ? '<span style="color: #4f46e5;">פעיל</span>' : ''}
-          </div>
-          <div class="token-input" style="margin-bottom: 16px;">
-            <input type="password" id="token-\${p.id}" placeholder="טוקן Open Connector לפרויקט">
-            <button onclick="saveProjectToken('\${p.id}')">שמור</button>
-          </div>
-        \`).join('');
-      } catch {
-        document.getElementById('projectsList').innerHTML = '<p style="color: #f87171;">שגיאה בטעינת פרויקטים</p>';
-      }
-    }
-
-    async function loadServices() {
-      try {
-        const res = await fetch('/api/services');
-        const { data } = await res.json();
-        document.getElementById('servicesList').innerHTML = data.map(s => \`
-          <div class="service-item">
-            <span class="service-icon">\${s.isConnected ? '✅' : '⚪'}</span>
-            <div class="service-info">
-              <div class="service-name">\${s.name}</div>
-              <div class="service-status">\${s.identity || (s.isConnected ? 'מחובר' : 'לא מחובר')}</div>
-            </div>
-          </div>
-        \`).join('') || '<p style="color: #888;">לא נמצאו שירותים</p>';
-      } catch {
-        document.getElementById('servicesList').innerHTML = '<p style="color: #f87171;">שגיאה בטעינת שירותים</p>';
-      }
-    }
-
-    async function activateProject(id) {
-      await fetch(\`/api/projects/\${id}/activate\`, { method: 'PUT' });
-      loadProjects();
-    }
-
-    async function saveProjectToken(id) {
-      const token = document.getElementById(\`token-\${id}\`).value;
-      await fetch(\`/api/projects/\${id}/token\`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ token })
-      });
-      loadProjects();
-    }
-
-    async function createProject() {
-      const name = document.getElementById('newProjectName').value;
-      if (!name) return;
-      await fetch('/api/projects', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name })
-      });
-      document.getElementById('newProjectName').value = '';
-      loadProjects();
-    }
-
-    async function saveSharedToken() {
-      const token = document.getElementById('sharedToken').value;
-      await fetch('/api/settings', {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ sharedConnectorToken: token })
-      });
-      alert('נשמר!');
-    }
-
-    document.getElementById('settingsForm').addEventListener('submit', async (e) => {
-      e.preventDefault();
-      const form = new FormData(e.target);
-      await fetch('/api/settings', {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(Object.fromEntries(form.entries()))
-      });
-      alert('נשמר!');
-    });
 
     loadConnectorStatus();
   </script>
