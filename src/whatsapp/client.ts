@@ -3,9 +3,9 @@ import makeWASocket, {
   useMultiFileAuthState,
   fetchLatestBaileysVersion,
   makeCacheableSignalKeyStore,
-  WASocket,
   proto,
 } from '@whiskeysockets/baileys';
+import type { WASocket } from '@whiskeysockets/baileys';
 import { Boom } from '@hapi/boom';
 import { join } from 'node:path';
 import { existsSync, mkdirSync } from 'node:fs';
