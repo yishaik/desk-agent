@@ -2,6 +2,7 @@ import {
   createAgentSession,
   SessionManager,
   ModelRuntime,
+  DefaultResourceLoader,
   type AgentSession,
   type ToolDefinition,
 } from '@earendil-works/pi-coding-agent';
@@ -456,6 +457,19 @@ For send/create/update/delete actions, always wait for the user to confirm befor
             modelRuntime.getModel('anthropic', settings.model);
   }
 
+  const workspaceRoot = process.cwd();
+  const resourceLoader = new DefaultResourceLoader({
+    cwd: projectCwd,
+    agentDir: piAgentDir,
+    additionalSkillPaths: [
+      join(workspaceRoot, '.pi', 'skills'),
+      join(workspaceRoot, 'skills-pack'),
+    ],
+    additionalExtensionPaths: [
+      join(workspaceRoot, '.pi', 'extensions'),
+    ],
+  });
+
   const { session } = await createAgentSession({
     cwd: projectCwd,
     agentDir: piAgentDir,
@@ -463,6 +477,7 @@ For send/create/update/delete actions, always wait for the user to confirm befor
     model,
     sessionManager: SessionManager.inMemory(projectCwd),
     customTools,
+    resourceLoader,
     tools: ['read', 'oc_search_actions', 'oc_get_action_guide', 'oc_execute_action', 'oc_list_connections'],
   });
 

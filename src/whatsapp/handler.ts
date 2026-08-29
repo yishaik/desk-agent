@@ -438,24 +438,22 @@ _היכנס לממשק הניהול לשינוי הגדרות_`,
     }
 
     case 'login': {
+      const domain = process.env['DOMAIN'] ?? 'localhost';
+      const protocol = process.env['NODE_ENV'] === 'production' ? 'https' : 'http';
+      const dashboardUrl = `${protocol}://${domain}/`;
+      
       return {
         handled: true,
         response: `*התחברות לספק AI*
 
-1. פתח טרמינל בשרת
-2. הרץ: \`npx pi /login\`
-3. בחר ספק (Anthropic, OpenAI, וכו')
-4. עקוב אחרי ההוראות
+היכנס לממשק הניהול להתחברות:
+${dashboardUrl}
 
-_או הגדר API key בקובץ .env:_
-\`MODEL_API_KEY=sk-ant-...\`
-
-ספקים נתמכים:
-- Anthropic (Claude Pro/Max subscription)
+*ספקים נתמכים:*
+- Anthropic (Claude Pro/Max)
 - OpenAI (ChatGPT Plus/Pro)
-- GitHub Copilot
-- Google Gemini
-- ועוד...`,
+
+_ההתחברות מתבצעת דרך OAuth - ללא צורך ב-API key_`,
       };
     }
 

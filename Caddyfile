@@ -8,11 +8,47 @@
         reverse_proxy connector:3000
     }
     
+    # Open Connector OAuth callback (critical for Gmail/Calendar connect)
+    handle /oauth/callback {
+        reverse_proxy connector:3000
+    }
+    
+    # Open Connector OAuth API routes
+    handle /api/oauth/* {
+        reverse_proxy connector:3000
+    }
+    
+    # Open Connector MCP endpoint
+    handle /mcp {
+        reverse_proxy connector:3000
+    }
+    handle /mcp/* {
+        reverse_proxy connector:3000
+    }
+    
     # Open Connector API routes
     handle /v1/* {
         reverse_proxy connector:3000
     }
     handle /api/connections* {
+        reverse_proxy connector:3000
+    }
+    handle /api/providers* {
+        reverse_proxy connector:3000
+    }
+    handle /api/actions/* {
+        reverse_proxy connector:3000
+    }
+    handle /api/runs* {
+        reverse_proxy connector:3000
+    }
+    handle /api/files/* {
+        reverse_proxy connector:3000
+    }
+    handle /openapi.json {
+        reverse_proxy connector:3000
+    }
+    handle /docs {
         reverse_proxy connector:3000
     }
 

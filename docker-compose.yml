@@ -56,7 +56,9 @@ services:
     restart: unless-stopped
     environment:
       - OOMOL_CONNECT_DATA_DIR=/app/data
-      - OOMOL_CONNECT_ORIGIN=${CONNECTOR_ORIGIN:-http://localhost:3000}
+      # CRITICAL: Origin must be the public URL (via Caddy) for OAuth callbacks to work
+      # Use https://${DOMAIN} in production, or http://localhost for local dev
+      - OOMOL_CONNECT_ORIGIN=${CONNECTOR_ORIGIN:-https://${DOMAIN:-localhost}}
       - OOMOL_CONNECT_ENCRYPTION_KEY=${CONNECTOR_ENCRYPTION_KEY}
       - OOMOL_CONNECT_ADMIN_TOKEN=${CONNECTOR_ADMIN_TOKEN}
       - OOMOL_CONNECT_RUNTIME_TOKEN=${OPEN_CONNECTOR_TOKEN}
