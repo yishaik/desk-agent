@@ -415,7 +415,7 @@ _היכנס לממשק הניהול לשינוי הגדרות_`,
       if (args.length === 0) {
         return {
           handled: true,
-          response: `מודל נוכחי: *${settings.model}*\n\nלהחלפה: /model <שם-מודל>\n\nדוגמאות:\n- /model claude-3-5-sonnet-20241022\n- /model claude-sonnet-4-5\n- /model gpt-4o\n\n_או השתמש ב-pi /login ו-/model בטרמינל_`,
+          response: `מודל נוכחי: *${settings.model}*\n\nלהחלפה: /model <שם-מודל>\n\nדוגמאות:\n- /model claude-3-5-sonnet-20241022\n- /model claude-sonnet-4-5\n- /model gpt-4o`,
         };
       }
       
