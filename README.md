@@ -1,89 +1,32 @@
-# 🤖 Desk Agent
+# Desk Agent
 
-Personal WhatsApp agent template for one SMB. Pair, connect tools, one gated stack per customer.
+Personal WhatsApp agent for SMBs. One isolated Docker stack per customer: agent + Open Connector + Caddy.
 
-**Built on [Pi Coding Agent](https://github.com/earendil-works/pi)** - a minimal terminal coding harness with extensions, skills, and tools.
-
-**10 minutes to a working agent:**
-1. `docker compose up`
-2. Open the URL, enter your pair token
-3. Scan QR with WhatsApp
-4. Log in to your AI provider: `pi /login` (or set `MODEL_API_KEY`)
-5. Connect your services in Open Connector
-6. Message yourself to talk to your agent
+**Built on [Pi Coding Agent](https://github.com/earendil-works/pi)** - AI runtime with sessions, skills, and extensions.
 
 ## What You Get
 
-- **WhatsApp agent** that only responds to messages you send to yourself
-- **Pi runtime** with sessions, skills, extensions, and tool execution
-- **Open Connector tools** - search, get guides, execute actions (with confirmation)
-- **Web UI** for pairing, settings, and service connections
-- **Per-project API keys** for isolating different business contexts with separate tokens
-- **Docker Compose stack** (one stack per customer) with automatic HTTPS via Caddy
+- **WhatsApp agent** responding only to messages you send to yourself (self-chat)
+- **Browser-based setup** with QR pairing, AI provider OAuth, and identity configuration
+- **Open Connector integration** for SaaS tools (Gmail, Calendar, Notion, and 1000+ more)
+- **Settings dashboard** to manage identity, AI login, services, and WhatsApp connection
+- **Docker Compose stack** with automatic HTTPS via Caddy
 
-## Quick Start
+## First-Run Setup
 
-### Prerequisites
+After `docker compose up`, the Web UI guides you through:
 
-- Node.js 22+ (for local development)
-- Docker and Docker Compose (for deployment)
-- An Anthropic API key (or other model provider)
-- A domain with DNS (for production HTTPS)
+1. **WhatsApp Pairing** - Scan QR code with your phone (Settings → Linked Devices → Link a Device)
+2. **AI Provider Login** - Connect ChatGPT or Claude via browser OAuth (click Connect, authorize in popup, done)
+3. **Identity Setup** - Enter your name, business name, and timezone (writes SOUL.md and AGENTS.md)
+4. **Open Connector** - Health check and connection status
+5. **Admin Token** - Shown once, save it securely, then acknowledge (never shown again)
 
-### Local Development
-
-```bash
-# Install dependencies
-npm install
-
-# Log in to your AI provider (Claude, OpenAI, etc.)
-# Option A: Use your subscription
-npx pi /login
-
-# Option B: Use API key
-export MODEL_API_KEY=sk-ant-...
-
-# Start the agent (generates PAIR_TOKEN on first run)
-npm run dev
-
-# Open the URL shown in the terminal
-# Scan QR code with WhatsApp
-```
-
-### Docker Deployment
-
-```bash
-# Copy and configure environment
-cp .env.example .env
-# Edit .env with your tokens and domain
-
-# Start the stack
-docker compose up -d
-
-# View logs
-docker compose logs -f agent
-```
-
-## Configuration
-
-All configuration is via environment variables. See `.env.example` for the full list.
-
-### Required Variables
-
-| Variable | Description |
-|----------|-------------|
-| `PAIR_TOKEN` | Access token for the Web UI (auto-generated if not set) |
-| `MODEL_API_KEY` | Your AI model API key (Anthropic recommended) |
-| `OPEN_CONNECTOR_TOKEN` | Runtime token for Open Connector API |
-| `CONNECTOR_ENCRYPTION_KEY` | Encryption key for stored credentials |
-
-### Optional Variables
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `DOMAIN` | localhost | Your domain for HTTPS |
-| `MODEL_API_URL` | Anthropic | API endpoint for the model |
-| `LOG_LEVEL` | info | Logging verbosity |
+After onboarding, the **Settings** page lets you:
+- Review and edit identity (name, business, timezone)
+- Reconnect ChatGPT or Claude if needed
+- Manage Open Connector connections
+- Check WhatsApp status and re-pair if disconnected
 
 ## Architecture
 
@@ -92,53 +35,49 @@ All configuration is via environment variables. See `.env.example` for the full 
 │                    Your Phone                        │
 │                  (WhatsApp App)                      │
 └─────────────────────┬───────────────────────────────┘
-                      │ WhatsApp Web Protocol
+                      │ WhatsApp Web Protocol (Baileys)
                       ▼
 ┌─────────────────────────────────────────────────────┐
-│              Desk Agent (this repo)                  │
-│                                                      │
-│  ┌─────────────────────────────────────────────┐    │
-│  │             Pi Coding Agent                  │    │
-│  │  ┌──────────┐  ┌──────────┐  ┌──────────┐  │    │
-│  │  │ Sessions │  │  Skills  │  │Extensions│  │    │
-│  │  │ /project │  │.pi/skills│  │  Tools   │  │    │
-│  │  └──────────┘  └──────────┘  └──────────┘  │    │
-│  └─────────────────────┬───────────────────────┘    │
-│                        │                             │
-│  ┌─────────────┐  ┌────┴────┐  ┌─────────────┐     │
-│  │  WhatsApp   │  │  HTTP   │  │   Memory    │     │
-│  │   Client    │  │  + UI   │  │  (SQLite)   │     │
-│  │  (Baileys)  │  │         │  │             │     │
-│  └─────────────┘  └─────────┘  └─────────────┘     │
+│                    Caddy                             │
+│            (HTTPS + Reverse Proxy)                   │
+│     :443 → agent:3001 | /oauth/* → connector:3000   │
 └─────────────────────┬───────────────────────────────┘
-                      │ Open Connector Tools:
-                      │ oc_search_actions
-                      │ oc_get_action_guide
-                      │ oc_execute_action
-                      ▼
-┌─────────────────────────────────────────────────────┐
-│              Open Connector (fork)                   │
-│         (Auth gateway for SaaS apps)                 │
-│     github.com/yishaik/open-connector                │
-│                                                      │
-│   Gmail │ Calendar │ Notion │ Slack │ 1000+ more    │
-└─────────────────────────────────────────────────────┘
+                      │
+    ┌─────────────────┼─────────────────┐
+    ▼                 ▼                 ▼
+┌─────────────┐ ┌─────────────┐ ┌─────────────────────┐
+│   Agent     │ │  Open       │ │   SQLite            │
+│   :3001     │ │  Connector  │ │   (Memory)          │
+│             │ │  :3000      │ │                     │
+│  Pi Runtime │ │             │ │  settings.json      │
+│  WebSocket  │ │  OAuth      │ │  whatsapp-auth/     │
+│  WhatsApp   │ │  Credentials│ │                     │
+└─────────────┘ └─────────────┘ └─────────────────────┘
 ```
 
-**One stack per customer** - Each business gets their own isolated Docker Compose deployment. No shared database, no multi-tenant risks.
+**One stack per customer** - Each business gets isolated Docker Compose deployment. No shared database, no multi-tenant risks.
+
+## WhatsApp Features
+
+- **Baileys** client with QR code pairing
+- **LID Message-yourself** for sending (self-chat only)
+- **Quoted replies** when responding to specific messages
+- **Composing/paused** indicators while AI is thinking
+- **Read receipts** after processing
+- **Graceful disconnect** on restart (socket.end, not logout - preserves pairing)
+- **515 error handling** after scan reconnects with existing creds (no wipe)
 
 ## Web UI
 
 The Web UI provides:
 
-1. **Login** - Token-gated access
-2. **Setup Wizard** - First-boot flow for pairing and configuration
-3. **Dashboard** - Status overview and quick actions
-4. **Settings** - Bot name, timezone, model, API key mode
-5. **Projects** - Manage multiple contexts with separate tokens
-6. **Services** - View and manage Open Connector connections
+1. **Login** - Token-gated access (PAIR_TOKEN)
+2. **Setup Wizard** - First-boot onboarding flow
+3. **Dashboard** - Status overview
+4. **Settings** - Identity, AI login, Open Connector, WhatsApp
+5. **Tools** - Shows CONNECTED Open Connector services only (logo cards + human-readable actions). Empty state links to OC console.
 
-Access the UI at `http://localhost:3001/?token=YOUR_PAIR_TOKEN`
+Access the UI at `https://your-domain.com/?token=YOUR_PAIR_TOKEN`
 
 ## WhatsApp Commands
 
@@ -148,64 +87,107 @@ Send these to yourself in WhatsApp:
 |---------|-------------|
 | `/help` | Show available commands |
 | `/status` | Check system status |
-| `/project [name]` | Switch or create a project (creates new Pi session) |
+| `/project [name]` | Switch or create a project |
 | `/projects` | List all projects |
-| `/mode [shared\|per-project]` | Change API key mode |
 | `/services` | List connected services |
 | `/settings` | View current settings |
 | `/model [name]` | Switch AI model |
-| `/login` | Instructions for AI provider login |
 
-## Pi Integration
+## AI Provider Login
 
-Desk Agent uses Pi as its AI runtime:
+Login happens in the browser via OAuth:
 
-- **Sessions** - Each project gets a separate Pi session with history
-- **Skills** - Add capabilities via `.pi/skills/` 
-- **Extensions** - Custom tools via `.pi/extensions/`
-- **Model switching** - Use `/model` or `pi /login` for provider login
+1. Open **Settings** in the Web UI
+2. Click **Connect** next to ChatGPT or Claude
+3. Authorize in the popup window
+4. Paste callback URL if popup was blocked (fallback only)
 
-### Logging In
+After OAuth, the model is set to the provider default:
+- **OpenAI:** `openai-codex/gpt-5.5`
+- **Anthropic:** `anthropic/claude-sonnet-4-6`
 
-Pi supports subscription logins (no API key needed):
+If OAuth expires, Settings shows a reconnect prompt.
 
-```bash
-# In the terminal where the agent runs
-npx pi /login
+## Configuration
 
-# Then select:
-# - Anthropic (Claude Pro/Max subscription)
-# - OpenAI (ChatGPT Plus/Pro)
-# - GitHub Copilot
-# etc.
-```
+All configuration is via environment variables. See `.env.example` for the full list.
 
-Or use API keys:
-```bash
-export MODEL_API_KEY=sk-ant-...
-export MODEL_API_URL=https://api.anthropic.com/v1/messages  # optional
-```
+### Required Variables
 
-## API Key Modes
+| Variable | Description |
+|----------|-------------|
+| `PAIR_TOKEN` | Access token for the Web UI (auto-generated on first run) |
+| `OPEN_CONNECTOR_TOKEN` | Runtime token for Open Connector API |
+| `CONNECTOR_ENCRYPTION_KEY` | Encryption key for stored credentials |
 
-### Shared Mode (default)
+### Optional Variables
 
-One Open Connector token for all projects. Simple setup, shared permissions.
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `DOMAIN` | localhost | Your domain for HTTPS |
+| `CONNECTOR_ORIGIN` | http://localhost:3000 | Public URL for OAuth callbacks |
+| `LOG_LEVEL` | info | Logging verbosity |
 
-```
-All projects → Single token → All connected services
-```
+## Deployment
 
-### Per-Project Mode
+### Recommended: Hetzner CX23
 
-Each project gets its own Open Connector token. Better isolation for different clients or use cases.
+**Specs:** 2 vCPU / 4 GB RAM / 40 GB disk / IPv4 / ports 80+443
 
-```
-Project A → Token A → Client A's services
-Project B → Token B → Client B's services
-```
+**Price:** ~€5.99/mo in Falkenstein (FSN) or Helsinki (HEL)
 
-Set per-project tokens in the Web UI under Projects.
+**Setup:**
+1. Create CX23 with Ubuntu 22.04, add SSH key
+2. Point DNS A record to the VM's IPv4
+3. SSH in, install Docker, clone repo, configure `.env`, run `docker compose up -d`
+
+### Fallback Options (if CX23 sold out)
+
+| Provider | Plan | Specs | Notes |
+|----------|------|-------|-------|
+| **OVH** | VPS-1 (2027) | 2 vCPU / 4 GB RAM | Good availability |
+| **Netcup** | VPS 500 G12 | 2 vCPU / 4 GB RAM | Good pricing |
+| **Kamatera** | Type A (TLV) | 2 vCPU / 4 GB RAM | Israel DC, higher price |
+
+### Hard Requirements
+
+- **4 GB RAM minimum** - Pi runtime needs memory headroom
+- **IPv4 address** - WhatsApp Web requires IPv4
+- **Ports 80 + 443** - Caddy needs both for HTTPS
+- **Always-on** - WhatsApp session requires persistent connection
+- **Docker Compose** - Stack orchestration
+
+### Do NOT Use
+
+- **1 GB RAM VPS** - Will OOM when Pi runs with WhatsApp
+- **IPv6-only hosts** - WhatsApp Web connectivity issues
+- **Serverless/sleep platforms** - Fly.io sleep, Cloudflare Workers, Lambda (WhatsApp needs persistent socket)
+- **Ephemeral disk** - Session data must persist across restarts
+- **Oracle Always Free** - Idle reclaim unpredictable, IPv4 allocation unreliable
+
+### Caddy Configuration
+
+Caddy handles TLS and routing:
+- `https://your-domain.com/*` → `agent:3001`
+- `https://your-domain.com/oauth/*` → `connector:3000`
+
+Set `CONNECTOR_ORIGIN=https://your-domain.com` so OAuth callbacks route correctly.
+
+### Production Tips
+
+- **Pre-build images** for faster deploys
+- **Set `mem_limit`** on Pi container to prevent OOM killing WhatsApp
+- **Use healthcheck restarts** for automatic recovery
+
+## Security
+
+See [SECURITY.md](SECURITY.md) for the threat model.
+
+Key points:
+- Messages only processed from your own WhatsApp (self-chat)
+- Web UI requires PAIR_TOKEN authentication
+- Credentials stay in Open Connector, never sent to the AI model
+- One stack per customer for isolation
 
 ## Skill Packs
 
@@ -215,72 +197,16 @@ Pre-built configurations for common tasks. See `skills-pack/` directory:
 - **light-crm** - Contact tracking and follow-ups
 - **storefront-faq** - Answer business questions
 
-## Security
-
-See [SECURITY.md](SECURITY.md) for the threat model and security practices.
-
-Key points:
-- Messages only processed from your own WhatsApp number
-- Web UI requires PAIR_TOKEN authentication
-- Credentials stay in Open Connector, never sent to the AI model
-- One stack per customer for isolation
-
-## Deployment Options
-
-### Cheap VPS (Hetzner CX23 / OVH / Netcup)
-
-**Recommended:** Hetzner CX23 (2 vCPU, 4GB RAM, IPv4) ~€5.99/mo in Falkenstein or Helsinki.
-
-**Alternatives if sold out:**
-- OVH VPS-1 (2027) - 2 vCPU, 4GB RAM
-- Netcup VPS 500 G12 - 2 vCPU, 4GB RAM
-
-> ⚠️ The stack needs 4GB RAM. Do not use 1GB VPS instances.
-
-1. Provision a VM with Docker
-2. Point your domain DNS to the VM
-3. Copy files and `.env`
-4. `docker compose up -d`
-
-### Fly.io
-
-```bash
-# Create app
-fly launch --no-deploy
-
-# Set secrets
-fly secrets set PAIR_TOKEN=... MODEL_API_KEY=...
-
-# Deploy
-fly deploy
-```
-
-### Self-Hosted (No Docker)
-
-```bash
-# Run Open Connector separately
-# See: https://github.com/oomol-lab/open-connector
-
-# Run the agent
-npm install
-npm start
-```
-
 ## License
 
 MIT License. See [LICENSE](LICENSE).
 
 Open Connector is Apache 2.0 licensed.
 
-## Contributing
-
-Contributions welcome! Please read the codebase first and keep changes focused.
-
 ## Support
 
 - Issues: GitHub Issues
 - Questions: Open a Discussion
-- Commercial support: Contact the author
 
 ---
 

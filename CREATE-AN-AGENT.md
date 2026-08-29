@@ -1,20 +1,19 @@
-# Create an Agent - מדריך למפתחים
+# Create an Agent - מדריך למפעילים
 
-מדריך להקמת סוכן חדש ללקוח או לעצמך.
+מדריך להקמת סוכן חדש ללקוח.
 
 ## דרישות מקדימות
 
-- שרת עם Docker (VPS, מחשב מקומי, וכו׳)
-- דומיין עם גישת DNS (לייצור)
-- מפתח API של Anthropic (או ספק אחר)
-- WhatsApp על הטלפון
+- שרת עם Docker (VPS)
+- דומיין עם גישת DNS
+- WhatsApp על הטלפון של הלקוח
 
 ## שלב 1: הכנת השרת
 
-### אפשרות א׳ - Hetzner (מומלץ)
+### אפשרות א׳ - Hetzner CX23 (מומלץ)
 
 1. צור שרת **CX23** (2 vCPU, 4GB RAM, IPv4) - כ-€5.99/חודש
-2. מיקום: Falkenstein או Helsinki
+2. מיקום: Falkenstein (FSN) או Helsinki (HEL)
 3. בחר Ubuntu 22.04
 4. הוסף מפתח SSH
 
@@ -26,31 +25,36 @@ ssh root@your-server-ip
 curl -fsSL https://get.docker.com | sh
 ```
 
-### אפשרות ב׳ - חלופות אם Hetzner אזל
+### אפשרות ב׳ - חלופות אם CX23 אזל
 
-אם ה-CX23 אזל במלאי, אפשרויות עם 4GB RAM:
+| ספק | תוכנית | מפרט |
+|-----|--------|------|
+| OVH | VPS-1 (2027) | 2 vCPU / 4GB RAM |
+| Netcup | VPS 500 G12 | 2 vCPU / 4GB RAM |
 
-- **OVH VPS-1** (2027) - 2 vCPU, 4GB RAM
-- **Netcup VPS 500 G12** - 2 vCPU, 4GB RAM
-
-> ⚠️ המערכת דורשת 4GB RAM. אל תבחרו VPS עם 1GB בלבד.
-
-### אפשרות ג׳ - Kamatera (אופציונלי - לייטנסי ישראל)
+### אפשרות ג׳ - Kamatera (ישראל)
 
 למי שצריך שרת בישראל:
+- צור שרת Type A (2 vCPU, 4GB RAM) במיקום Tel Aviv
+- יקר יותר מ-Hetzner אבל לייטנסי טוב יותר לישראל
 
-1. צור שרת Type A (2 vCPU, 4GB RAM) במיקום Tel Aviv
-2. יקר יותר מ-Hetzner אבל לייטנסי טוב יותר לישראל
+### דרישות חובה
 
-### אפשרות ד׳ - מקומי
+| דרישה | סיבה |
+|-------|------|
+| **4 GB RAM** | Pi runtime + WhatsApp צריכים מקום |
+| **IPv4** | WhatsApp Web לא עובד על IPv6 בלבד |
+| **פורטים 80+443** | Caddy לצורך HTTPS |
+| **Always-on** | WhatsApp session דורש חיבור רציף |
+| **Docker Compose** | אורקסטרציה של ה-stack |
 
-```bash
-# macOS
-brew install docker
+### אל תשתמשו ב-
 
-# Ubuntu
-curl -fsSL https://get.docker.com | sh
-```
+- **VPS עם 1GB RAM** - יקרוס מ-OOM
+- **IPv6-only** - בעיות חיבור WhatsApp
+- **Serverless / Sleep** (Fly.io sleep, CF Workers) - WhatsApp צריך socket קבוע
+- **Ephemeral disk** - session data חייב להישמר
+- **Oracle Always Free** - idle reclaim לא צפוי, בעיות IPv4
 
 ## שלב 2: הגדרת DNS
 
@@ -82,21 +86,18 @@ nano .env
 # טוקן גישה לממשק (צור אקראי)
 PAIR_TOKEN=$(openssl rand -hex 32)
 
-# אפשרות א׳: מפתח API של Anthropic
-MODEL_API_KEY=sk-ant-...
-
-# אפשרות ב׳: השתמש ב-pi /login במקום (ראה למטה)
-
-# טוקן Open Connector (ייצור אחרי ההפעלה הראשונה)
-OPEN_CONNECTOR_TOKEN=
-
 # מפתח הצפנה לסיסמאות
 CONNECTOR_ENCRYPTION_KEY=$(openssl rand -hex 32)
 
 # הדומיין שלך
 DOMAIN=agent.example.com
+
+# חשוב! URL ציבורי ל-OAuth callbacks
+# Caddy מנתב /oauth/* ל-connector
 CONNECTOR_ORIGIN=https://agent.example.com
 ```
+
+> **הערה:** טוקן Open Connector נוצר אחרי ההפעלה הראשונה בממשק.
 
 ## שלב 4: הפעלה ראשונה
 
@@ -110,49 +111,56 @@ docker compose logs -f
 
 פתח בדפדפן: `https://agent.example.com/?token=YOUR_PAIR_TOKEN`
 
-## שלב 5: חיבור WhatsApp
+## שלב 5: אשף ההגדרה (WebUI)
 
-1. פתח את ממשק הניהול
-2. סרוק את ה-QR עם WhatsApp (הגדרות → מכשירים מקושרים → קשר מכשיר)
-3. המתן לחיבור
+הממשק מנחה את הלקוח דרך:
 
-## שלב 6: התחברות לספק AI
+### 5.1 חיבור WhatsApp
 
-**אפשרות א׳ - מנוי (ללא API key):**
-```bash
-# בטרמינל בשרת
-docker compose exec agent npx pi /login
+1. מופיע קוד QR בממשק
+2. הלקוח סורק עם WhatsApp (הגדרות → מכשירים מקושרים → קשר מכשיר)
+3. המתנה לאישור חיבור
 
-# בחר ספק:
-# - Anthropic (Claude Pro/Max)
-# - OpenAI (ChatGPT Plus/Pro)
-# - GitHub Copilot
-# וכו׳
-```
+### 5.2 התחברות לספק AI
 
-**אפשרות ב׳ - API key:**
-```bash
-# עדכן .env
-MODEL_API_KEY=sk-ant-...
-docker compose restart agent
-```
+1. לחיצה על **Connect** ליד ChatGPT או Claude
+2. נפתח חלון OAuth בדפדפן
+3. הלקוח מאשר גישה
+4. החלון נסגר אוטומטית
 
-## שלב 7: יצירת טוקן Open Connector
+> **Fallback:** אם החלון נחסם, הלקוח מעתיק את ה-callback URL ומדביק בממשק.
 
-1. פתח Open Connector: `https://agent.example.com:3000` (או דרך Docker network)
-2. לך ל-Access → Create Runtime Token
-3. העתק את הטוקן
-4. עדכן ב-.env: `OPEN_CONNECTOR_TOKEN=oct_...`
-5. הפעל מחדש: `docker compose restart agent`
+לאחר ההתחברות, המודל נקבע אוטומטית:
+- **OpenAI:** `openai-codex/gpt-5.5`
+- **Anthropic:** `anthropic/claude-sonnet-4-6`
 
-## שלב 8: חיבור שירותים
+### 5.3 הגדרת זהות
+
+הלקוח ממלא:
+- שם
+- שם העסק
+- אזור זמן
+
+המערכת כותבת את הנתונים ל-SOUL.md ו-AGENTS.md.
+
+### 5.4 בדיקת Open Connector
+
+המערכת בודקת חיבור ל-Open Connector.
+
+### 5.5 טוקן מנהל
+
+- הטוקן מוצג **פעם אחת בלבד**
+- הלקוח חייב לשמור אותו במקום בטוח
+- לחיצה על "שמרתי" לסיום
+
+## שלב 6: חיבור שירותים
 
 ### Gmail ו-Google Calendar
 
 1. צור OAuth App ב-Google Cloud Console:
    - APIs & Services → Credentials → Create OAuth Client ID
    - Application type: Web application
-   - Authorized redirect URI: `https://agent.example.com:3000/oauth/callback`
+   - Authorized redirect URI: `https://agent.example.com/oauth/callback`
 
 2. ב-Open Connector:
    - Providers → Google → Configure OAuth App
@@ -163,7 +171,7 @@ docker compose restart agent
 
 ראה תיעוד Open Connector: https://github.com/oomol-lab/open-connector
 
-## שלב 9: בדיקה
+## שלב 7: בדיקה
 
 שלח הודעה לעצמך ב-WhatsApp:
 ```
@@ -172,112 +180,115 @@ docker compose restart agent
 
 אמור לקבל תגובה עם רשימת הפקודות.
 
-## התאמה אישית
+## דף Settings
 
-### שינוי שם הבוט
+לאחר ה-onboarding, דף Settings מאפשר:
 
-ב-.env או בממשק הניהול:
+- **Identity** - שם, עסק, timezone (עריכה)
+- **AI Login** - ChatGPT / Claude (reconnect אם פג)
+- **Open Connector** - סטטוס ושירותים מחוברים
+- **WhatsApp** - סטטוס ו-re-pair אם נדרש
+
+### עמוד כלים
+
+מציג רק שירותי Open Connector **מחוברים**:
+- כרטיסי לוגו + פעולות קריאות
+- מצב ריק מפנה לקונסולת OC
+
+## Caddy Routing
+
+Caddy מטפל ב-TLS וב-routing:
+
 ```
-BOT_NAME=My Agent
-```
-
-### הוספת Skill Packs
-
-```bash
-# העתק skill pack
-mkdir -p .pi/skills
-cp skills-pack/inbox-calendar.json .pi/skills/
-
-# הפעל מחדש
-docker compose restart agent
-```
-
-### שינוי מודל
-
-ב-.env:
-```bash
-MODEL_API_URL=https://api.openai.com/v1/chat/completions
+https://your-domain.com/*        → agent:3001
+https://your-domain.com/oauth/*  → connector:3000
 ```
 
-או בממשק הניהול.
+ודא ש-`CONNECTOR_ORIGIN` מכיל את ה-URL הציבורי כדי ש-OAuth callbacks יגיעו לקונקטור.
+
+## טיפים לייצור
+
+```yaml
+# docker-compose.yml - הגבלת זיכרון
+services:
+  agent:
+    mem_limit: 3g
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3001/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+```
 
 ## פתרון בעיות
 
 ### QR לא נטען
 
 ```bash
-# בדוק לוגים
 docker compose logs agent | grep -i qr
-
-# הפעל מחדש
 docker compose restart agent
 ```
 
-### WhatsApp מתנתק
+### WhatsApp מתנתק (שגיאה 515)
+
+המערכת מתחברת מחדש אוטומטית עם ה-credentials הקיימים.
+אם נכשל:
 
 ```bash
-# מחק סשן ישן
 docker compose stop agent
 rm -rf data/whatsapp-auth/
 docker compose start agent
 # סרוק QR מחדש
 ```
 
+### OAuth פג תוקף
+
+הלקוח רואה הודעה ב-Settings לחיבור מחדש.
+
 ### Open Connector לא מגיב
 
 ```bash
-# בדוק סטטוס
 docker compose ps
-
-# בדוק לוגים
 docker compose logs connector
 ```
 
 ### תעודת HTTPS לא עובדת
 
 ```bash
-# בדוק DNS
 dig agent.example.com
-
-# בדוק Caddy
 docker compose logs caddy
 ```
 
 ## גיבוי
 
 ```bash
-# גיבוי נתונים
 docker compose stop
 tar -czf backup-$(date +%Y%m%d).tar.gz data/
 docker compose start
-
-# שחזור
-tar -xzf backup-YYYYMMDD.tar.gz
 ```
 
 ## עדכון
 
 ```bash
-# משוך גרסה חדשה
 git pull
-
-# בנה מחדש
 docker compose build
 docker compose up -d
 ```
 
 ## צ׳קליסט להפעלה
 
-- [ ] שרת פועל עם Docker
+- [ ] שרת CX23 / 4GB RAM פועל עם Docker
 - [ ] DNS מצביע לשרת
-- [ ] .env מוגדר נכון
+- [ ] .env מוגדר (PAIR_TOKEN, CONNECTOR_ENCRYPTION_KEY, DOMAIN, CONNECTOR_ORIGIN)
 - [ ] `docker compose up -d` הצליח
 - [ ] HTTPS פועל (אין אזהרת תעודה)
 - [ ] ממשק ניהול נגיש
-- [ ] QR נטען
-- [ ] WhatsApp מחובר
-- [ ] Open Connector טוקן נוצר
-- [ ] לפחות שירות אחד מחובר
+- [ ] QR נטען וWhatsApp מחובר
+- [ ] AI Provider מחובר (ChatGPT או Claude)
+- [ ] זהות הוגדרה (שם, עסק, timezone)
+- [ ] טוקן מנהל נשמר
+- [ ] לפחות שירות אחד מחובר ב-OC
 - [ ] `/help` מחזיר תגובה
 
 ## תמיכה

@@ -2,9 +2,9 @@
 
 ## Architecture
 
-Desk Agent is a personal WhatsApp agent template for SMBs built on the Pi Coding Agent runtime. It connects to Open Connector for SaaS integrations.
+Desk Agent is a personal WhatsApp agent for SMBs built on the Pi Coding Agent runtime. It connects to Open Connector for SaaS integrations.
 
-**One stack per customer** - Each deployment is an isolated Docker Compose stack with no shared state between customers.
+**One stack per customer** - Each deployment is an isolated Docker Compose stack (agent + Open Connector + Caddy) with no shared state between customers.
 
 ```
 src/
@@ -31,9 +31,18 @@ The handler uses Pi Coding Agent SDK for:
 - **Skills** - On-demand capabilities via `.pi/skills/`
 - **Model runtime** - Multi-provider LLM support
 
-Login options:
-- `pi /login` - Use existing Claude Pro/Max, ChatGPT Plus/Pro subscription
-- `MODEL_API_KEY` env - Direct API key
+### Customer AI Login
+
+Customers log in via browser OAuth in the Web UI Settings page:
+- Click Connect next to ChatGPT or Claude
+- Authorize in browser popup
+- Pi session is created with the provider default model
+
+### Developer/Operator Options
+
+For development and debugging only (not customer-facing):
+- `pi /login` - Terminal-based subscription login
+- `MODEL_API_KEY` env - Direct API key bypass
 
 ## Code Style
 
@@ -67,7 +76,7 @@ Runtime settings stored in `data/settings.json`.
 
 ### Owner-Only Gate
 
-The WhatsApp client only processes messages from the owner (messages to yourself). This is enforced in `src/whatsapp/client.ts`.
+The WhatsApp client only processes messages from the owner (messages to yourself / self-chat). This is enforced in `src/whatsapp/client.ts`. The agent never responds to messages from other people.
 
 ### Credential Boundary
 
