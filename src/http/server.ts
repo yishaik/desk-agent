@@ -31,7 +31,9 @@ import {
   completeLogin, 
   getLoginStatusAsync, 
   listProviders, 
-  logout 
+  logout,
+  listRuntimeCredentials,
+  resolveActiveModel,
 } from './auth.ts';
 import { writeIdentityFiles } from '../core/identity-files.ts';
 import { getSettingsHtml, type SettingsPageData } from './settings-page.ts';
@@ -330,6 +332,76 @@ addRoute('POST', '/api/auth/logout', async (req, res) => {
   } catch (err) {
     log.error({ err }, 'Logout error');
     sendError(res, 'Failed to logout', 500);
+  }
+});
+
+addRoute('GET', '/api/ai/status', async (req, res) => {
+  if (!isAuthenticated(req)) {
+    sendError(res, 'Unauthorized', 401);
+    return;
+  }
+
+  try {
+    const settings = loadSettings();
+    const credentials = await listRuntimeCredentials();
+    const modelResolution = await resolveActiveModel(settings.model);
+
+    sendJson(res, {
+      success: true,
+      data: {
+        currentModel: settings.model,
+        resolvedModel: modelResolution.modelId,
+        resolvedModelId: modelResolution.model?.id,
+        providerId: modelResolution.providerId,
+        valid: modelResolution.valid,
+        error: modelResolution.error,
+        connectedProviders: credentials.map(c => ({
+          providerId: c.providerId,
+          type: c.type,
+        })),
+      },
+    });
+  } catch (err) {
+    log.error({ err }, 'Failed to get AI status');
+    sendError(res, 'Failed to get AI status', 500);
+  }
+});
+
+addRoute('POST', '/api/ai/sync-model', async (req, res) => {
+  if (!isAuthenticated(req)) {
+    sendError(res, 'Unauthorized', 401);
+    return;
+  }
+
+  try {
+    const settings = loadSettings();
+    const modelResolution = await resolveActiveModel(settings.model);
+    
+    if (!modelResolution.model) {
+      sendError(res, modelResolution.error || 'No AI provider connected', 400);
+      return;
+    }
+    
+    const wasAdjusted = !modelResolution.valid;
+    
+    if (wasAdjusted) {
+      updateSettings({ model: modelResolution.modelId });
+      const { recreateSessionAfterCredentialChange } = await import('../agent/session.ts');
+      await recreateSessionAfterCredentialChange(settings.activeProject);
+    }
+
+    sendJson(res, {
+      success: true,
+      data: {
+        model: modelResolution.modelId,
+        modelId: modelResolution.model.id,
+        providerId: modelResolution.providerId,
+        wasAdjusted,
+      },
+    });
+  } catch (err) {
+    log.error({ err }, 'Failed to sync model with credentials');
+    sendError(res, err instanceof Error ? err.message : 'Failed to sync model', 500);
   }
 });
 

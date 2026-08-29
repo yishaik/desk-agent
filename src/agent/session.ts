@@ -6,12 +6,18 @@ import {
   type AgentSession,
   type ToolDefinition,
 } from '@earendil-works/pi-coding-agent';
-import { Type, type Static, type TObject, type TString, type TOptional, type TRecord, type TBoolean, type TUnknown } from 'typebox';
+import { Type, type Static } from 'typebox';
 import { createChildLogger } from '../core/logger.ts';
-import { loadSettings, getActiveConnectorToken, updateSettings, isActionDisabled } from '../core/settings.ts';
+import { loadSettings, updateSettings, isActionDisabled } from '../core/settings.ts';
 import { config } from '../core/config.ts';
 import { OpenConnectorClient } from '../open-connector/client.ts';
 import { join } from 'node:path';
+import { 
+  resolveActiveModel, 
+  listRuntimeCredentials,
+  clearRuntimeCache,
+  type ModelResolution,
+} from '../http/auth.ts';
 
 const log = createChildLogger('pi-session');
 
@@ -404,6 +410,18 @@ function createOpenConnectorTools(projectId: string): ToolDefinition[] {
   return [searchActionsTool, getActionGuideTool, executeActionTool, listConnectionsTool] as ToolDefinition[];
 }
 
+export class CredentialError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'CredentialError';
+  }
+}
+
+export async function checkCredentialsBeforePrompt(): Promise<ModelResolution> {
+  const settings = loadSettings();
+  return resolveActiveModel(settings.model);
+}
+
 export async function getOrCreateSession(projectId: string): Promise<ProjectSession> {
   const existing = activeSessions.get(projectId);
   if (existing) {
@@ -442,20 +460,30 @@ For send/create/update/delete actions, always wait for the user to confirm befor
 `);
   }
 
-  log.info({ projectId, cwd: projectCwd }, 'Creating Pi session');
-
   const modelRuntime = await getOrCreateModelRuntime();
   const customTools = createOpenConnectorTools(projectId);
-
   const piAgentDir = join(config.dataDir, 'pi-agent');
 
-  let model;
-  if (settings.model) {
-    const [providerId, ...modelParts] = settings.model.split('/');
-    const modelId = modelParts.join('/') || settings.model;
-    model = modelRuntime.getModel(providerId ?? 'anthropic', modelId) ?? 
-            modelRuntime.getModel('anthropic', settings.model);
+  const modelResolution = await resolveActiveModel(settings.model);
+  
+  if (!modelResolution.model) {
+    log.error({ error: modelResolution.error }, 'No valid model available');
+    throw new CredentialError(modelResolution.error || 'No AI provider connected. Please connect in Settings.');
   }
+  
+  if (!modelResolution.valid && modelResolution.modelId !== settings.model) {
+    log.info(
+      { 
+        originalModel: settings.model, 
+        resolvedModel: modelResolution.modelId,
+        providerId: modelResolution.providerId 
+      },
+      'Model auto-adjusted to match available credentials'
+    );
+    updateSettings({ model: modelResolution.modelId });
+  }
+  
+  log.info({ projectId, cwd: projectCwd, model: modelResolution.modelId }, 'Creating Pi session');
 
   const workspaceRoot = process.cwd();
   const resourceLoader = new DefaultResourceLoader({
@@ -474,7 +502,7 @@ For send/create/update/delete actions, always wait for the user to confirm befor
     cwd: projectCwd,
     agentDir: piAgentDir,
     modelRuntime,
-    model,
+    model: modelResolution.model,
     sessionManager: SessionManager.inMemory(projectCwd),
     customTools,
     resourceLoader,
@@ -489,7 +517,7 @@ For send/create/update/delete actions, always wait for the user to confirm befor
   };
 
   activeSessions.set(projectId, projectSession);
-  log.info({ projectId }, 'Pi session created');
+  log.info({ projectId, model: modelResolution.modelId }, 'Pi session created');
 
   return projectSession;
 }
@@ -518,6 +546,23 @@ export function clearSession(projectId: string): void {
     activeSessions.delete(projectId);
     log.info({ projectId }, 'Pi session cleared');
   }
+}
+
+export function clearAllSessions(): void {
+  for (const [projectId, projectSession] of activeSessions) {
+    projectSession.session.dispose();
+    log.debug({ projectId }, 'Pi session disposed');
+  }
+  activeSessions.clear();
+  sharedModelRuntime = null;
+  clearRuntimeCache();
+  log.info('All Pi sessions and runtime cleared');
+}
+
+export async function recreateSessionAfterCredentialChange(projectId: string): Promise<void> {
+  clearAllSessions();
+  await getOrCreateSession(projectId);
+  log.info({ projectId }, 'Session recreated after credential change');
 }
 
 export function getSession(projectId: string): ProjectSession | undefined {
