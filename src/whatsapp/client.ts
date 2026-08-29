@@ -259,7 +259,9 @@ export class WhatsAppClient {
       throw new Error('WhatsApp client not connected');
     }
 
-    const targetJid = this.resolveSelfChatJid();
+    // React in the chat the message actually lives in — the LID self-chat and
+    // the phone-JID self-chat are different conversations.
+    const targetJid = messageKey.remoteJid ?? this.resolveSelfChatJid();
     if (!targetJid) {
       log.warn('No self-chat JID available for reaction');
       return;
