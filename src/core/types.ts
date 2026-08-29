@@ -10,6 +10,7 @@ export interface Settings {
   activeProject: string;
   services: ServiceConfig[];
   setupComplete: boolean;
+  connectorAdminTokenAcknowledged: boolean;
   createdAt: string;
   updatedAt: string;
 }
@@ -88,6 +89,7 @@ export const DEFAULT_SETTINGS: Settings = {
   activeProject: 'default',
   services: [],
   setupComplete: false,
+  connectorAdminTokenAcknowledged: false,
   createdAt: new Date().toISOString(),
   updatedAt: new Date().toISOString(),
 };
