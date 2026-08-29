@@ -1,12 +1,12 @@
 import { createChildLogger } from '../core/logger.ts';
 import { loadSettings, updateSettings, getActiveConnectorToken } from '../core/settings.ts';
-import { saveMessage, getConversationContext, listProjects, createProject, getProject } from '../core/memory.ts';
+import { saveMessage, listProjects, createProject, getProject } from '../core/memory.ts';
 import { config } from '../core/config.ts';
-import type { Message, Settings } from '../core/types.ts';
+import type { Message, MessageKey, Settings } from '../core/types.ts';
 import { getWhatsAppClient } from './client.ts';
 import { OpenConnectorClient } from '../open-connector/client.ts';
 import { 
-  runPrompt, 
+  runPromptWithCallbacks, 
   clearSession, 
   getOrCreateSession, 
   setSessionModel,
@@ -15,10 +15,45 @@ import {
   cancelConfirmation,
   cleanupOldConfirmations,
 } from '../agent/session.ts';
+import { 
+  type ReactionState, 
+  createReactionTracker, 
+  recordTransition, 
+  getReactionEmoji,
+  shouldUpdateReaction,
+  type ReactionTracker,
+} from './reaction-state.ts';
 
 const log = createChildLogger('handler');
 
 const COMMAND_PREFIX = '/';
+
+async function safeReaction(messageKey: MessageKey, state: ReactionState): Promise<void> {
+  try {
+    const wa = getWhatsAppClient();
+    const emoji = getReactionEmoji(state);
+    await wa.sendReaction(messageKey, emoji);
+    log.debug({ messageId: messageKey.id, state, emoji }, 'Reaction sent');
+  } catch (err) {
+    log.error({ err, messageId: messageKey.id, state }, 'Failed to send reaction');
+  }
+}
+
+async function updateReaction(
+  tracker: ReactionTracker | null,
+  newState: ReactionState
+): Promise<void> {
+  if (!tracker || !tracker.messageKey) {
+    return;
+  }
+
+  if (!shouldUpdateReaction(tracker, newState)) {
+    return;
+  }
+
+  recordTransition(tracker, newState);
+  await safeReaction(tracker.messageKey, newState);
+}
 
 const CONFIRM_PATTERNS = [
   /^(yes|כן|אשר|confirm|ok|אוקיי|בסדר)$/i,
@@ -122,9 +157,17 @@ export async function handleMessage(message: Message): Promise<void> {
   message.projectId = projectId;
   saveMessage(message);
 
+  const tracker = message.messageKey ? createReactionTracker(message.messageKey) : null;
+
   if (message.body.startsWith(COMMAND_PREFIX)) {
+    if (tracker) {
+      await updateReaction(tracker, 'reading');
+    }
     const result = await handleCommand(message.body, settings);
     if (result.handled && result.response) {
+      if (tracker) {
+        await updateReaction(tracker, 'finished');
+      }
       await wa.sendMessage(ownerJid, result.response);
     }
     return;
@@ -132,28 +175,34 @@ export async function handleMessage(message: Message): Promise<void> {
 
   const confirmResponse = await checkForConfirmationResponse(message.body);
   if (confirmResponse.handled) {
+    if (tracker) {
+      await updateReaction(tracker, 'reading');
+    }
     if (confirmResponse.response) {
+      if (tracker) {
+        await updateReaction(tracker, 'finished');
+      }
       await wa.sendMessage(ownerJid, confirmResponse.response);
     }
     return;
   }
 
-  await wa.sendReaction(ownerJid, message.id, '👀');
+  await updateReaction(tracker, 'reading');
   
   try {
-    const response = await processWithPi(message, settings);
+    const response = await processWithPi(message, settings, tracker);
     if (response) {
-      await wa.sendReaction(ownerJid, message.id, '✅');
+      await updateReaction(tracker, 'finished');
       await sendSplitMessage(ownerJid, response, message.id);
     }
   } catch (err) {
     log.error({ err }, 'Error processing message');
-    await wa.sendReaction(ownerJid, message.id, '❌');
+    await updateReaction(tracker, 'error');
     await wa.sendMessage(ownerJid, `שגיאה: ${err instanceof Error ? err.message : 'Unknown error'}`);
   }
 }
 
-async function sendSplitMessage(jid: string, text: string, replyToId?: string): Promise<void> {
+async function sendSplitMessage(jid: string, text: string, _replyToId?: string): Promise<void> {
   const wa = getWhatsAppClient();
   const MAX_LENGTH = 4000;
   
@@ -424,18 +473,38 @@ async function checkConnectorHealth(): Promise<boolean> {
   }
 }
 
-async function processWithPi(message: Message, settings: Settings): Promise<string | null> {
-  const wa = getWhatsAppClient();
-  const ownerJid = wa.getOwnerJid();
-  
-  if (ownerJid) {
-    await wa.sendReaction(ownerJid, message.id, '🤔');
-  }
+async function processWithPi(
+  message: Message, 
+  settings: Settings,
+  tracker: ReactionTracker | null
+): Promise<string | null> {
+  await updateReaction(tracker, 'processing');
 
   log.info({ projectId: settings.activeProject, message: message.body.slice(0, 50) }, 'Processing with Pi session');
 
   try {
-    const response = await runPrompt(settings.activeProject, message.body);
+    const response = await runPromptWithCallbacks(
+      settings.activeProject, 
+      message.body,
+      {
+        onTurnStart: () => {
+          updateReaction(tracker, 'processing').catch(() => {});
+        },
+        onToolStart: (toolName) => {
+          log.debug({ toolName }, 'Tool started');
+          updateReaction(tracker, 'using_tools').catch(() => {});
+        },
+        onToolEnd: (toolName) => {
+          log.debug({ toolName }, 'Tool ended');
+        },
+        onThinking: () => {
+          updateReaction(tracker, 'thinking').catch(() => {});
+        },
+        onMessageStart: () => {
+          updateReaction(tracker, 'thinking').catch(() => {});
+        },
+      }
+    );
     
     if (response) {
       const botMessage: Message = {

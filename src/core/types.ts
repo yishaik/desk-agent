@@ -29,6 +29,13 @@ export interface Project {
   createdAt: string;
 }
 
+export interface MessageKey {
+  remoteJid: string;
+  id: string;
+  fromMe: boolean;
+  participant?: string;
+}
+
 export interface Message {
   id: string;
   from: string;
@@ -37,6 +44,7 @@ export interface Message {
   timestamp: number;
   isFromMe: boolean;
   projectId?: string;
+  messageKey?: MessageKey;
 }
 
 export interface ConversationContext {

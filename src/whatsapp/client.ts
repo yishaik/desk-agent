@@ -5,7 +5,6 @@ import makeWASocket, {
   makeCacheableSignalKeyStore,
   WASocket,
   proto,
-  BaileysEventMap,
 } from '@whiskeysockets/baileys';
 import { Boom } from '@hapi/boom';
 import { join } from 'node:path';
@@ -15,7 +14,7 @@ import pino from 'pino';
 import { config } from '../core/config.ts';
 import { createChildLogger } from '../core/logger.ts';
 import { loadSettings, updateSettings } from '../core/settings.ts';
-import type { PairingState, Message } from '../core/types.ts';
+import type { PairingState, Message, MessageKey } from '../core/types.ts';
 
 const log = createChildLogger('whatsapp');
 
@@ -142,13 +141,21 @@ export class WhatsAppClient {
     const body = this.extractMessageBody(msg.message);
     if (!body) return;
 
-    const message: Message = {
+    const messageKey: MessageKey = {
+      remoteJid,
       id: msg.key.id ?? `msg_${Date.now()}`,
+      fromMe: isFromMe,
+      participant: msg.key.participant ?? undefined,
+    };
+
+    const message: Message = {
+      id: messageKey.id,
       from: isFromMe ? (this.ownerJid ?? remoteJid) : remoteJid,
       to: isFromMe ? remoteJid : (this.ownerJid ?? remoteJid),
       body,
       timestamp: msg.messageTimestamp as number ?? Math.floor(Date.now() / 1000),
       isFromMe,
+      messageKey,
     };
 
     log.debug({ messageId: message.id, isFromMe }, 'Processing message');
@@ -231,20 +238,38 @@ export class WhatsAppClient {
     return parts;
   }
 
-  async sendReaction(jid: string, messageId: string, emoji: string): Promise<void> {
+  async sendReaction(messageKey: MessageKey, emoji: string): Promise<void> {
     if (!this.socket) {
       throw new Error('WhatsApp client not connected');
     }
 
-    await this.socket.sendMessage(jid, {
+    const targetJid = this.resolveSelfChatJid() ?? messageKey.remoteJid;
+
+    await this.socket.sendMessage(targetJid, {
       react: {
         text: emoji,
         key: {
-          remoteJid: jid,
-          id: messageId,
+          remoteJid: messageKey.remoteJid,
+          id: messageKey.id,
+          fromMe: messageKey.fromMe,
+          participant: messageKey.participant,
         },
       },
     });
+  }
+
+  resolveSelfChatJid(): string | null {
+    if (!this.ownerJid) return null;
+
+    if (this.ownerJid.includes(':') && this.ownerJid.endsWith('@s.whatsapp.net')) {
+      return this.ownerJid;
+    }
+
+    if (this.ownerJid.endsWith('@lid')) {
+      return this.ownerJid;
+    }
+
+    return this.ownerJid;
   }
 
   async sendFile(
@@ -282,7 +307,7 @@ export class WhatsAppClient {
 
   async disconnect(): Promise<void> {
     if (this.socket) {
-      await this.socket.logout();
+      this.socket.end(undefined);
       this.socket = null;
       this.pairingState = { isPaired: false };
       log.info('Disconnected from WhatsApp');
