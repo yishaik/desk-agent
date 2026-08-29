@@ -1584,7 +1584,7 @@ export function getWizardHtml(settings: ReturnType<typeof loadSettings>, pairing
 
       async function connectProvider(providerId) {
         currentProvider = providerId;
-        const popup = window.open('about:blank', '_blank', 'noopener');
+        const popup = window.open('about:blank', '_blank');
         
         try {
           const res = await fetch('/api/auth/login', {

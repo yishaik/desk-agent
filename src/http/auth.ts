@@ -220,8 +220,19 @@ export async function listProviders(): Promise<ProviderInfo[]> {
 }
 
 export async function startLogin(provider: string): Promise<LoginResult> {
+  // A repeat click while a login is already pending must return the same URL —
+  // starting a second runtime.login() while one is in flight fails.
+  const existing = pendingLogins.get(provider);
+  if (existing?.authorizeUrl) {
+    log.info({ provider }, 'Reusing pending authorize URL');
+    return {
+      authorizeUrl: existing.authorizeUrl,
+      instructions: 'השלם את ההתחברות בחלון שנפתח. אם החלון לא נפתח, הדבק את הקוד שקיבלת.',
+    };
+  }
+
   const runtime = await getRuntime();
-  
+
   log.info({ provider }, 'Starting OAuth login flow');
   
   let authorizeUrl: string | null = null;

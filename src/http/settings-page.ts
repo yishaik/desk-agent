@@ -800,7 +800,7 @@ export function getSettingsHtml(data: SettingsPageData): string {
     async function connectProvider(providerId) {
       currentProvider = providerId;
       
-      const popup = window.open('about:blank', '_blank', 'noopener');
+      const popup = window.open('about:blank', '_blank');
       
       try {
         const res = await fetch('/api/auth/login', {

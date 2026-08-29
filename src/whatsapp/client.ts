@@ -8,7 +8,7 @@ import makeWASocket, {
 import type { WASocket } from '@whiskeysockets/baileys';
 import { Boom } from '@hapi/boom';
 import { join } from 'node:path';
-import { existsSync, mkdirSync } from 'node:fs';
+import { existsSync, mkdirSync, rmSync } from 'node:fs';
 import qrcode from 'qrcode-terminal';
 import pino from 'pino';
 import { config } from '../core/config.ts';
@@ -88,8 +88,12 @@ export class WhatsAppClient {
           log.info({ delay }, 'Reconnecting...');
           setTimeout(() => this.connect(), delay);
         } else if (statusCode === DisconnectReason.loggedOut) {
-          log.warn('Logged out, need to re-pair');
+          log.warn('Logged out, clearing session and reconnecting for a fresh QR');
           this.pairingState = { isPaired: false };
+          // Stale creds would just 401 again — wipe them so connect() pairs anew.
+          rmSync(join(config.dataDir, 'whatsapp-auth'), { recursive: true, force: true });
+          this.reconnectAttempts = 0;
+          setTimeout(() => this.connect(), 1000);
         }
       }
 
@@ -153,7 +157,9 @@ export class WhatsAppClient {
       from: isFromMe ? (this.ownerJid ?? remoteJid) : remoteJid,
       to: isFromMe ? remoteJid : (this.ownerJid ?? remoteJid),
       body,
-      timestamp: msg.messageTimestamp as number ?? Math.floor(Date.now() / 1000),
+      // messageTimestamp is a protobuf Long at runtime; passing it straight to
+      // SQLite throws on bind, so normalize to a plain number.
+      timestamp: Number(msg.messageTimestamp?.toString() ?? '') || Math.floor(Date.now() / 1000),
       isFromMe,
       messageKey,
     };
