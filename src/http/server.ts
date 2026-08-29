@@ -22,7 +22,6 @@ import {
   getService,
   setServiceEnabled,
   isActionEnabled,
-  setActionEnabled,
 } from '../core/settings.ts';
 import { listProjects, createProject, getProject } from '../core/memory.ts';
 import { getWhatsAppClient } from '../whatsapp/client.ts';

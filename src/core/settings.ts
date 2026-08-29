@@ -127,32 +127,6 @@ export function isActionDisabled(serviceId: string, actionId: string): boolean {
   return svc.disabledActions?.includes(actionId) ?? false;
 }
 
-export function setActionEnabled(serviceId: string, actionId: string, enabled: boolean): Settings {
-  const settings = loadSettings();
-  let svc = settings.services.find((s) => s.id === serviceId);
-  
-  if (!svc) {
-    svc = { id: serviceId, name: serviceId, enabled: true, disabledActions: [] };
-    settings.services.push(svc);
-  }
-  
-  if (!svc.disabledActions) {
-    svc.disabledActions = [];
-  }
-  
-  if (enabled) {
-    svc.disabledActions = svc.disabledActions.filter((a) => a !== actionId);
-  } else {
-    if (!svc.disabledActions.includes(actionId)) {
-      svc.disabledActions.push(actionId);
-    }
-  }
-  
-  saveSettings(settings);
-  log.info({ serviceId, actionId, enabled }, 'Set action enabled state');
-  return settings;
-}
-
 export function getService(serviceId: string): ServiceConfig | undefined {
   const settings = loadSettings();
   return settings.services.find((s) => s.id === serviceId);
