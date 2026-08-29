@@ -170,4 +170,61 @@ describe('getSettingsHtml', () => {
     expect(html).toContain('--bg-primary: #09090b');
     expect(html).toContain('--accent: #6366f1');
   });
+
+  it('includes tools section', () => {
+    const html = getSettingsHtml(createTestData());
+    
+    expect(html).toContain('כלים');
+    expect(html).toContain('toolsContainer');
+    expect(html).toContain('loadTools');
+  });
+
+  it('includes connectTool and disconnectTool functions', () => {
+    const html = getSettingsHtml(createTestData());
+    
+    expect(html).toContain('async function connectTool(serviceId)');
+    expect(html).toContain('async function disconnectTool(serviceId, serviceName)');
+  });
+
+  it('uses about:blank pattern for tool connection popup', () => {
+    const html = getSettingsHtml(createTestData());
+    
+    expect(html).toContain("window.open('about:blank'");
+  });
+
+  it('fetches tools from /api/connector/tools with fallback to /api/connector/services', () => {
+    const html = getSettingsHtml(createTestData());
+    
+    expect(html).toContain('/api/connector/tools');
+    expect(html).toContain('/api/connector/services');
+  });
+
+  it('handles empty tools catalog state', () => {
+    const html = getSettingsHtml(createTestData());
+    
+    expect(html).toContain('קטלוג הכלים לא זמין עדיין');
+    expect(html).toContain('אין כלים זמינים');
+  });
+
+  it('normalizes tool fields from API response', () => {
+    const html = getSettingsHtml(createTestData());
+    
+    expect(html).toContain('t.id || t.serviceId');
+    expect(html).toContain('t.hebrewName || t.name');
+    expect(html).toContain('t.hebrewDescription || t.description');
+  });
+
+  it('uses DELETE method for disconnecting tools', () => {
+    const html = getSettingsHtml(createTestData());
+    
+    expect(html).toContain("method: 'DELETE'");
+  });
+
+  it('uses POST for connecting tools with authorizationUrl', () => {
+    const html = getSettingsHtml(createTestData());
+    
+    expect(html).toContain('/connect');
+    expect(html).toContain("method: 'POST'");
+    expect(html).toContain('authorizationUrl');
+  });
 });
