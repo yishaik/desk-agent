@@ -2,6 +2,13 @@
 # Uses DOMAIN environment variable (passed from docker-compose)
 # Defaults to localhost for local development
 
+# Open Connector console on its own subdomain. The console SPA loads assets
+# from absolute paths (/assets/...) and shares /api/auth/* paths with the
+# agent, so it cannot be served under a sub-path of the main domain.
+{$CONSOLE_DOMAIN:console.localhost} {
+    reverse_proxy connector:3000
+}
+
 {$DOMAIN:localhost} {
     # Open Connector console - accessible at /connector/
     handle_path /connector/* {

@@ -8,6 +8,7 @@ export interface Config {
   openConnectorUrl: string;
   openConnectorToken?: string;
   connectorOrigin: string;
+  connectorConsoleUrl?: string;
   connectorAdminToken?: string;
   modelApiKey?: string;
   modelApiUrl?: string;
@@ -44,6 +45,7 @@ export function loadConfig(): Config {
     openConnectorUrl,
     openConnectorToken: process.env['OPEN_CONNECTOR_TOKEN'],
     connectorOrigin: getEnvOrDefault('CONNECTOR_ORIGIN', openConnectorUrl),
+    connectorConsoleUrl: process.env['CONSOLE_URL'],
     connectorAdminToken: process.env['CONNECTOR_ADMIN_TOKEN'],
     modelApiKey: process.env['MODEL_API_KEY'],
     modelApiUrl: process.env['MODEL_API_URL'],

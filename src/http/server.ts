@@ -645,6 +645,11 @@ addRoute('POST', '/api/setup/complete', async (req, res) => {
 });
 
 function getConsoleUrl(): string {
+  // The console lives on its own subdomain (CONSOLE_URL); the connector
+  // origin is the main domain, where / is the agent dashboard.
+  if (config.connectorConsoleUrl) {
+    return config.connectorConsoleUrl;
+  }
   const origin = config.connectorOrigin;
   if (config.isProduction && origin.includes('localhost')) {
     throw new Error('CONNECTOR_ORIGIN must be set to a public URL in production');

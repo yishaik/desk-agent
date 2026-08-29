@@ -25,6 +25,7 @@ services:
       - CONNECTOR_ORIGIN=${CONNECTOR_ORIGIN}
       - CONNECTOR_ADMIN_TOKEN=${CONNECTOR_ADMIN_TOKEN}
       - DOMAIN=${DOMAIN}
+      - CONSOLE_URL=${CONSOLE_URL:-}
       - MODEL_API_KEY=${MODEL_API_KEY}
       - MODEL_API_URL=${MODEL_API_URL:-https://api.anthropic.com/v1/messages}
       - ANTHROPIC_API_KEY=${MODEL_API_KEY}
@@ -85,6 +86,7 @@ services:
       - "443:443"
     environment:
       - DOMAIN=${DOMAIN:-localhost}
+      - CONSOLE_DOMAIN=${CONSOLE_DOMAIN:-console.localhost}
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy-data:/data
