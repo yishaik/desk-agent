@@ -152,8 +152,19 @@ export class OpenConnectorClient {
     const response = await this.request<
       Connection[] | { success?: boolean; data?: Connection[]; connections?: Connection[] }
     >('/api/connections');
-    if (Array.isArray(response)) return response;
-    return response.data ?? response.connections ?? [];
+    const items = Array.isArray(response)
+      ? response
+      : (response.data ?? response.connections ?? []);
+    // The server exposes account info as `profile`, not `identity` — normalize
+    // so callers can show "connected as x@gmail.com".
+    return items.map((c) => {
+      const raw = c as Connection & { profile?: { displayName?: string; accountId?: string } };
+      const label = raw.profile?.displayName ?? raw.profile?.accountId;
+      return {
+        ...raw,
+        identity: raw.identity ?? (label ? { label, email: raw.profile?.accountId } : undefined),
+      };
+    });
   }
 
   async getAuthenticatedServices(services: string[]): Promise<string[]> {
@@ -165,13 +176,23 @@ export class OpenConnectorClient {
     return response.data;
   }
 
+  // The server serializes the action title as `name`; our Action type uses
+  // `displayName`. Entries without an id (the bare {service} rows returned by
+  // /v1/actions with no ?service=) are not actions and get filtered out.
+  private normalizeAction(raw: Record<string, unknown>): Action {
+    return {
+      ...(raw as unknown as Action),
+      displayName: (raw['displayName'] ?? raw['name'] ?? raw['id'] ?? '') as string,
+    };
+  }
+
   async listActions(serviceId?: string): Promise<Action[]> {
     const path = serviceId ? `/v1/actions?service=${encodeURIComponent(serviceId)}` : '/v1/actions';
     const response = await this.request<Action[] | { success: boolean; data: Action[] }>(path);
-    if (Array.isArray(response)) {
-      return response;
-    }
-    return response.data;
+    const items = Array.isArray(response) ? response : response.data;
+    return (items as unknown as Array<Record<string, unknown>>)
+      .filter((a) => a['id'])
+      .map((a) => this.normalizeAction(a));
   }
 
   async getAction(actionId: string): Promise<Action | null> {
@@ -179,18 +200,22 @@ export class OpenConnectorClient {
       const response = await this.request<{ success: boolean; data: Action }>(
         `/v1/actions/${actionId}`
       );
-      return response.data;
+      return response.data
+        ? this.normalizeAction(response.data as unknown as Record<string, unknown>)
+        : null;
     } catch {
       return null;
     }
   }
 
   async getActionGuide(actionId: string): Promise<string> {
+    // /api/* is admin scope on the connector — the runtime token gets a 401.
+    const guideToken = config.connectorAdminToken ?? this.getToken();
     const response = await fetch(
       `${this.baseUrl}/api/actions/${actionId}/agent.md`,
       {
-        headers: this.getToken()
-          ? { Authorization: `Bearer ${this.getToken()}` }
+        headers: guideToken
+          ? { Authorization: `Bearer ${guideToken}` }
           : {},
       }
     );
@@ -244,7 +269,9 @@ export class OpenConnectorClient {
     const response = await this.request<{ success: boolean; data: Action[] }>(
       `/v1/actions/search?q=${encodeURIComponent(query)}`
     );
-    return response.data;
+    return (response.data as unknown as Array<Record<string, unknown>>)
+      .filter((a) => a['id'])
+      .map((a) => this.normalizeAction(a));
   }
 
   async checkHealth(): Promise<boolean> {
@@ -257,8 +284,10 @@ export class OpenConnectorClient {
   }
 
   async listConnectedApps(): Promise<ConnectedApp[]> {
-    const response = await this.request<ConnectedApp[]>('/v1/apps');
-    return response;
+    const response = await this.request<
+      ConnectedApp[] | { success: boolean; data: ConnectedApp[] }
+    >('/v1/apps');
+    return Array.isArray(response) ? response : (response.data ?? []);
   }
 
   async startOAuth(

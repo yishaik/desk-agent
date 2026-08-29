@@ -95,13 +95,19 @@ export class WhatsAppClient {
           rmSync(join(config.dataDir, 'whatsapp-auth'), { recursive: true, force: true });
           this.reconnectAttempts = 0;
           setTimeout(() => this.connect(), 1000);
+        } else {
+          // Out of fast retries — don't sit dead until a container restart;
+          // keep trying on a slow cadence.
+          log.error({ statusCode }, 'Reconnect attempts exhausted, retrying in 60s');
+          this.reconnectAttempts = 0;
+          setTimeout(() => this.connect(), 60000);
         }
       }
 
       if (connection === 'open') {
         this.pairingState = {
           isPaired: true,
-          phoneNumber: this.socket?.user?.id?.split(':')[0],
+          phoneNumber: this.socket?.user?.id?.split(':')[0]?.split('@')[0],
           name: this.socket?.user?.name,
         };
         this.ownerJid = this.socket?.user?.id ?? null;

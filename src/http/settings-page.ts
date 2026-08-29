@@ -927,13 +927,19 @@ export function getSettingsHtml(data: SettingsPageData): string {
         const res = await fetch('/api/pairing');
         const { data } = await res.json();
         
+        if (data.isPaired) {
+          showToast('WhatsApp חובר בהצלחה');
+          location.reload();
+          return;
+        }
+
         if (data.qrDataUrl) {
           document.getElementById('qrImage').src = data.qrDataUrl;
         } else if (data.qrCode) {
           document.getElementById('qrImage').alt = 'טוען QR...';
         }
-        
-        setTimeout(() => showQrCode(), 60000);
+
+        setTimeout(() => showQrCode(), 5000);
       } catch (err) {
         showToast('שגיאה בטעינת QR', 'error');
       }

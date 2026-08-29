@@ -11,6 +11,7 @@ import {
   getOrCreateSession, 
   setSessionModel,
   getPendingConfirmation,
+  getLatestPendingConfirmation,
   confirmAction,
   cancelConfirmation,
   cleanupOldConfirmations,
@@ -75,19 +76,51 @@ interface CommandResult {
   response?: string;
 }
 
+async function executePendingAction(pending: {
+  actionId: string;
+  input: Record<string, unknown>;
+  connectionName?: string;
+}): Promise<CommandResult> {
+  const client = new OpenConnectorClient();
+  try {
+    const result = await client.executeAction({
+      actionId: pending.actionId,
+      input: pending.input,
+      connectionName: pending.connectionName,
+    });
+
+    if (!result.success) {
+      return {
+        handled: true,
+        response: `❌ Action failed: ${result.message}`,
+      };
+    }
+
+    return {
+      handled: true,
+      response: `✅ Action "${pending.actionId}" executed successfully.\n\nResult:\n${JSON.stringify(result.data, null, 2)}`,
+    };
+  } catch (err) {
+    return {
+      handled: true,
+      response: `❌ Error: ${err instanceof Error ? err.message : String(err)}`,
+    };
+  }
+}
+
 async function checkForConfirmationResponse(text: string): Promise<CommandResult> {
   cleanupOldConfirmations();
-  
+
   const confirmIdMatch = text.match(/confirm_\d+_[a-z0-9]+/);
   if (confirmIdMatch) {
     const confirmId = confirmIdMatch[0];
     const pending = getPendingConfirmation(confirmId);
-    
+
     if (pending) {
       const isConfirm = CONFIRM_PATTERNS.some((p) => p.test(text.replace(confirmId, '').trim()));
-      const isCancel = CANCEL_PATTERNS.some((p) => p.test(text.replace(confirmId, '').trim())) || 
+      const isCancel = CANCEL_PATTERNS.some((p) => p.test(text.replace(confirmId, '').trim())) ||
                        text.toLowerCase().includes('cancel') || text.includes('בטל');
-      
+
       if (isCancel) {
         cancelConfirmation(confirmId);
         return {
@@ -95,45 +128,35 @@ async function checkForConfirmationResponse(text: string): Promise<CommandResult
           response: `❌ Action "${pending.actionId}" cancelled.`,
         };
       }
-      
+
       if (isConfirm || text.trim() === confirmId) {
         confirmAction(confirmId);
-        const client = new OpenConnectorClient();
-        try {
-          const result = await client.executeAction({
-            actionId: pending.actionId,
-            input: pending.input,
-            connectionName: pending.connectionName,
-          });
-          
-          if (!result.success) {
-            return {
-              handled: true,
-              response: `❌ Action failed: ${result.message}`,
-            };
-          }
-          
-          return {
-            handled: true,
-            response: `✅ Action "${pending.actionId}" executed successfully.\n\nResult:\n${JSON.stringify(result.data, null, 2)}`,
-          };
-        } catch (err) {
-          return {
-            handled: true,
-            response: `❌ Error: ${err instanceof Error ? err.message : String(err)}`,
-          };
-        }
+        return executePendingAction(pending);
       }
     }
   }
-  
+
+  // The confirmation prompt tells the user to reply a plain "yes"/"אשר" —
+  // resolve that against the most recent pending confirmation.
   const isSimpleConfirm = CONFIRM_PATTERNS.some((p) => p.test(text.trim()));
   const isSimpleCancel = CANCEL_PATTERNS.some((p) => p.test(text.trim()));
-  
+
   if (isSimpleConfirm || isSimpleCancel) {
-    return { handled: false };
+    const latest = getLatestPendingConfirmation();
+    if (!latest) {
+      return { handled: false };
+    }
+    if (isSimpleCancel) {
+      cancelConfirmation(latest.confirmationId);
+      return {
+        handled: true,
+        response: `❌ Action "${latest.actionId}" cancelled.`,
+      };
+    }
+    confirmAction(latest.confirmationId);
+    return executePendingAction(latest);
   }
-  
+
   return { handled: false };
 }
 
@@ -172,12 +195,21 @@ export async function handleMessage(message: Message): Promise<void> {
     if (tracker) {
       await updateReaction(tracker, 'reading');
     }
-    const result = await handleCommand(message.body, settings);
-    if (result.handled && result.response) {
-      if (tracker) {
-        await updateReaction(tracker, 'finished');
+    try {
+      const result = await handleCommand(message.body, settings);
+      if (result.handled && result.response) {
+        if (tracker) {
+          await updateReaction(tracker, 'finished');
+        }
+        await wa.sendMessage(chatJid, result.response);
+      } else if (!result.handled) {
+        await updateReaction(tracker, 'error');
+        await wa.sendMessage(chatJid, 'פקודה לא מוכרת. שלח /help לרשימת הפקודות.');
       }
-      await wa.sendMessage(chatJid, result.response);
+    } catch (err) {
+      log.error({ err, command: message.body }, 'Command failed');
+      await updateReaction(tracker, 'error');
+      await wa.sendMessage(chatJid, `שגיאה בפקודה: ${err instanceof Error ? err.message : 'Unknown error'}`);
     }
     return;
   }

@@ -81,6 +81,19 @@ export function cancelConfirmation(confirmationId: string): boolean {
   return pendingConfirmations.delete(confirmationId);
 }
 
+/** Most recently created pending confirmation — the one a plain "yes" refers to. */
+export function getLatestPendingConfirmation():
+  | { confirmationId: string; actionId: string; input: Record<string, unknown>; connectionName?: string }
+  | null {
+  let latest: { confirmationId: string; actionId: string; input: Record<string, unknown>; connectionName?: string; createdAt: number } | null = null;
+  for (const [confirmationId, pending] of pendingConfirmations) {
+    if (!latest || pending.createdAt > latest.createdAt) {
+      latest = { confirmationId, ...pending };
+    }
+  }
+  return latest;
+}
+
 export function cleanupOldConfirmations(): void {
   const MAX_AGE_MS = 10 * 60 * 1000;
   const now = Date.now();
@@ -320,12 +333,15 @@ function createOpenConnectorTools(projectId: string): ToolDefinition[] {
           };
         }
 
+        // Only a confirmation ID that actually exists in the pending map counts —
+        // the model cannot self-confirm with `confirmed: true`. (The normal path
+        // is the WhatsApp handler resolving a plain "yes" before it reaches here.)
         const confirmationIdMatch = String(params.confirmed).match(/confirm_\d+_[a-z0-9]+/);
-        if (!confirmationIdMatch) {
+        if (!confirmationIdMatch || !confirmAction(confirmationIdMatch[0])) {
           return {
             content: [{
               type: 'text' as const,
-              text: `❌ Invalid confirmation. The model cannot self-confirm actions. User must reply with "yes" or "confirm" to the confirmation message.`,
+              text: `❌ Invalid confirmation. The model cannot self-confirm actions. Tell the user to reply "yes" (or "אשר") to the confirmation message — the reply is handled outside the model.`,
             }],
             details: { error: true, actionId: params.actionId, reason: 'invalid_confirmation' },
           };

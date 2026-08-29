@@ -1835,15 +1835,30 @@ export function getWizardHtml(settings: ReturnType<typeof loadSettings>, pairing
         e.preventDefault();
         const form = new FormData(e.target);
         const data = Object.fromEntries(form.entries());
-        
-        await fetch('/api/settings', {
-          method: 'PUT',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(data)
-        });
-        
-        await fetch('/api/setup/complete', { method: 'POST' });
-        location.href = '/';
+
+        try {
+          const settingsRes = await fetch('/api/settings', {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(data)
+          });
+          if (!settingsRes.ok) {
+            const err = await settingsRes.json().catch(() => ({}));
+            alert('שמירת ההגדרות נכשלה: ' + (err.error || settingsRes.status));
+            return;
+          }
+
+          const completeRes = await fetch('/api/setup/complete', { method: 'POST' });
+          if (!completeRes.ok) {
+            const err = await completeRes.json().catch(() => ({}));
+            alert('סיום ההגדרה נכשל: ' + (err.error || completeRes.status));
+            return;
+          }
+
+          location.href = '/';
+        } catch (err) {
+          alert('שגיאה בסיום ההגדרה: ' + err.message);
+        }
       });
     </script>
     ` : `

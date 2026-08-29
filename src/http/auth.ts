@@ -25,6 +25,7 @@ const pendingLogins = new Map<string, {
   loginPromise: Promise<unknown>;
   manualCodeResolver: ((code: string) => void) | null;
   authorizeUrl: string | null;
+  failedError?: string;
 }>();
 
 async function getRuntime(): Promise<ModelRuntime> {
@@ -104,9 +105,12 @@ export async function resolveActiveModel(settingsModel: string): Promise<ModelRe
     };
   }
   
+  // split('/') always yields a first element, so a bare model name ("gpt-4o")
+  // must go through extractProviderFromModelId, not be treated as a provider.
+  const hasProviderPrefix = settingsModel.includes('/');
   const [providerId, ...modelParts] = settingsModel.split('/');
-  const modelId = modelParts.join('/') || settingsModel;
-  const targetProvider = providerId ?? extractProviderFromModelId(settingsModel);
+  const modelId = hasProviderPrefix ? modelParts.join('/') : settingsModel;
+  const targetProvider = hasProviderPrefix ? providerId! : extractProviderFromModelId(settingsModel);
   
   const hasProviderCredential = await providerHasLiveCredential(targetProvider);
 
@@ -240,14 +244,27 @@ export async function listProviders(): Promise<ProviderInfo[]> {
 
 export async function startLogin(provider: string): Promise<LoginResult> {
   // A repeat click while a login is already pending must return the same URL —
-  // starting a second runtime.login() while one is in flight fails.
+  // starting a second runtime.login() while one is in flight fails. If the URL
+  // hasn't arrived yet (pre-URL window), wait for the in-flight attempt rather
+  // than starting a parallel one.
   const existing = pendingLogins.get(provider);
-  if (existing?.authorizeUrl) {
-    log.info({ provider }, 'Reusing pending authorize URL');
-    return {
-      authorizeUrl: existing.authorizeUrl,
-      instructions: 'השלם את ההתחברות בחלון שנפתח. אם החלון לא נפתח, הדבק את הקוד שקיבלת.',
-    };
+  if (existing && !existing.failedError) {
+    const waitStart = Date.now();
+    while (!existing.authorizeUrl && !existing.failedError && Date.now() - waitStart < 5000) {
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    if (existing.authorizeUrl) {
+      log.info({ provider }, 'Reusing pending authorize URL');
+      return {
+        authorizeUrl: existing.authorizeUrl,
+        instructions: 'השלם את ההתחברות בחלון שנפתח. אם החלון לא נפתח, הדבק את הקוד שקיבלת.',
+      };
+    }
+    pendingLogins.delete(provider);
+    return { error: existing.failedError ?? 'שגיאה בהתחלת ההתחברות' };
+  }
+  if (existing?.failedError) {
+    pendingLogins.delete(provider);
   }
 
   const runtime = await getRuntime();
@@ -291,7 +308,19 @@ export async function startLogin(provider: string): Promise<LoginResult> {
     manualCodeResolver,
     authorizeUrl,
   });
-  
+
+  // In the browser flow nothing ever awaits loginPromise — without this catch,
+  // a rejected login (denied consent, timeout) is an unhandled rejection that
+  // kills the process, and the UI polls forever with no feedback.
+  loginPromise.catch((err) => {
+    const message = err instanceof Error ? err.message : String(err);
+    log.error({ provider, err: message }, 'OAuth login attempt failed');
+    const pending = pendingLogins.get(provider);
+    if (pending && pending.loginPromise === loginPromise) {
+      pending.failedError = message;
+    }
+  });
+
   const startTime = Date.now();
   const timeout = 5000;
   
@@ -362,10 +391,11 @@ export async function getLoginStatusAsync(provider: string): Promise<LoginStatus
     }
     
     const pending = pendingLogins.get(provider);
-    if (pending) {
-      return { status: 'pending' };
+    if (pending?.failedError) {
+      pendingLogins.delete(provider);
+      return { status: 'failed', error: pending.failedError };
     }
-    
+
     return { status: 'pending' };
   } catch (err) {
     return { status: 'failed', error: err instanceof Error ? err.message : String(err) };
