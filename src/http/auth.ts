@@ -127,9 +127,9 @@ export async function resolveActiveModel(settingsModel: string): Promise<ModelRe
   
   const availableCredential = credentials[0]!;
   const availableProvider = availableCredential.providerId;
-  
+
   const models = runtime.getModels(availableProvider);
-  const defaultModel = models[0];
+  const defaultModel = pickDefaultModel(availableProvider, models);
   
   if (!defaultModel) {
     return {
@@ -160,10 +160,25 @@ export async function resolveActiveModel(settingsModel: string): Promise<ModelRe
   };
 }
 
+// First-in-catalog is not always usable: e.g. gpt-5.3-codex-spark is rejected
+// for ChatGPT-account Codex logins. Prefer known-good defaults per provider.
+const PREFERRED_DEFAULT_MODELS: Record<string, string[]> = {
+  'openai-codex': ['gpt-5.3-codex', 'gpt-5.2-codex', 'gpt-5.1-codex', 'gpt-5-codex'],
+  'anthropic': ['claude-fable-5', 'claude-opus-5', 'claude-sonnet-5'],
+};
+
+function pickDefaultModel<T extends { id: string }>(providerId: string, models: T[]): T | undefined {
+  for (const preferred of PREFERRED_DEFAULT_MODELS[providerId] ?? []) {
+    const match = models.find((m) => m.id === preferred);
+    if (match) return match;
+  }
+  return models.find((m) => !m.id.includes('spark')) ?? models[0];
+}
+
 export async function getProviderDefaultModel(providerId: string): Promise<string | undefined> {
   const runtime = await getRuntime();
   const models = runtime.getModels(providerId);
-  const defaultModel = models[0];
+  const defaultModel = pickDefaultModel(providerId, models);
   return defaultModel ? `${providerId}/${defaultModel.id}` : undefined;
 }
 
