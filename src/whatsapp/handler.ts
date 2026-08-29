@@ -14,7 +14,14 @@ import {
   confirmAction,
   cancelConfirmation,
   cleanupOldConfirmations,
+  checkCredentialsBeforePrompt,
+  recreateSessionAfterCredentialChange,
+  CredentialError,
 } from '../agent/session.ts';
+import { 
+  listRuntimeCredentials,
+  resolveActiveModel,
+} from '../http/auth.ts';
 import { 
   type ReactionState, 
   createReactionTracker, 
@@ -283,14 +290,28 @@ _שלח הודעה לעצמך כדי לדבר עם הסוכן_`,
       const token = getActiveConnectorToken(settings);
       const connectorHealth = await checkConnectorHealth();
       
+      const credentials = await listRuntimeCredentials();
+      const modelResolution = await resolveActiveModel(settings.model);
+      
+      const aiProviders = credentials.length > 0 
+        ? credentials.map(c => `${c.providerId} (${c.type})`).join(', ')
+        : 'לא מחובר';
+      
+      const modelStatus = modelResolution.valid 
+        ? `✅ ${modelResolution.modelId}` 
+        : modelResolution.model
+          ? `⚠️ ${modelResolution.modelId} (התאמה אוטומטית)`
+          : `❌ ${settings.model} (חסר ספק)`;
+      
       return {
         handled: true,
         response: `*סטטוס מערכת*
 
 📱 WhatsApp: ${wa.isConnected() ? '✅ מחובר' : '❌ מנותק'}
+🤖 ספקי AI: ${credentials.length > 0 ? '✅ ' + aiProviders : '❌ לא מחובר'}
+🧠 מודל: ${modelStatus}
 🔌 Open Connector: ${connectorHealth ? '✅ תקין' : '❌ לא זמין'}
 📁 פרויקט פעיל: ${settings.activeProject}
-🔑 מצב מפתחות: ${settings.apiKeyMode === 'shared' ? 'משותף' : 'לפי פרויקט'}
 🔐 טוקן OC: ${token ? '✅ מוגדר' : '❌ חסר'}`,
       };
     }
@@ -336,32 +357,6 @@ _שלח הודעה לעצמך כדי לדבר עם הסוכן_`,
       return {
         handled: true,
         response: `*פרויקטים*\n\n${list}\n\n🔑 = יש טוקן Open Connector לפרויקט`,
-      };
-    }
-
-    case 'mode': {
-      if (args.length === 0) {
-        return {
-          handled: true,
-          response: `מצב מפתחות API: *${settings.apiKeyMode}*\n\nלשינוי: /mode shared או /mode per-project\n\n*shared* - טוקן אחד לכל הפרויקטים\n*per-project* - טוקן נפרד לכל פרויקט`,
-        };
-      }
-      
-      const mode = args[0] as 'shared' | 'per-project';
-      if (mode !== 'shared' && mode !== 'per-project') {
-        return {
-          handled: true,
-          response: '❌ מצב לא תקין. השתמש ב: shared או per-project',
-        };
-      }
-      
-      updateSettings({ apiKeyMode: mode });
-      
-      clearSession(settings.activeProject);
-      
-      return {
-        handled: true,
-        response: `✅ מצב מפתחות שונה ל: *${mode}*\n\n_Pi session יאותחל מחדש בהודעה הבאה._`,
       };
     }
 
@@ -436,18 +431,25 @@ _היכנס לממשק הניהול לשינוי הגדרות_`,
     }
 
     case 'login': {
-      const domain = process.env['DOMAIN'] ?? 'localhost';
-      const protocol = process.env['NODE_ENV'] === 'production' ? 'https' : 'http';
-      const dashboardUrl = `${protocol}://${domain}/`;
+      const credentials = await listRuntimeCredentials();
+      
+      if (credentials.length > 0) {
+        const providers = credentials.map(c => `✅ ${c.providerId} (${c.type})`).join('\n');
+        return {
+          handled: true,
+          response: `*ספקי AI מחוברים*
+
+${providers}
+
+_לניהול חיבורים - היכנס להגדרות ב-Web UI_`,
+        };
+      }
       
       return {
         handled: true,
-        response: `*התחברות לספק AI*
+        response: `*לא מחובר ספק AI*
 
-היכנס לממשק הניהול להתחברות:
-${dashboardUrl}
-
-*ספקים נתמכים:*
+היכנס להגדרות ב-Web UI וחבר ספק:
 - Anthropic (Claude Pro/Max)
 - OpenAI (ChatGPT Plus/Pro)
 
@@ -476,7 +478,31 @@ async function processWithPi(
 ): Promise<string | null> {
   await updateReaction(tracker, 'processing');
 
-  log.info({ projectId: settings.activeProject, message: message.body.slice(0, 50) }, 'Processing with Pi session');
+  const credentialCheck = await checkCredentialsBeforePrompt();
+  
+  if (!credentialCheck.model) {
+    log.warn({ error: credentialCheck.error }, 'No AI provider connected');
+    return `❌ לא מחובר ספק AI.\n\nהיכנס להגדרות ב-Web UI וחבר ספק AI (Claude, ChatGPT).\n\n_ההתחברות מתבצעת דרך OAuth - ללא צורך ב-API key_`;
+  }
+  
+  if (!credentialCheck.valid) {
+    log.info(
+      { 
+        originalModel: settings.model, 
+        resolvedModel: credentialCheck.modelId,
+        error: credentialCheck.error 
+      },
+      'Model auto-adjusted due to credential mismatch'
+    );
+    
+    try {
+      await recreateSessionAfterCredentialChange(settings.activeProject);
+    } catch (err) {
+      log.error({ err }, 'Failed to recreate session after model adjustment');
+    }
+  }
+
+  log.info({ projectId: settings.activeProject, message: message.body.slice(0, 50), model: credentialCheck.modelId }, 'Processing with Pi session');
 
   try {
     const response = await runPromptWithCallbacks(
@@ -518,6 +544,16 @@ async function processWithPi(
     return response;
   } catch (err) {
     log.error({ err }, 'Pi session error');
+    
+    if (err instanceof CredentialError) {
+      return `❌ ${err.message}\n\nהיכנס להגדרות ב-Web UI לחיבור מחדש.`;
+    }
+    
+    const errorMessage = err instanceof Error ? err.message : String(err);
+    if (errorMessage.includes('No API key') || errorMessage.includes('auth') || errorMessage.includes('credential')) {
+      return `❌ בעיית אימות ספק AI.\n\nהיכנס להגדרות ב-Web UI לחיבור מחדש.\n\n_שגיאה: ${errorMessage}_`;
+    }
+    
     throw err;
   }
 }

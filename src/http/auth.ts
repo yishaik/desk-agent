@@ -8,6 +8,19 @@ const log = createChildLogger('auth');
 
 let sharedRuntime: ModelRuntime | null = null;
 
+export interface CredentialInfo {
+  providerId: string;
+  type: 'api_key' | 'oauth';
+}
+
+export interface ModelResolution {
+  valid: boolean;
+  model: ReturnType<ModelRuntime['getModel']>;
+  modelId: string;
+  providerId: string;
+  error?: string;
+}
+
 const pendingLogins = new Map<string, {
   loginPromise: Promise<unknown>;
   manualCodeResolver: ((code: string) => void) | null;
@@ -37,6 +50,121 @@ async function getRuntime(): Promise<ModelRuntime> {
 
   sharedRuntime = runtime;
   return runtime;
+}
+
+export async function getSharedRuntime(): Promise<ModelRuntime> {
+  return getRuntime();
+}
+
+export function clearRuntimeCache(): void {
+  sharedRuntime = null;
+  log.info('Runtime cache cleared');
+}
+
+export async function listRuntimeCredentials(): Promise<readonly CredentialInfo[]> {
+  const runtime = await getRuntime();
+  return runtime.listCredentials();
+}
+
+export async function providerHasLiveCredential(providerId: string): Promise<boolean> {
+  const runtime = await getRuntime();
+  try {
+    const credentials = await runtime.listCredentials();
+    const hasCredential = credentials.some(c => c.providerId === providerId);
+    if (!hasCredential) return false;
+    
+    const authCheck = await runtime.checkAuth(providerId);
+    return !!authCheck;
+  } catch (err) {
+    log.debug({ err, providerId }, 'Error checking provider credential');
+    return false;
+  }
+}
+
+function extractProviderFromModelId(modelId: string): string {
+  if (modelId.includes('/')) {
+    return modelId.split('/')[0]!;
+  }
+  if (modelId.startsWith('claude')) return 'anthropic';
+  if (modelId.startsWith('gpt') || modelId.startsWith('o1') || modelId.startsWith('o3')) return 'openai-codex';
+  return 'anthropic';
+}
+
+export async function resolveActiveModel(settingsModel: string): Promise<ModelResolution> {
+  const runtime = await getRuntime();
+  const credentials = await runtime.listCredentials();
+  
+  if (credentials.length === 0) {
+    return {
+      valid: false,
+      model: undefined,
+      modelId: settingsModel,
+      providerId: extractProviderFromModelId(settingsModel),
+      error: 'No AI provider connected. Please connect in Settings.',
+    };
+  }
+  
+  const [providerId, ...modelParts] = settingsModel.split('/');
+  const modelId = modelParts.join('/') || settingsModel;
+  const targetProvider = providerId ?? extractProviderFromModelId(settingsModel);
+  
+  const hasProviderCredential = await providerHasLiveCredential(targetProvider);
+  
+  if (hasProviderCredential) {
+    const model = runtime.getModel(targetProvider, modelId) ??
+                  runtime.getModel(targetProvider, settingsModel);
+    
+    if (model) {
+      log.debug({ providerId: targetProvider, modelId: model.id }, 'Resolved model from settings');
+      return {
+        valid: true,
+        model,
+        modelId: `${targetProvider}/${model.id}`,
+        providerId: targetProvider,
+      };
+    }
+  }
+  
+  const availableCredential = credentials[0]!;
+  const availableProvider = availableCredential.providerId;
+  
+  const models = runtime.getModels(availableProvider);
+  const defaultModel = models[0];
+  
+  if (!defaultModel) {
+    return {
+      valid: false,
+      model: undefined,
+      modelId: settingsModel,
+      providerId: targetProvider,
+      error: `No models available for ${availableProvider}. Try reconnecting in Settings.`,
+    };
+  }
+  
+  log.warn(
+    { 
+      settingsModel, 
+      targetProvider, 
+      availableProvider, 
+      resolvedModel: `${availableProvider}/${defaultModel.id}` 
+    },
+    'Model/credential mismatch - using available provider default'
+  );
+  
+  return {
+    valid: false,
+    model: defaultModel,
+    modelId: `${availableProvider}/${defaultModel.id}`,
+    providerId: availableProvider,
+    error: `Model "${settingsModel}" requires ${targetProvider} credentials. Using ${availableProvider}/${defaultModel.id} instead.`,
+  };
+}
+
+export async function getProviderDefaultModel(providerId: string): Promise<string | undefined> {
+  const runtime = await getRuntime();
+  const models = runtime.getModels(providerId);
+  const defaultModel = models[0];
+  return defaultModel ? `${providerId}/${defaultModel.id}` : undefined;
 }
 
 export interface ProviderInfo {
