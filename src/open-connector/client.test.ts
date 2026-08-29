@@ -125,3 +125,128 @@ describe('Token resolution in handler', () => {
     expect(getActiveConnectorToken(updatedSettings)).toBe('client-b-token');
   });
 });
+
+describe('API Path Correctness', () => {
+  it('listProviders should use /v1/providers not /v1/apps', async () => {
+    vi.resetModules();
+    
+    const { OpenConnectorClient } = await import('./client.ts');
+    
+    const client = new OpenConnectorClient();
+    
+    const listProvidersSource = client.listProviders.toString();
+    expect(listProvidersSource).toContain('/v1/providers');
+    expect(listProvidersSource).not.toMatch(/['"]\/v1\/apps['"]/);
+  });
+
+  it('listConnections should use /api/connections', async () => {
+    vi.resetModules();
+    
+    const { OpenConnectorClient } = await import('./client.ts');
+    
+    const client = new OpenConnectorClient();
+    
+    const listConnectionsSource = client.listConnections.toString();
+    expect(listConnectionsSource).toContain('/api/connections');
+  });
+
+  it('startOAuth should use /api/oauth/authorizations', async () => {
+    vi.resetModules();
+    
+    const { OpenConnectorClient } = await import('./client.ts');
+    
+    const client = new OpenConnectorClient();
+    
+    const startOAuthSource = client.startOAuth.toString();
+    expect(startOAuthSource).toContain('/api/oauth/authorizations');
+  });
+
+  it('disconnectService should use DELETE /api/connections/:service', async () => {
+    vi.resetModules();
+    
+    const { OpenConnectorClient } = await import('./client.ts');
+    
+    const client = new OpenConnectorClient();
+    
+    const disconnectServiceSource = client.disconnectService.toString();
+    expect(disconnectServiceSource).toContain('/api/connections/');
+    expect(disconnectServiceSource).toContain('DELETE');
+  });
+
+  it('listConnectedApps should use /v1/apps for connected apps', async () => {
+    vi.resetModules();
+    
+    const { OpenConnectorClient } = await import('./client.ts');
+    
+    const client = new OpenConnectorClient();
+    
+    const listConnectedAppsSource = client.listConnectedApps.toString();
+    expect(listConnectedAppsSource).toContain('/v1/apps');
+  });
+
+  it('listActions should handle both raw array and {success,data} responses', async () => {
+    vi.resetModules();
+    
+    const { OpenConnectorClient } = await import('./client.ts');
+    
+    const client = new OpenConnectorClient();
+    
+    const listActionsSource = client.listActions.toString();
+    expect(listActionsSource).toContain('Array.isArray');
+    expect(listActionsSource).toContain('/v1/actions');
+  });
+
+  it('disconnectService should accept connectionName parameter', async () => {
+    vi.resetModules();
+    
+    const { OpenConnectorClient } = await import('./client.ts');
+    
+    const client = new OpenConnectorClient();
+    
+    const disconnectServiceSource = client.disconnectService.toString();
+    expect(disconnectServiceSource).toContain('connectionName');
+    expect(disconnectServiceSource).toContain('?connectionName=');
+  });
+});
+
+describe('isRealConnection helper', () => {
+  it('identifies oauth2 as real connection', async () => {
+    vi.resetModules();
+    
+    const { isRealConnection } = await import('./client.ts');
+    
+    expect(isRealConnection({ service: 'gmail', connectionName: 'default', authType: 'oauth2' })).toBe(true);
+  });
+
+  it('identifies api_key as real connection', async () => {
+    vi.resetModules();
+    
+    const { isRealConnection } = await import('./client.ts');
+    
+    expect(isRealConnection({ service: 'openai', connectionName: 'default', authType: 'api_key' })).toBe(true);
+  });
+
+  it('rejects no_auth as NOT real', async () => {
+    vi.resetModules();
+    
+    const { isRealConnection } = await import('./client.ts');
+    
+    expect(isRealConnection({ service: 'arxiv', connectionName: 'default', authType: 'no_auth' })).toBe(false);
+  });
+
+  it('rejects virtual:true as NOT real', async () => {
+    vi.resetModules();
+    
+    const { isRealConnection } = await import('./client.ts');
+    
+    expect(isRealConnection({ service: 'test', connectionName: 'default', authType: 'oauth2', virtual: true })).toBe(false);
+  });
+
+  it('rejects virtual no_auth catalog providers', async () => {
+    vi.resetModules();
+    
+    const { isRealConnection } = await import('./client.ts');
+    
+    expect(isRealConnection({ service: 'wikipedia', connectionName: 'default', authType: 'no_auth', virtual: true })).toBe(false);
+  });
+});

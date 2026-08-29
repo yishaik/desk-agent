@@ -7,7 +7,7 @@ import {
 } from '@earendil-works/pi-coding-agent';
 import { Type, type Static, type TObject, type TString, type TOptional, type TRecord, type TBoolean, type TUnknown } from 'typebox';
 import { createChildLogger } from '../core/logger.ts';
-import { loadSettings, getActiveConnectorToken, updateSettings } from '../core/settings.ts';
+import { loadSettings, getActiveConnectorToken, updateSettings, isActionDisabled } from '../core/settings.ts';
 import { config } from '../core/config.ts';
 import { OpenConnectorClient } from '../open-connector/client.ts';
 import { join } from 'node:path';
@@ -141,6 +141,45 @@ type ExecuteActionParams = Static<typeof ExecuteActionSchema>;
 const ListConnectionsSchema = Type.Object({});
 type ListConnectionsParams = Static<typeof ListConnectionsSchema>;
 
+function getDisabledServices(): Set<string> {
+  const settings = loadSettings();
+  const disabled = new Set<string>();
+  for (const svc of settings.services) {
+    if (svc.enabled === false) {
+      disabled.add(svc.id);
+    }
+  }
+  return disabled;
+}
+
+function getDisabledActions(): Map<string, Set<string>> {
+  const settings = loadSettings();
+  const disabledMap = new Map<string, Set<string>>();
+  for (const svc of settings.services) {
+    if (svc.disabledActions && svc.disabledActions.length > 0) {
+      disabledMap.set(svc.id, new Set(svc.disabledActions));
+    }
+  }
+  return disabledMap;
+}
+
+function isServiceEnabled(serviceId: string): boolean {
+  const settings = loadSettings();
+  const svc = settings.services.find((s) => s.id === serviceId);
+  return svc?.enabled !== false;
+}
+
+function isActionEnabled(actionId: string): boolean {
+  const serviceId = actionId.split('.')[0];
+  if (!serviceId) return true;
+  
+  if (!isServiceEnabled(serviceId)) {
+    return false;
+  }
+  
+  return !isActionDisabled(serviceId, actionId);
+}
+
 function createOpenConnectorTools(projectId: string): ToolDefinition[] {
   const getClient = () => new OpenConnectorClient(projectId);
 
@@ -151,11 +190,26 @@ function createOpenConnectorTools(projectId: string): ToolDefinition[] {
     parameters: SearchActionsSchema,
     async execute(toolCallId, params: SearchActionsParams, signal, onUpdate, ctx) {
       const client = getClient();
+      const disabledServices = getDisabledServices();
+      const disabledActions = getDisabledActions();
       try {
         const actions = await client.searchActions(params.query);
-        const filtered = params.service
-          ? actions.filter((a) => a.service === params.service)
-          : actions;
+        let filtered = actions.filter((a) => {
+          if (disabledServices.has(a.service)) return false;
+          const svcDisabled = disabledActions.get(a.service);
+          if (svcDisabled?.has(a.id)) return false;
+          return true;
+        });
+        
+        if (params.service) {
+          if (disabledServices.has(params.service)) {
+            return {
+              content: [{ type: 'text' as const, text: `Service "${params.service}" is currently disabled.` }],
+              details: { query: params.query, resultCount: 0, disabled: true },
+            };
+          }
+          filtered = filtered.filter((a) => a.service === params.service);
+        }
 
         if (filtered.length === 0) {
           return {
@@ -190,6 +244,18 @@ function createOpenConnectorTools(projectId: string): ToolDefinition[] {
     description: 'Get detailed documentation and input schema for an action before executing it.',
     parameters: GetActionGuideSchema,
     async execute(toolCallId, params: GetActionGuideParams, signal, onUpdate, ctx) {
+      if (!isActionEnabled(params.actionId)) {
+        const serviceId = params.actionId.split('.')[0];
+        const isServiceDisabled = serviceId && !isServiceEnabled(serviceId);
+        const msg = isServiceDisabled
+          ? `Service "${serviceId}" is currently disabled.`
+          : `Action "${params.actionId}" is currently disabled.`;
+        return {
+          content: [{ type: 'text' as const, text: msg }],
+          details: { actionId: params.actionId, disabled: true },
+        };
+      }
+
       const client = getClient();
       try {
         const guide = await client.getActionGuide(params.actionId);
@@ -212,6 +278,18 @@ function createOpenConnectorTools(projectId: string): ToolDefinition[] {
     description: 'Execute an Open Connector action. For send/create/delete actions, user must reply to confirm the action first.',
     parameters: ExecuteActionSchema,
     async execute(toolCallId, params: ExecuteActionParams, signal, onUpdate, ctx) {
+      if (!isActionEnabled(params.actionId)) {
+        const serviceId = params.actionId.split('.')[0];
+        const isServiceDisabled = serviceId && !isServiceEnabled(serviceId);
+        const msg = isServiceDisabled
+          ? `❌ Service "${serviceId}" is currently disabled. Enable it in Settings to use this action.`
+          : `❌ Action "${params.actionId}" is currently disabled. Enable it in Settings to use this action.`;
+        return {
+          content: [{ type: 'text' as const, text: msg }],
+          details: { actionId: params.actionId, disabled: true },
+        };
+      }
+
       if (requiresConfirmation(params.actionId)) {
         if (!params.confirmed) {
           const confirmationId = generateConfirmationId();
@@ -285,23 +363,33 @@ function createOpenConnectorTools(projectId: string): ToolDefinition[] {
     parameters: ListConnectionsSchema,
     async execute(toolCallId, params: ListConnectionsParams, signal, onUpdate, ctx) {
       const client = getClient();
+      const disabledServices = getDisabledServices();
       try {
         const connections = await client.listConnections();
+        const enabledConnections = connections.filter((c) => !disabledServices.has(c.service));
 
-        if (connections.length === 0) {
+        if (enabledConnections.length === 0) {
+          const hasDisabled = connections.length > 0;
+          const msg = hasDisabled
+            ? 'No enabled services connected. Some services are disabled in Settings.'
+            : 'No services connected yet. Configure connections in the Open Connector console.';
           return {
-            content: [{ type: 'text' as const, text: 'No services connected yet. Configure connections in the Open Connector console.' }],
-            details: { connectionCount: 0 },
+            content: [{ type: 'text' as const, text: msg }],
+            details: { connectionCount: 0, disabledCount: connections.length - enabledConnections.length },
           };
         }
 
-        const list = connections.map((c) =>
+        const list = enabledConnections.map((c) =>
           `- **${c.service}** (${c.connectionName}): ${c.identity?.label ?? c.authType}`
         ).join('\n');
 
+        const disabledNote = disabledServices.size > 0 
+          ? `\n\n_${disabledServices.size} service(s) disabled in Settings._`
+          : '';
+
         return {
-          content: [{ type: 'text' as const, text: `Connected services:\n\n${list}` }],
-          details: { connectionCount: connections.length },
+          content: [{ type: 'text' as const, text: `Connected services:\n\n${list}${disabledNote}` }],
+          details: { connectionCount: enabledConnections.length, disabledCount: disabledServices.size },
         };
       } catch (err) {
         return {

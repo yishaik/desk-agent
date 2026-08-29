@@ -14,10 +14,15 @@ import {
   setApiKeyMode,
   markSetupComplete,
   isSetupRequired,
+  acknowledgeAdminToken,
+  isAdminTokenAcknowledged,
+  addService,
+  removeService,
+  setActionEnabled,
 } from '../core/settings.ts';
 import { listProjects, createProject, getProject } from '../core/memory.ts';
 import { getWhatsAppClient } from '../whatsapp/client.ts';
-import { createClient } from '../open-connector/client.ts';
+import { createClient, isRealConnection } from '../open-connector/client.ts';
 
 const log = createChildLogger('http');
 
@@ -318,7 +323,8 @@ addRoute('GET', '/api/services', async (req, res) => {
       connector.listConnections(),
     ]);
 
-    const connectionMap = new Map(connections.map((c) => [c.service, c]));
+    const realConnections = connections.filter(isRealConnection);
+    const connectionMap = new Map(realConnections.map((c) => [c.service, c]));
 
     const data = providers.map((p) => {
       const conn = connectionMap.get(p.id);
@@ -363,6 +369,14 @@ addRoute('POST', '/api/setup/complete', async (req, res) => {
   sendJson(res, { success: true });
 });
 
+function getConsoleUrl(): string {
+  const origin = config.connectorOrigin;
+  if (config.isProduction && origin.includes('localhost')) {
+    throw new Error('CONNECTOR_ORIGIN must be set to a public URL in production');
+  }
+  return origin;
+}
+
 addRoute('GET', '/api/connector/status', async (req, res) => {
   if (!isAuthenticated(req)) {
     sendError(res, 'Unauthorized', 401);
@@ -375,13 +389,14 @@ addRoute('GET', '/api/connector/status', async (req, res) => {
   try {
     const healthy = await connector.checkHealth();
     const connections = healthy ? await connector.listConnections() : [];
-
+    const realConnections = connections.filter(isRealConnection);
     sendJson(res, {
       success: true,
       data: {
         healthy,
         url: config.openConnectorUrl,
-        connectionCount: connections.length,
+        consoleUrl: getConsoleUrl(),
+        connectionCount: realConnections.length,
       },
     });
   } catch (err) {
@@ -390,6 +405,7 @@ addRoute('GET', '/api/connector/status', async (req, res) => {
       data: {
         healthy: false,
         url: config.openConnectorUrl,
+        consoleUrl: getConsoleUrl(),
         connectionCount: 0,
       },
     });
@@ -412,13 +428,14 @@ addRoute('GET', '/api/connector/onboarding', async (req, res) => {
     healthy = await connector.checkHealth();
     if (healthy) {
       const connections = await connector.listConnections();
-      connectionCount = connections.length;
+      const realConnections = connections.filter(isRealConnection);
+      connectionCount = realConnections.length;
     }
   } catch {
     healthy = false;
   }
 
-  const consoleUrl = config.connectorOrigin;
+  const consoleUrl = getConsoleUrl();
   const hasAdminToken = !!config.connectorAdminToken;
   const acknowledged = settings.connectorAdminTokenAcknowledged;
 
@@ -451,6 +468,430 @@ addRoute('POST', '/api/connector/ack-admin-token', async (req, res) => {
   updateSettings({ connectorAdminTokenAcknowledged: true });
   sendJson(res, { success: true });
 });
+
+interface ServiceInfo {
+  id: string;
+  name: string;
+  description?: string;
+  authTypes: string[];
+  isConnected: boolean;
+  identity?: string;
+}
+
+addRoute('GET', '/api/connector/services', async (req, res) => {
+  if (!isAuthenticated(req)) {
+    sendError(res, 'Unauthorized', 401);
+    return;
+  }
+
+  const settings = loadSettings();
+  const connector = createClient(settings.activeProject);
+
+  try {
+    const [providers, connections] = await Promise.all([
+      connector.listProviders(),
+      connector.listConnections(),
+    ]);
+
+    const realConnections = connections.filter(isRealConnection);
+    const connectionMap = new Map(realConnections.map((c) => [c.service, c]));
+
+    const data: ServiceInfo[] = providers.map((p) => {
+      const conn = connectionMap.get(p.id);
+      return {
+        id: p.id,
+        name: p.displayName,
+        description: p.description,
+        authTypes: p.authTypes,
+        isConnected: !!conn,
+        identity: conn?.identity?.label ?? conn?.identity?.email,
+      };
+    });
+
+    sendJson(res, { success: true, data });
+  } catch (err) {
+    log.error({ err }, 'Failed to fetch connector services');
+    sendError(res, 'Failed to fetch services', 500);
+  }
+});
+
+interface ToolInfo {
+  id: string;
+  hebrewName: string;
+  hebrewDescription: string;
+  icon: string;
+  serviceId: string;
+  identity?: string;
+  enabled: boolean;
+}
+
+const SERVICE_HEBREW_OVERLAY: Record<string, { name: string; description: string; icon: string }> = {
+  gmail: {
+    name: 'Gmail',
+    description: 'קריאת ושליחת מיילים',
+    icon: '📧',
+  },
+  googlecalendar: {
+    name: 'יומן',
+    description: 'ניהול אירועים ופגישות',
+    icon: '📅',
+  },
+  slack: {
+    name: 'Slack',
+    description: 'הודעות וערוצים',
+    icon: '💬',
+  },
+  notion: {
+    name: 'Notion',
+    description: 'מסמכים ומאגרי מידע',
+    icon: '📝',
+  },
+  github: {
+    name: 'GitHub',
+    description: 'ניהול קוד ופרויקטים',
+    icon: '🐙',
+  },
+  linear: {
+    name: 'Linear',
+    description: 'ניהול משימות',
+    icon: '📋',
+  },
+};
+
+function getDefaultIcon(): string {
+  return '🔌';
+}
+
+addRoute('GET', '/api/connector/tools', async (req, res) => {
+  if (!isAuthenticated(req)) {
+    sendError(res, 'Unauthorized', 401);
+    return;
+  }
+
+  const settings = loadSettings();
+  const connector = createClient(settings.activeProject);
+  const serviceConfigMap = new Map(settings.services.map((s) => [s.id, s]));
+
+  try {
+    const connections = await connector.listConnections();
+    const realConnections = connections.filter(isRealConnection);
+    
+    const tools: ToolInfo[] = realConnections.map((conn) => {
+      const serviceId = conn.service;
+      const overlay = SERVICE_HEBREW_OVERLAY[serviceId];
+      const serviceConfig = serviceConfigMap.get(serviceId);
+      
+      return {
+        id: serviceId,
+        hebrewName: overlay?.name ?? serviceId,
+        hebrewDescription: overlay?.description ?? '',
+        icon: overlay?.icon ?? getDefaultIcon(),
+        serviceId,
+        identity: conn.identity?.label ?? conn.identity?.email,
+        enabled: serviceConfig?.enabled ?? true,
+      };
+    });
+
+    sendJson(res, { success: true, data: tools });
+  } catch (err) {
+    log.error({ err }, 'Failed to fetch tools');
+    sendError(res, 'Failed to fetch tools', 500);
+  }
+});
+
+addRoute('PATCH', '/api/connector/tools/:service/enabled', async (req, res) => {
+  if (!isAuthenticated(req)) {
+    sendError(res, 'Unauthorized', 401);
+    return;
+  }
+
+  const url = parseUrl(req.url ?? '', true);
+  const pathParts = (url.pathname ?? '').split('/');
+  const service = pathParts[4];
+
+  if (!service) {
+    sendError(res, 'Service ID required', 400);
+    return;
+  }
+
+  let body: { enabled?: boolean };
+  try {
+    body = await parseBody<{ enabled?: boolean }>(req);
+  } catch {
+    sendError(res, 'Invalid JSON body', 400);
+    return;
+  }
+
+  if (typeof body.enabled !== 'boolean') {
+    sendError(res, 'enabled (boolean) is required', 400);
+    return;
+  }
+
+  const settings = loadSettings();
+  const connector = createClient(settings.activeProject);
+
+  try {
+    const connections = await connector.listConnections();
+    const realConnection = connections.find(
+      (c) => c.service === service && isRealConnection(c)
+    );
+
+    if (!realConnection) {
+      sendJson(res, {
+        success: false,
+        error: 'Service not found or is a no_auth virtual tool',
+      }, 404);
+      return;
+    }
+
+    const overlay = SERVICE_HEBREW_OVERLAY[service];
+    addService({
+      id: service,
+      name: overlay?.name ?? service,
+      enabled: body.enabled,
+    });
+
+    sendJson(res, {
+      success: true,
+      data: { service, enabled: body.enabled },
+    });
+  } catch (err) {
+    log.error({ err, service }, 'Failed to update tool enabled state');
+    sendError(res, 'Failed to update tool', 500);
+  }
+});
+
+addRoute('PATCH', '/api/connector/tools/:service/actions/:action/enabled', async (req, res) => {
+  if (!isAuthenticated(req)) {
+    sendError(res, 'Unauthorized', 401);
+    return;
+  }
+
+  const url = parseUrl(req.url ?? '', true);
+  const pathParts = (url.pathname ?? '').split('/');
+  const service = pathParts[4];
+  const actionEncoded = pathParts[6];
+  const action = actionEncoded ? decodeURIComponent(actionEncoded) : undefined;
+
+  if (!service || !action) {
+    sendError(res, 'Service ID and action ID required', 400);
+    return;
+  }
+
+  let body: { enabled?: boolean };
+  try {
+    body = await parseBody<{ enabled?: boolean }>(req);
+  } catch {
+    sendError(res, 'Invalid JSON body', 400);
+    return;
+  }
+
+  if (typeof body.enabled !== 'boolean') {
+    sendError(res, 'enabled (boolean) is required', 400);
+    return;
+  }
+
+  const settings = loadSettings();
+  const connector = createClient(settings.activeProject);
+
+  try {
+    const connections = await connector.listConnections();
+    const realConnection = connections.find(
+      (c) => c.service === service && isRealConnection(c)
+    );
+
+    if (!realConnection) {
+      sendJson(res, {
+        success: false,
+        error: 'Service not found or is a no_auth virtual tool',
+      }, 404);
+      return;
+    }
+
+    const actions = await connector.listActions(service);
+    const actionExists = actions.some((a) => a.id === action);
+    
+    if (!actionExists) {
+      sendJson(res, {
+        success: false,
+        error: `Action '${action}' not found for service '${service}'`,
+      }, 404);
+      return;
+    }
+
+    setActionEnabled(service, action, body.enabled);
+
+    sendJson(res, {
+      success: true,
+      data: { service, action, enabled: body.enabled },
+    });
+  } catch (err) {
+    log.error({ err, service, action }, 'Failed to update action enabled state');
+    sendError(res, 'Failed to update action', 500);
+  }
+});
+
+interface ActionInfo {
+  id: string;
+  service: string;
+  displayName: string;
+  description: string;
+  enabled: boolean;
+}
+
+addRoute('GET', '/api/connector/actions', async (req, res) => {
+  if (!isAuthenticated(req)) {
+    sendError(res, 'Unauthorized', 401);
+    return;
+  }
+
+  const url = parseUrl(req.url ?? '', true);
+  const serviceFilter = url.query['service'] as string | undefined;
+
+  const settings = loadSettings();
+  const connector = createClient(settings.activeProject);
+  
+  const disabledActionsMap = new Map<string, Set<string>>();
+  for (const svc of settings.services) {
+    if (svc.disabledActions && svc.disabledActions.length > 0) {
+      disabledActionsMap.set(svc.id, new Set(svc.disabledActions));
+    }
+  }
+
+  try {
+    const actions = await connector.listActions(serviceFilter);
+    
+    const data: ActionInfo[] = actions.map((action) => {
+      const disabledSet = disabledActionsMap.get(action.service);
+      const enabled = !disabledSet?.has(action.id);
+      return {
+        id: action.id,
+        service: action.service,
+        displayName: action.displayName,
+        description: action.description,
+        enabled,
+      };
+    });
+
+    sendJson(res, { success: true, data });
+  } catch (err) {
+    log.error({ err, service: serviceFilter }, 'Failed to fetch actions');
+    sendError(res, 'Failed to fetch actions', 500);
+  }
+});
+
+addRoute('POST', '/api/connector/services/:service/connect', async (req, res) => {
+  if (!isAuthenticated(req)) {
+    sendError(res, 'Unauthorized', 401);
+    return;
+  }
+
+  const url = parseUrl(req.url ?? '', true);
+  const pathParts = (url.pathname ?? '').split('/');
+  const service = pathParts[4];
+
+  if (!service) {
+    sendError(res, 'Service ID required', 400);
+    return;
+  }
+
+  const settings = loadSettings();
+  const connector = createClient(settings.activeProject);
+  const consoleUrl = getConsoleUrl();
+
+  try {
+    const providers = await connector.listProviders();
+    const provider = providers.find((p) => p.id === service);
+    
+    if (!provider) {
+      sendJson(res, {
+        success: false,
+        error: `Service '${service}' not found in Open Connector catalog`,
+        consoleUrl,
+      }, 404);
+      return;
+    }
+
+    if (!provider.authTypes.includes('oauth2')) {
+      const authTypesDisplay = provider.authTypes.length > 0 
+        ? provider.authTypes.join(', ') 
+        : 'none';
+      sendJson(res, {
+        success: false,
+        error: `Service '${service}' does not support OAuth2 (supports: ${authTypesDisplay}). Configure it in Open Connector console.`,
+        consoleUrl,
+        authTypes: provider.authTypes,
+      }, 400);
+      return;
+    }
+
+    const result = await connector.startOAuth(service);
+    sendJson(res, {
+      success: true,
+      data: {
+        authorizationUrl: result.authorizationUrl,
+      },
+    });
+  } catch (err) {
+    const errorMessage = err instanceof Error ? err.message : 'Unknown error';
+    log.error({ err, service }, 'Failed to start OAuth');
+    
+    if (errorMessage.includes('OAuth') || errorMessage.includes('client') || errorMessage.includes('config')) {
+      sendJson(res, {
+        success: false,
+        error: `OAuth not configured for '${service}'. Configure OAuth credentials in Open Connector console.`,
+        consoleUrl,
+      }, 400);
+      return;
+    }
+    
+    sendError(res, `Failed to start OAuth: ${errorMessage}`, 500);
+  }
+});
+
+addRoute('DELETE', '/api/connector/services/:service', async (req, res) => {
+  if (!isAuthenticated(req)) {
+    sendError(res, 'Unauthorized', 401);
+    return;
+  }
+
+  const url = parseUrl(req.url ?? '', true);
+  const pathParts = (url.pathname ?? '').split('/');
+  const service = pathParts[4];
+  const queryConnectionName = url.query['connectionName'] as string | undefined;
+
+  if (!service) {
+    sendError(res, 'Service ID required', 400);
+    return;
+  }
+
+  const settings = loadSettings();
+  const connector = createClient(settings.activeProject);
+
+  try {
+    const connections = await connector.listConnections();
+    
+    const targetConnection = queryConnectionName
+      ? connections.find((c) => c.service === service && c.connectionName === queryConnectionName)
+      : connections.find((c) => c.service === service && isRealConnection(c));
+
+    if (!targetConnection || !isRealConnection(targetConnection)) {
+      sendJson(res, {
+        success: false,
+        error: 'אי אפשר לנתק כלי שלא דורש התחברות',
+      }, 400);
+      return;
+    }
+
+    await connector.disconnectService(service, targetConnection.connectionName);
+    removeService(service);
+    sendJson(res, { success: true });
+  } catch (err) {
+    log.error({ err, service }, 'Failed to disconnect service');
+    sendError(res, 'Failed to disconnect service', 500);
+  }
+});
+
 
 function getLoginHtml(): string {
   return `<!DOCTYPE html>

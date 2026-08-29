@@ -16,6 +16,24 @@
         reverse_proxy connector:3000
     }
 
+    # OAuth callback from Google - must go to connector
+    handle /oauth/callback {
+        reverse_proxy connector:3000
+    }
+
+    # OAuth API routes - must go to connector BEFORE agent /api/*
+    handle /api/oauth/* {
+        reverse_proxy connector:3000
+    }
+
+    # MCP endpoint - goes to connector
+    handle /mcp {
+        reverse_proxy connector:3000
+    }
+    handle /mcp/* {
+        reverse_proxy connector:3000
+    }
+
     # Agent Web UI and API
     handle /api/* {
         reverse_proxy agent:3001

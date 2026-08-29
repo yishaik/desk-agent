@@ -3,20 +3,20 @@
   "name": "Inbox & Calendar",
   "description": "Email inbox management and calendar operations - read emails, schedule meetings, check availability",
   "version": "1.0.0",
-  "requiredServices": ["gmail", "google-calendar"],
+  "requiredServices": ["gmail", "googlecalendar"],
   "actions": [
-    "gmail.list_messages",
+    "gmail.fetch_emails",
     "gmail.get_message",
-    "gmail.search_messages",
+    "gmail.search_threads",
     "gmail.send_email",
     "gmail.create_draft",
     "gmail.list_labels",
-    "google-calendar.list_events",
-    "google-calendar.get_event",
-    "google-calendar.create_event",
-    "google-calendar.update_event",
-    "google-calendar.delete_event",
-    "google-calendar.list_calendars"
+    "googlecalendar.list_events",
+    "googlecalendar.get_event",
+    "googlecalendar.create_event",
+    "googlecalendar.update_event",
+    "googlecalendar.delete_event",
+    "googlecalendar.list_calendars"
   ],
   "prompts": {
     "inbox_summary": "Summarize my recent emails. Focus on:\n- Urgent items needing response\n- Important updates from key contacts\n- Action items mentioned\n\nGroup by priority and sender category.",
@@ -26,25 +26,25 @@
   },
   "confirmationRequired": [
     "gmail.send_email",
-    "google-calendar.create_event",
-    "google-calendar.update_event",
-    "google-calendar.delete_event"
+    "googlecalendar.create_event",
+    "googlecalendar.update_event",
+    "googlecalendar.delete_event"
   ],
   "examples": [
     {
       "user": "מה יש לי היום?",
       "assistant": "Let me check your calendar for today...",
-      "action": "google-calendar.list_events"
+      "action": "googlecalendar.list_events"
     },
     {
       "user": "יש לי מיילים חדשים?",
       "assistant": "I'll check your inbox for unread messages...",
-      "action": "gmail.list_messages"
+      "action": "gmail.fetch_emails"
     },
     {
       "user": "קבע לי פגישה מחר ב-10",
       "assistant": "I'll check your availability tomorrow at 10 AM and help create the meeting. Who should I invite?",
-      "action": "google-calendar.list_events"
+      "action": "googlecalendar.list_events"
     }
   ]
 }

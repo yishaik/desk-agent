@@ -120,6 +120,39 @@ export function removeService(serviceId: string): Settings {
   return settings;
 }
 
+export function isActionDisabled(serviceId: string, actionId: string): boolean {
+  const settings = loadSettings();
+  const svc = settings.services.find((s) => s.id === serviceId);
+  if (!svc) return false;
+  return svc.disabledActions?.includes(actionId) ?? false;
+}
+
+export function setActionEnabled(serviceId: string, actionId: string, enabled: boolean): Settings {
+  const settings = loadSettings();
+  let svc = settings.services.find((s) => s.id === serviceId);
+  
+  if (!svc) {
+    svc = { id: serviceId, name: serviceId, enabled: true, disabledActions: [] };
+    settings.services.push(svc);
+  }
+  
+  if (!svc.disabledActions) {
+    svc.disabledActions = [];
+  }
+  
+  if (enabled) {
+    svc.disabledActions = svc.disabledActions.filter((a) => a !== actionId);
+  } else {
+    if (!svc.disabledActions.includes(actionId)) {
+      svc.disabledActions.push(actionId);
+    }
+  }
+  
+  saveSettings(settings);
+  log.info({ serviceId, actionId, enabled }, 'Set action enabled state');
+  return settings;
+}
+
 export function markSetupComplete(): Settings {
   const settings = loadSettings();
   settings.setupComplete = true;
@@ -131,4 +164,17 @@ export function markSetupComplete(): Settings {
 export function isSetupRequired(): boolean {
   const settings = loadSettings();
   return !settings.setupComplete;
+}
+
+export function acknowledgeAdminToken(): Settings {
+  const settings = loadSettings();
+  settings.connectorAdminTokenAcknowledged = true;
+  saveSettings(settings);
+  log.info('Admin token acknowledged');
+  return settings;
+}
+
+export function isAdminTokenAcknowledged(): boolean {
+  const settings = loadSettings();
+  return settings.connectorAdminTokenAcknowledged;
 }
