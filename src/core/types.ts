@@ -2,6 +2,10 @@ export interface Settings {
   botName: string;
   ownerName: string;
   ownerPhone?: string;
+  businessName?: string;
+  businessDescription?: string;
+  agentVoice?: string;
+  agentBoundaries?: string;
   timezone: string;
   model: string;
   apiKeyMode: 'shared' | 'per-project';
@@ -83,6 +87,10 @@ export interface PairingState {
 export const DEFAULT_SETTINGS: Settings = {
   botName: 'Desk Agent',
   ownerName: '',
+  businessName: '',
+  businessDescription: '',
+  agentVoice: '',
+  agentBoundaries: '',
   timezone: 'UTC',
   model: 'claude-3-5-sonnet-20241022',
   apiKeyMode: 'shared',

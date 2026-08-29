@@ -127,24 +127,59 @@ export function isActionDisabled(serviceId: string, actionId: string): boolean {
   return svc.disabledActions?.includes(actionId) ?? false;
 }
 
+export function getService(serviceId: string): ServiceConfig | undefined {
+  const settings = loadSettings();
+  return settings.services.find((s) => s.id === serviceId);
+}
+
+export function setServiceEnabled(serviceId: string, enabled: boolean): Settings {
+  const settings = loadSettings();
+  const service = settings.services.find((s) => s.id === serviceId);
+  if (service) {
+    service.enabled = enabled;
+    saveSettings(settings);
+    log.info({ serviceId, enabled }, 'Set service enabled state');
+  }
+  return settings;
+}
+
+export function isActionEnabled(serviceId: string, actionId: string): boolean {
+  const settings = loadSettings();
+  const service = settings.services.find((s) => s.id === serviceId);
+  if (!service) {
+    return true;
+  }
+  if (service.enabled === false) {
+    return false;
+  }
+  const disabledActions = service.disabledActions || [];
+  return !disabledActions.includes(actionId);
+}
+
 export function setActionEnabled(serviceId: string, actionId: string, enabled: boolean): Settings {
   const settings = loadSettings();
-  let svc = settings.services.find((s) => s.id === serviceId);
+  let service = settings.services.find((s) => s.id === serviceId);
   
-  if (!svc) {
-    svc = { id: serviceId, name: serviceId, enabled: true, disabledActions: [] };
-    settings.services.push(svc);
+  if (!service) {
+    service = {
+      id: serviceId,
+      name: serviceId,
+      enabled: true,
+      disabledActions: [],
+      connectedAt: new Date().toISOString(),
+    };
+    settings.services.push(service);
   }
   
-  if (!svc.disabledActions) {
-    svc.disabledActions = [];
+  if (!service.disabledActions) {
+    service.disabledActions = [];
   }
   
   if (enabled) {
-    svc.disabledActions = svc.disabledActions.filter((a) => a !== actionId);
+    service.disabledActions = service.disabledActions.filter((a) => a !== actionId);
   } else {
-    if (!svc.disabledActions.includes(actionId)) {
-      svc.disabledActions.push(actionId);
+    if (!service.disabledActions.includes(actionId)) {
+      service.disabledActions.push(actionId);
     }
   }
   
