@@ -165,6 +165,20 @@ addRoute('GET', '/', async (req, res) => {
     return;
   }
 
+  // Entering via /?token=... must also set the session cookie, otherwise the
+  // wizard's same-origin API fetches (no query token) all get 401.
+  const queryToken = parseUrl(req.url ?? '', true).query['token'];
+  if (queryToken === config.pairToken) {
+    const isHttps = req.headers['x-forwarded-proto'] === 'https' ||
+                    req.headers.host?.startsWith('https') ||
+                    config.isProduction;
+    const securePart = isHttps ? '; Secure' : '';
+    res.setHeader(
+      'Set-Cookie',
+      `PAIR_TOKEN=${queryToken}; Path=/; HttpOnly; SameSite=Strict; Max-Age=31536000${securePart}`
+    );
+  }
+
   const settings = loadSettings();
   const wa = getWhatsAppClient();
   const pairingState = wa.getPairingState();
