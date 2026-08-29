@@ -390,8 +390,6 @@ addRoute('GET', '/api/connector/status', async (req, res) => {
     const healthy = await connector.checkHealth();
     const connections = healthy ? await connector.listConnections() : [];
     const realConnections = connections.filter(isRealConnection);
-
-    const realConnections = connections.filter(isRealConnection);
     sendJson(res, {
       success: true,
       data: {
@@ -799,7 +797,7 @@ addRoute('POST', '/api/connector/services/:service/connect', async (req, res) =>
 
   const settings = loadSettings();
   const connector = createClient(settings.activeProject);
-  const consoleUrl = getConsoleUrl(req);
+  const consoleUrl = getConsoleUrl();
 
   try {
     const providers = await connector.listProviders();
@@ -809,7 +807,7 @@ addRoute('POST', '/api/connector/services/:service/connect', async (req, res) =>
       sendJson(res, {
         success: false,
         error: `Service '${service}' not found in Open Connector catalog`,
-        ...(consoleUrl ? { consoleUrl } : {}),
+        consoleUrl,
       }, 404);
       return;
     }
@@ -821,7 +819,7 @@ addRoute('POST', '/api/connector/services/:service/connect', async (req, res) =>
       sendJson(res, {
         success: false,
         error: `Service '${service}' does not support OAuth2 (supports: ${authTypesDisplay}). Configure it in Open Connector console.`,
-        ...(consoleUrl ? { consoleUrl } : {}),
+        consoleUrl,
         authTypes: provider.authTypes,
       }, 400);
       return;
@@ -842,7 +840,7 @@ addRoute('POST', '/api/connector/services/:service/connect', async (req, res) =>
       sendJson(res, {
         success: false,
         error: `OAuth not configured for '${service}'. Configure OAuth credentials in Open Connector console.`,
-        ...(consoleUrl ? { consoleUrl } : {}),
+        consoleUrl,
       }, 400);
       return;
     }

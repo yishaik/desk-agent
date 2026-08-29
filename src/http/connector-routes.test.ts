@@ -40,13 +40,13 @@ describe('Admin Token Acknowledgment Flow', () => {
     } = await import('../core/settings.ts');
     
     let settings = loadSettings();
-    expect(settings.adminTokenAcknowledged).toBe(false);
+    expect(settings.connectorAdminTokenAcknowledged).toBe(false);
     expect(isAdminTokenAcknowledged()).toBe(false);
     
     acknowledgeAdminToken();
     
     settings = loadSettings();
-    expect(settings.adminTokenAcknowledged).toBe(true);
+    expect(settings.connectorAdminTokenAcknowledged).toBe(true);
     expect(isAdminTokenAcknowledged()).toBe(true);
   });
 
