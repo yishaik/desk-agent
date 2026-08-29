@@ -328,6 +328,34 @@ describe('Tools endpoint returns real connections only', () => {
     const realConnections = mockConnections.filter(isRealConnection);
     expect(realConnections.length).toBe(2);
   });
+
+  it('services isConnected uses real connections only', () => {
+    const mockConnections: Connection[] = [
+      { service: 'gmail', connectionName: 'default', authType: 'oauth2', identity: { label: 'user@gmail.com' } },
+      { service: 'arxiv', connectionName: 'default', authType: 'no_auth', virtual: true },
+    ];
+    
+    const mockProviders = [
+      { id: 'gmail', displayName: 'Gmail' },
+      { id: 'arxiv', displayName: 'arXiv' },
+      { id: 'slack', displayName: 'Slack' },
+    ];
+    
+    const realConnections = mockConnections.filter(isRealConnection);
+    const connectionMap = new Map(realConnections.map((c) => [c.service, c]));
+    
+    const services = mockProviders.map((p) => ({
+      id: p.id,
+      isConnected: !!connectionMap.get(p.id),
+      identity: connectionMap.get(p.id)?.identity?.label,
+    }));
+    
+    expect(services.find((s) => s.id === 'gmail')?.isConnected).toBe(true);
+    expect(services.find((s) => s.id === 'gmail')?.identity).toBe('user@gmail.com');
+    expect(services.find((s) => s.id === 'arxiv')?.isConnected).toBe(false);
+    expect(services.find((s) => s.id === 'arxiv')?.identity).toBeUndefined();
+    expect(services.find((s) => s.id === 'slack')?.isConnected).toBe(false);
+  });
 });
 
 describe('DELETE refuses no_auth services', () => {

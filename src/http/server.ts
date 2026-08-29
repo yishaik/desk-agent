@@ -320,7 +320,8 @@ addRoute('GET', '/api/services', async (req, res) => {
       connector.listConnections(),
     ]);
 
-    const connectionMap = new Map(connections.map((c) => [c.service, c]));
+    const realConnections = connections.filter(isRealConnection);
+    const connectionMap = new Map(realConnections.map((c) => [c.service, c]));
 
     const data = providers.map((p) => {
       const conn = connectionMap.get(p.id);
@@ -491,7 +492,8 @@ addRoute('GET', '/api/connector/services', async (req, res) => {
       connector.listConnections(),
     ]);
 
-    const connectionMap = new Map(connections.map((c) => [c.service, c]));
+    const realConnections = connections.filter(isRealConnection);
+    const connectionMap = new Map(realConnections.map((c) => [c.service, c]));
 
     const data: ServiceInfo[] = providers.map((p) => {
       const conn = connectionMap.get(p.id);
