@@ -8,12 +8,18 @@
         reverse_proxy connector:3000
     }
     
-    # Open Connector OAuth callback (critical for Gmail/Calendar connect)
+    # OAuth callback from Google and other providers - must go to connector FIRST
+    # Google redirect_uri is https://{DOMAIN}/oauth/callback
     handle /oauth/callback {
         reverse_proxy connector:3000
     }
     
-    # Open Connector OAuth API routes
+    # Catch any leftover OAuth paths that shouldn't hit the agent
+    handle /oauth/* {
+        reverse_proxy connector:3000
+    }
+    
+    # Open Connector OAuth API routes - must go to connector BEFORE agent /api/*
     handle /api/oauth/* {
         reverse_proxy connector:3000
     }
@@ -52,24 +58,6 @@
         reverse_proxy connector:3000
     }
 
-    # OAuth callback from Google - must go to connector
-    handle /oauth/callback {
-        reverse_proxy connector:3000
-    }
-
-    # OAuth API routes - must go to connector BEFORE agent /api/*
-    handle /api/oauth/* {
-        reverse_proxy connector:3000
-    }
-
-    # MCP endpoint - goes to connector
-    handle /mcp {
-        reverse_proxy connector:3000
-    }
-    handle /mcp/* {
-        reverse_proxy connector:3000
-    }
-
     # Agent Web UI and API
     handle /api/* {
         reverse_proxy agent:3001
@@ -100,22 +88,3 @@
         }
     }
 }
-
-# Alternative: Open Connector on separate subdomain
-# Uncomment if you prefer connector.yourdomain.com instead of /connector/
-#
-# connector.{$DOMAIN} {
-#     reverse_proxy connector:3000
-#     
-#     header {
-#         X-Content-Type-Options nosniff
-#         X-Frame-Options SAMEORIGIN
-#     }
-#     
-#     log {
-#         output file /data/connector-access.log {
-#             roll_size 10mb
-#             roll_keep 5
-#         }
-#     }
-# }
