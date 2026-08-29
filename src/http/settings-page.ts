@@ -966,7 +966,7 @@ export function getSettingsHtml(data: SettingsPageData): string {
         });
         
         if (res.ok) {
-          showToast('ההגדרות נשמרו בהצלחה');
+          showToast('נשמר והוחל');
         } else {
           showToast('שגיאה בשמירה', 'error');
         }

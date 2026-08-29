@@ -35,6 +35,7 @@ import {
 } from './auth.ts';
 import { writeIdentityFiles } from '../core/identity-files.ts';
 import { getSettingsHtml, type SettingsPageData } from './settings-page.ts';
+import { applySavedSettings, detectChangedFields } from './apply-settings.ts';
 
 const log = createChildLogger('http');
 
@@ -411,11 +412,20 @@ addRoute('PUT', '/api/settings', async (req, res) => {
   if (body.apiKeyMode !== undefined) updates.apiKeyMode = body.apiKeyMode;
   if (body.sharedConnectorToken !== undefined) updates.sharedConnectorToken = body.sharedConnectorToken;
 
+  const oldSettings = loadSettings();
+  const changedFields = detectChangedFields(oldSettings, updates);
+  
   const settings = updateSettings(updates);
   
   writeIdentityFiles(settings);
+  
+  try {
+    await applySavedSettings(settings, changedFields);
+  } catch (err) {
+    log.warn({ err }, 'Failed to apply settings to session (swallowed)');
+  }
 
-  sendJson(res, { success: true, data: { ...settings, sharedConnectorToken: '***' } });
+  sendJson(res, { success: true, applied: true, data: { ...settings, sharedConnectorToken: '***' } });
 });
 
 addRoute('GET', '/api/projects', async (req, res) => {

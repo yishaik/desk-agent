@@ -326,4 +326,10 @@ describe('getSettingsHtml', () => {
     
     expect(html).toContain('MAX_ACTIONS = 40');
   });
+
+  it('shows נשמר והוחל toast on successful save', () => {
+    const html = getSettingsHtml(createTestData());
+    
+    expect(html).toContain("showToast('נשמר והוחל')");
+  });
 });
