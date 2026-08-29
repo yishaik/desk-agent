@@ -13,9 +13,10 @@
 
 ### אפשרות א׳ - Hetzner (מומלץ)
 
-1. צור שרת CX22 (2 vCPU, 4GB RAM) - כ-$5/חודש
-2. בחר Ubuntu 22.04
-3. הוסף מפתח SSH
+1. צור שרת **CX23** (2 vCPU, 4GB RAM, IPv4) - כ-€5.99/חודש
+2. מיקום: Falkenstein או Helsinki
+3. בחר Ubuntu 22.04
+4. הוסף מפתח SSH
 
 ```bash
 # התחבר לשרת
@@ -25,13 +26,23 @@ ssh root@your-server-ip
 curl -fsSL https://get.docker.com | sh
 ```
 
-### אפשרות ב׳ - Oracle Cloud Free Tier
+### אפשרות ב׳ - חלופות אם Hetzner אזל
 
-1. צור חשבון Oracle Cloud
-2. צור VM.Standard.A1.Flex (ARM, חינמי לצמיתות)
-3. התקן Docker כמו למעלה
+אם ה-CX23 אזל במלאי, אפשרויות עם 4GB RAM:
 
-### אפשרות ג׳ - מקומי
+- **OVH VPS-1** (2027) - 2 vCPU, 4GB RAM
+- **Netcup VPS 500 G12** - 2 vCPU, 4GB RAM
+
+> ⚠️ המערכת דורשת 4GB RAM. אל תבחרו VPS עם 1GB בלבד.
+
+### אפשרות ג׳ - Kamatera (אופציונלי - לייטנסי ישראל)
+
+למי שצריך שרת בישראל:
+
+1. צור שרת Type A (2 vCPU, 4GB RAM) במיקום Tel Aviv
+2. יקר יותר מ-Hetzner אבל לייטנסי טוב יותר לישראל
+
+### אפשרות ד׳ - מקומי
 
 ```bash
 # macOS
