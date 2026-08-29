@@ -169,6 +169,51 @@ export function setServiceEnabled(serviceId: string, enabled: boolean): Settings
   return settings;
 }
 
+export function isActionEnabled(serviceId: string, actionId: string): boolean {
+  const settings = loadSettings();
+  const service = settings.services.find((s) => s.id === serviceId);
+  if (!service) {
+    return true;
+  }
+  if (service.enabled === false) {
+    return false;
+  }
+  const disabledActions = service.disabledActions || [];
+  return !disabledActions.includes(actionId);
+}
+
+export function setActionEnabled(serviceId: string, actionId: string, enabled: boolean): Settings {
+  const settings = loadSettings();
+  let service = settings.services.find((s) => s.id === serviceId);
+  
+  if (!service) {
+    service = {
+      id: serviceId,
+      name: serviceId,
+      enabled: true,
+      disabledActions: [],
+      connectedAt: new Date().toISOString(),
+    };
+    settings.services.push(service);
+  }
+  
+  if (!service.disabledActions) {
+    service.disabledActions = [];
+  }
+  
+  if (enabled) {
+    service.disabledActions = service.disabledActions.filter((a) => a !== actionId);
+  } else {
+    if (!service.disabledActions.includes(actionId)) {
+      service.disabledActions.push(actionId);
+    }
+  }
+  
+  saveSettings(settings);
+  log.info({ serviceId, actionId, enabled }, 'Set action enabled state');
+  return settings;
+}
+
 export function markSetupComplete(): Settings {
   const settings = loadSettings();
   settings.setupComplete = true;

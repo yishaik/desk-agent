@@ -499,6 +499,65 @@ export function getSettingsHtml(data: SettingsPageData): string {
       gap: 12px;
     }
     
+    .action-chip.with-switch {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      min-width: 180px;
+    }
+    
+    .action-chip.with-switch.disabled {
+      opacity: 0.5;
+    }
+    
+    .action-chip-content {
+      flex: 1;
+      min-width: 0;
+    }
+    
+    .action-switch {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      cursor: pointer;
+      flex-shrink: 0;
+    }
+    
+    .action-switch-track {
+      width: 28px;
+      height: 16px;
+      background: var(--border);
+      border-radius: 8px;
+      position: relative;
+      transition: background 0.2s;
+    }
+    
+    .action-switch-track.enabled {
+      background: var(--accent);
+    }
+    
+    .action-switch-thumb {
+      width: 12px;
+      height: 12px;
+      background: white;
+      border-radius: 50%;
+      position: absolute;
+      top: 2px;
+      right: 14px;
+      transition: right 0.2s;
+    }
+    
+    .action-switch-track.enabled .action-switch-thumb {
+      right: 2px;
+    }
+    
+    .action-switch-label {
+      font-size: 11px;
+      color: var(--text-muted);
+      min-width: 32px;
+    }
+    
     .empty-state {
       text-align: center;
       padding: 32px 16px;
@@ -1008,7 +1067,7 @@ export function getSettingsHtml(data: SettingsPageData): string {
           })
         );
         
-        const MAX_ACTIONS = 12;
+        const MAX_ACTIONS = 40;
         
         container.innerHTML = '<div class="tools-grid">' + toolsWithActions.map(tool => {
           const identityStr = tool.identity 
@@ -1044,12 +1103,25 @@ export function getSettingsHtml(data: SettingsPageData): string {
               \${displayActions.length > 0 ? \`
                 <div class="tool-card-actions-header">פעולות זמינות</div>
                 <div class="action-chips">
-                  \${displayActions.map(action => \`
-                    <div class="action-chip" title="\${escapeHtml(action.description || '')}">
-                      <div class="action-chip-title">\${escapeHtml(humanizeAction(action))}</div>
-                      \${action.description ? \`<div class="action-chip-desc">\${escapeHtml(action.description.slice(0, 60))}\${action.description.length > 60 ? '...' : ''}</div>\` : ''}
-                    </div>
-                  \`).join('')}
+                  \${displayActions.map(action => {
+                    const actionEnabled = tool.enabled && (action.enabled !== false);
+                    return \`
+                      <div class="action-chip with-switch\${actionEnabled ? '' : ' disabled'}" title="\${escapeHtml(action.description || '')}">
+                        <div class="action-chip-content">
+                          <div class="action-chip-title">\${escapeHtml(humanizeAction(action))}</div>
+                          \${action.description ? \`<div class="action-chip-desc">\${escapeHtml(action.description.slice(0, 60))}\${action.description.length > 60 ? '...' : ''}</div>\` : ''}
+                        </div>
+                        \${isRealTool ? \`
+                          <div class="action-switch" role="switch" aria-checked="\${actionEnabled}" onclick="event.stopPropagation(); toggleActionEnabled('\${escapeHtml(tool.id)}', '\${escapeHtml(action.id)}', \${!action.enabled})" \${!tool.enabled ? 'style="pointer-events: none;"' : ''}>
+                            <div class="action-switch-track\${actionEnabled ? ' enabled' : ''}">
+                              <div class="action-switch-thumb"></div>
+                            </div>
+                            <span class="action-switch-label">\${actionEnabled ? 'מופעל' : 'כבוי'}</span>
+                          </div>
+                        \` : ''}
+                      </div>
+                    \`;
+                  }).join('')}
                   \${moreCount > 0 ? \`<div class="action-chip action-more">+\${moreCount} נוספות</div>\` : ''}
                 </div>
               \` : ''}
@@ -1106,6 +1178,27 @@ export function getSettingsHtml(data: SettingsPageData): string {
         }
       } catch (err) {
         showToast('שגיאה בעדכון מצב הכלי', 'error');
+      }
+    }
+
+    async function toggleActionEnabled(serviceId, actionId, enabled) {
+      try {
+        const res = await fetch(\`/api/connector/tools/\${encodeURIComponent(serviceId)}/actions/\${encodeURIComponent(actionId)}/enabled\`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ enabled })
+        });
+        
+        const json = await res.json();
+        
+        if (json.success) {
+          showToast(enabled ? 'הפעולה הופעלה' : 'הפעולה כובתה');
+          loadTools();
+        } else {
+          showToast(json.error || 'שגיאה בעדכון מצב הפעולה', 'error');
+        }
+      } catch (err) {
+        showToast('שגיאה בעדכון מצב הפעולה', 'error');
       }
     }
 

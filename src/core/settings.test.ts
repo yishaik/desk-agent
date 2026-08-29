@@ -146,3 +146,82 @@ describe('getActiveConnectorToken', () => {
     expect(token).toBe('env-token');
   });
 });
+
+describe('isActionEnabled', () => {
+  it('returns true by default when service and action have no config', async () => {
+    vi.resetModules();
+    const { isActionEnabled } = await import('./settings.ts');
+    
+    expect(isActionEnabled('gmail', 'gmail.send_email')).toBe(true);
+  });
+
+  it('returns false when service is disabled', async () => {
+    vi.resetModules();
+    const { isActionEnabled, addService } = await import('./settings.ts');
+    
+    addService({
+      id: 'gmail',
+      name: 'Gmail',
+      enabled: false,
+    });
+    
+    expect(isActionEnabled('gmail', 'gmail.send_email')).toBe(false);
+  });
+
+  it('returns false when action is in disabledActions', async () => {
+    vi.resetModules();
+    const { isActionEnabled, addService } = await import('./settings.ts');
+    
+    addService({
+      id: 'gmail',
+      name: 'Gmail',
+      enabled: true,
+      disabledActions: ['gmail.send_email'],
+    });
+    
+    expect(isActionEnabled('gmail', 'gmail.send_email')).toBe(false);
+    expect(isActionEnabled('gmail', 'gmail.fetch_emails')).toBe(true);
+  });
+});
+
+describe('setActionEnabled', () => {
+  it('adds action to disabledActions when disabled', async () => {
+    vi.resetModules();
+    const { setActionEnabled, getService } = await import('./settings.ts');
+    
+    setActionEnabled('gmail', 'gmail.send_email', false);
+    
+    const service = getService('gmail');
+    expect(service?.disabledActions).toContain('gmail.send_email');
+  });
+
+  it('removes action from disabledActions when enabled', async () => {
+    vi.resetModules();
+    const { setActionEnabled, addService, getService } = await import('./settings.ts');
+    
+    addService({
+      id: 'gmail',
+      name: 'Gmail',
+      enabled: true,
+      disabledActions: ['gmail.send_email', 'gmail.fetch_emails'],
+    });
+    
+    setActionEnabled('gmail', 'gmail.send_email', true);
+    
+    const service = getService('gmail');
+    expect(service?.disabledActions).not.toContain('gmail.send_email');
+    expect(service?.disabledActions).toContain('gmail.fetch_emails');
+  });
+
+  it('creates service config if it does not exist', async () => {
+    vi.resetModules();
+    const { setActionEnabled, getService } = await import('./settings.ts');
+    
+    setActionEnabled('newservice', 'newservice.action', false);
+    
+    const service = getService('newservice');
+    expect(service).toBeDefined();
+    expect(service?.enabled).toBe(true);
+    expect(service?.disabledActions).toContain('newservice.action');
+  });
+});

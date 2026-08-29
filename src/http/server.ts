@@ -21,6 +21,8 @@ import {
   setActionEnabled,
   getService,
   setServiceEnabled,
+  isActionEnabled,
+  setActionEnabled,
 } from '../core/settings.ts';
 import { listProjects, createProject, getProject } from '../core/memory.ts';
 import { getWhatsAppClient } from '../whatsapp/client.ts';
@@ -1069,6 +1071,72 @@ addRoute('DELETE', '/api/connector/services/:service', async (req, res) => {
   } catch (err) {
     log.error({ err, service }, 'Failed to disconnect service');
     sendError(res, 'Failed to disconnect service', 500);
+  }
+});
+
+addRoute('PATCH', '/api/connector/tools/:service/actions/:action/enabled', async (req, res) => {
+  if (!isAuthenticated(req)) {
+    sendError(res, 'Unauthorized', 401);
+    return;
+  }
+
+  const match = req.url?.match(/\/api\/connector\/tools\/([^/]+)\/actions\/([^/]+)\/enabled/);
+  const service = match?.[1] ? decodeURIComponent(match[1]) : null;
+  const actionId = match?.[2] ? decodeURIComponent(match[2]) : null;
+
+  if (!service || !actionId) {
+    sendError(res, 'Missing service or action parameter', 400);
+    return;
+  }
+
+  let body = '';
+  for await (const chunk of req) {
+    body += chunk;
+  }
+
+  let enabled: boolean;
+  try {
+    const parsed = JSON.parse(body);
+    enabled = parsed.enabled === true;
+  } catch {
+    sendError(res, 'Invalid JSON body', 400);
+    return;
+  }
+
+  const settings = loadSettings();
+  const connector = createClient(settings.activeProject);
+
+  try {
+    const connections = await connector.listConnections();
+    const realConnections = connections.filter(isRealConnection);
+    const hasRealConnection = realConnections.some((c) => c.service === service);
+
+    if (!hasRealConnection) {
+      res.writeHead(400, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ 
+        success: false, 
+        error: 'אי אפשר לשנות מצב של פעולה בכלי שלא מחובר' 
+      }));
+      return;
+    }
+
+    const actions = await connector.listActions(service);
+    const actionExists = actions.some((a) => a.id === actionId);
+
+    if (!actionExists) {
+      res.writeHead(400, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ 
+        success: false, 
+        error: 'הפעולה לא נמצאה בכלי זה' 
+      }));
+      return;
+    }
+
+    setActionEnabled(service, actionId, enabled);
+    sendJson(res, { success: true, enabled });
+  } catch (err) {
+    const errorMessage = err instanceof Error ? err.message : 'שגיאה בעדכון מצב הפעולה';
+    sendError(res, errorMessage, 500);
   }
 });
 

@@ -233,13 +233,6 @@ describe('getSettingsHtml', () => {
     expect(html).toContain('action.displayName');
   });
 
-  it('caps actions at 12 per tool card', () => {
-    const html = getSettingsHtml(createTestData());
-    
-    expect(html).toContain('MAX_ACTIONS = 12');
-    expect(html).toContain('slice(0, MAX_ACTIONS)');
-  });
-
   it('shows tool logo with colored monogram fallback', () => {
     const html = getSettingsHtml(createTestData());
     
@@ -298,5 +291,39 @@ describe('getSettingsHtml', () => {
     const html = getSettingsHtml(createTestData());
     
     expect(html).toContain("tool-card${tool.enabled ? '' : ' disabled'}");
+  });
+
+  it('includes action switch with Hebrew labels', () => {
+    const html = getSettingsHtml(createTestData());
+    
+    expect(html).toContain('action-switch');
+    expect(html).toContain('action-switch-track');
+    expect(html).toContain('action-switch-label');
+  });
+
+  it('includes toggleActionEnabled function', () => {
+    const html = getSettingsHtml(createTestData());
+    
+    expect(html).toContain('async function toggleActionEnabled');
+    expect(html).toContain('/actions/');
+    expect(html).toContain('/enabled');
+  });
+
+  it('maps action enabled field from response', () => {
+    const html = getSettingsHtml(createTestData());
+    
+    expect(html).toContain('action.enabled !== false');
+  });
+
+  it('disables action switches when tool is disabled', () => {
+    const html = getSettingsHtml(createTestData());
+    
+    expect(html).toContain("!tool.enabled ? 'style=\"pointer-events: none;\"' : ''");
+  });
+
+  it('caps actions at 40 per tool card', () => {
+    const html = getSettingsHtml(createTestData());
+    
+    expect(html).toContain('MAX_ACTIONS = 40');
   });
 });
