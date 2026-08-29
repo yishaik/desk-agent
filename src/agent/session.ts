@@ -440,6 +440,23 @@ export function extractTextFromMessages(messages: unknown[]): string | null {
   return null;
 }
 
+export type AgentEventType = 
+  | 'turn_start'
+  | 'turn_end'
+  | 'tool_execution_start'
+  | 'tool_execution_end'
+  | 'message_start'
+  | 'message_end';
+
+export interface RunPromptCallbacks {
+  onTurnStart?: () => void;
+  onToolStart?: (toolName: string) => void;
+  onToolEnd?: (toolName: string) => void;
+  onThinking?: () => void;
+  onMessageStart?: () => void;
+  onMessageEnd?: () => void;
+}
+
 export async function runPrompt(projectId: string, text: string): Promise<string | null> {
   const { session } = await getOrCreateSession(projectId);
 
@@ -448,4 +465,47 @@ export async function runPrompt(projectId: string, text: string): Promise<string
 
   const messages = session.state.messages;
   return extractTextFromMessages(messages);
+}
+
+export async function runPromptWithCallbacks(
+  projectId: string,
+  text: string,
+  callbacks: RunPromptCallbacks
+): Promise<string | null> {
+  const { session } = await getOrCreateSession(projectId);
+
+  const unsubscribe = session.subscribe((event) => {
+    switch (event.type) {
+      case 'turn_start':
+        callbacks.onTurnStart?.();
+        break;
+      case 'tool_execution_start':
+        if ('toolName' in event) {
+          callbacks.onToolStart?.(event.toolName);
+        }
+        break;
+      case 'tool_execution_end':
+        if ('toolName' in event) {
+          callbacks.onToolEnd?.(event.toolName);
+        }
+        break;
+      case 'message_start':
+        callbacks.onMessageStart?.();
+        callbacks.onThinking?.();
+        break;
+      case 'message_end':
+        callbacks.onMessageEnd?.();
+        break;
+    }
+  });
+
+  try {
+    await session.prompt(text);
+    await session.waitForIdle();
+
+    const messages = session.state.messages;
+    return extractTextFromMessages(messages);
+  } finally {
+    unsubscribe();
+  }
 }
