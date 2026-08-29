@@ -7,7 +7,7 @@ import {
 } from '@earendil-works/pi-coding-agent';
 import { Type, type Static, type TObject, type TString, type TOptional, type TRecord, type TBoolean, type TUnknown } from 'typebox';
 import { createChildLogger } from '../core/logger.ts';
-import { loadSettings, getActiveConnectorToken, updateSettings } from '../core/settings.ts';
+import { loadSettings, getActiveConnectorToken, updateSettings, isActionDisabled } from '../core/settings.ts';
 import { config } from '../core/config.ts';
 import { OpenConnectorClient } from '../open-connector/client.ts';
 import { join } from 'node:path';
@@ -152,10 +152,32 @@ function getDisabledServices(): Set<string> {
   return disabled;
 }
 
+function getDisabledActions(): Map<string, Set<string>> {
+  const settings = loadSettings();
+  const disabledMap = new Map<string, Set<string>>();
+  for (const svc of settings.services) {
+    if (svc.disabledActions && svc.disabledActions.length > 0) {
+      disabledMap.set(svc.id, new Set(svc.disabledActions));
+    }
+  }
+  return disabledMap;
+}
+
 function isServiceEnabled(serviceId: string): boolean {
   const settings = loadSettings();
   const svc = settings.services.find((s) => s.id === serviceId);
   return svc?.enabled !== false;
+}
+
+function isActionEnabled(actionId: string): boolean {
+  const serviceId = actionId.split('.')[0];
+  if (!serviceId) return true;
+  
+  if (!isServiceEnabled(serviceId)) {
+    return false;
+  }
+  
+  return !isActionDisabled(serviceId, actionId);
 }
 
 function createOpenConnectorTools(projectId: string): ToolDefinition[] {
@@ -169,9 +191,15 @@ function createOpenConnectorTools(projectId: string): ToolDefinition[] {
     async execute(toolCallId, params: SearchActionsParams, signal, onUpdate, ctx) {
       const client = getClient();
       const disabledServices = getDisabledServices();
+      const disabledActions = getDisabledActions();
       try {
         const actions = await client.searchActions(params.query);
-        let filtered = actions.filter((a) => !disabledServices.has(a.service));
+        let filtered = actions.filter((a) => {
+          if (disabledServices.has(a.service)) return false;
+          const svcDisabled = disabledActions.get(a.service);
+          if (svcDisabled?.has(a.id)) return false;
+          return true;
+        });
         
         if (params.service) {
           if (disabledServices.has(params.service)) {
@@ -216,10 +244,14 @@ function createOpenConnectorTools(projectId: string): ToolDefinition[] {
     description: 'Get detailed documentation and input schema for an action before executing it.',
     parameters: GetActionGuideSchema,
     async execute(toolCallId, params: GetActionGuideParams, signal, onUpdate, ctx) {
-      const serviceId = params.actionId.split('.')[0];
-      if (serviceId && !isServiceEnabled(serviceId)) {
+      if (!isActionEnabled(params.actionId)) {
+        const serviceId = params.actionId.split('.')[0];
+        const isServiceDisabled = serviceId && !isServiceEnabled(serviceId);
+        const msg = isServiceDisabled
+          ? `Service "${serviceId}" is currently disabled.`
+          : `Action "${params.actionId}" is currently disabled.`;
         return {
-          content: [{ type: 'text' as const, text: `Service "${serviceId}" is currently disabled.` }],
+          content: [{ type: 'text' as const, text: msg }],
           details: { actionId: params.actionId, disabled: true },
         };
       }
@@ -246,10 +278,14 @@ function createOpenConnectorTools(projectId: string): ToolDefinition[] {
     description: 'Execute an Open Connector action. For send/create/delete actions, user must reply to confirm the action first.',
     parameters: ExecuteActionSchema,
     async execute(toolCallId, params: ExecuteActionParams, signal, onUpdate, ctx) {
-      const serviceId = params.actionId.split('.')[0];
-      if (serviceId && !isServiceEnabled(serviceId)) {
+      if (!isActionEnabled(params.actionId)) {
+        const serviceId = params.actionId.split('.')[0];
+        const isServiceDisabled = serviceId && !isServiceEnabled(serviceId);
+        const msg = isServiceDisabled
+          ? `❌ Service "${serviceId}" is currently disabled. Enable it in Settings to use this action.`
+          : `❌ Action "${params.actionId}" is currently disabled. Enable it in Settings to use this action.`;
         return {
-          content: [{ type: 'text' as const, text: `❌ Service "${serviceId}" is currently disabled. Enable it in Settings to use this action.` }],
+          content: [{ type: 'text' as const, text: msg }],
           details: { actionId: params.actionId, disabled: true },
         };
       }

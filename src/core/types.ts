@@ -19,6 +19,7 @@ export interface ServiceConfig {
   id: string;
   name: string;
   enabled: boolean;
+  disabledActions?: string[];
   connectedAt?: string;
 }
 

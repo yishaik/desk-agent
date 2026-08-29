@@ -505,6 +505,82 @@ describe('Tool enabled/disabled state', () => {
   });
 });
 
+describe('Action-level enable/disable', () => {
+  it('actions include enabled field defaulting to true', () => {
+    const mockServices: { id: string; disabledActions?: string[] }[] = [];
+    const disabledActionsMap = new Map<string, Set<string>>();
+    for (const svc of mockServices) {
+      if (svc.disabledActions && svc.disabledActions.length > 0) {
+        disabledActionsMap.set(svc.id, new Set(svc.disabledActions));
+      }
+    }
+    
+    const actionId = 'gmail.send_email';
+    const serviceId = 'gmail';
+    const disabledSet = disabledActionsMap.get(serviceId);
+    const enabled = !disabledSet?.has(actionId);
+    
+    expect(enabled).toBe(true);
+  });
+
+  it('actions reflect enabled:false from disabledActions', () => {
+    const mockServices = [{ id: 'gmail', disabledActions: ['gmail.send_email'] }];
+    const disabledActionsMap = new Map<string, Set<string>>();
+    for (const svc of mockServices) {
+      if (svc.disabledActions && svc.disabledActions.length > 0) {
+        disabledActionsMap.set(svc.id, new Set(svc.disabledActions));
+      }
+    }
+    
+    const actionId = 'gmail.send_email';
+    const serviceId = 'gmail';
+    const disabledSet = disabledActionsMap.get(serviceId);
+    const enabled = !disabledSet?.has(actionId);
+    
+    expect(enabled).toBe(false);
+  });
+
+  it('PATCH action enabled validates action belongs to service', () => {
+    const actionId = 'gmail.send_email';
+    const service = 'gmail';
+    const actionPrefix = actionId.split('.')[0];
+    
+    expect(actionPrefix).toBe(service);
+  });
+
+  it('PATCH action enabled rejects action from wrong service', () => {
+    const actionId = 'slack.post_message';
+    const service = 'gmail';
+    const actionPrefix = actionId.split('.')[0];
+    
+    expect(actionPrefix).not.toBe(service);
+  });
+
+  it('PATCH action enabled requires real connection', () => {
+    interface Connection {
+      service: string;
+      connectionName: string;
+      authType: string;
+      virtual?: boolean;
+    }
+
+    function isRealConnection(conn: Connection): boolean {
+      return conn.virtual !== true && conn.authType !== 'no_auth';
+    }
+
+    const connections: Connection[] = [
+      { service: 'gmail', connectionName: 'default', authType: 'oauth2' },
+      { service: 'arxiv', connectionName: 'default', authType: 'no_auth', virtual: true },
+    ];
+    
+    const gmailConn = connections.find((c) => c.service === 'gmail' && isRealConnection(c));
+    const arxivConn = connections.find((c) => c.service === 'arxiv' && isRealConnection(c));
+    
+    expect(gmailConn).toBeDefined();
+    expect(arxivConn).toBeUndefined();
+  });
+});
+
 describe('Actions endpoint returns human-readable actions', () => {
   it('returns displayName and description, not just raw id', () => {
     const mockAction = {

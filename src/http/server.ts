@@ -18,6 +18,7 @@ import {
   isAdminTokenAcknowledged,
   addService,
   removeService,
+  setActionEnabled,
 } from '../core/settings.ts';
 import { listProjects, createProject, getProject } from '../core/memory.ts';
 import { getWhatsAppClient } from '../whatsapp/client.ts';
@@ -662,11 +663,91 @@ addRoute('PATCH', '/api/connector/tools/:service/enabled', async (req, res) => {
   }
 });
 
+addRoute('PATCH', '/api/connector/tools/:service/actions/:action/enabled', async (req, res) => {
+  if (!isAuthenticated(req)) {
+    sendError(res, 'Unauthorized', 401);
+    return;
+  }
+
+  const url = parseUrl(req.url ?? '', true);
+  const pathParts = (url.pathname ?? '').split('/');
+  const service = pathParts[4];
+  const actionEncoded = pathParts[6];
+  const action = actionEncoded ? decodeURIComponent(actionEncoded) : undefined;
+
+  if (!service || !action) {
+    sendError(res, 'Service ID and action ID required', 400);
+    return;
+  }
+
+  let body: { enabled?: boolean };
+  try {
+    body = await parseBody<{ enabled?: boolean }>(req);
+  } catch {
+    sendError(res, 'Invalid JSON body', 400);
+    return;
+  }
+
+  if (typeof body.enabled !== 'boolean') {
+    sendError(res, 'enabled (boolean) is required', 400);
+    return;
+  }
+
+  const settings = loadSettings();
+  const connector = createClient(settings.activeProject);
+
+  try {
+    const connections = await connector.listConnections();
+    const realConnection = connections.find(
+      (c) => c.service === service && isRealConnection(c)
+    );
+
+    if (!realConnection) {
+      sendJson(res, {
+        success: false,
+        error: 'Service not found or is a no_auth virtual tool',
+      }, 404);
+      return;
+    }
+
+    const actionPrefix = action.split('.')[0];
+    if (actionPrefix !== service) {
+      sendJson(res, {
+        success: false,
+        error: `Action '${action}' does not belong to service '${service}'`,
+      }, 400);
+      return;
+    }
+
+    const actions = await connector.listActions(service);
+    const actionExists = actions.some((a) => a.id === action);
+    
+    if (!actionExists) {
+      sendJson(res, {
+        success: false,
+        error: `Action '${action}' not found for service '${service}'`,
+      }, 404);
+      return;
+    }
+
+    setActionEnabled(service, action, body.enabled);
+
+    sendJson(res, {
+      success: true,
+      data: { service, action, enabled: body.enabled },
+    });
+  } catch (err) {
+    log.error({ err, service, action }, 'Failed to update action enabled state');
+    sendError(res, 'Failed to update action', 500);
+  }
+});
+
 interface ActionInfo {
   id: string;
   service: string;
   displayName: string;
   description: string;
+  enabled: boolean;
 }
 
 addRoute('GET', '/api/connector/actions', async (req, res) => {
@@ -680,16 +761,28 @@ addRoute('GET', '/api/connector/actions', async (req, res) => {
 
   const settings = loadSettings();
   const connector = createClient(settings.activeProject);
+  
+  const disabledActionsMap = new Map<string, Set<string>>();
+  for (const svc of settings.services) {
+    if (svc.disabledActions && svc.disabledActions.length > 0) {
+      disabledActionsMap.set(svc.id, new Set(svc.disabledActions));
+    }
+  }
 
   try {
     const actions = await connector.listActions(serviceFilter);
     
-    const data: ActionInfo[] = actions.map((action) => ({
-      id: action.id,
-      service: action.service,
-      displayName: action.displayName,
-      description: action.description,
-    }));
+    const data: ActionInfo[] = actions.map((action) => {
+      const disabledSet = disabledActionsMap.get(action.service);
+      const enabled = !disabledSet?.has(action.id);
+      return {
+        id: action.id,
+        service: action.service,
+        displayName: action.displayName,
+        description: action.description,
+        enabled,
+      };
+    });
 
     sendJson(res, { success: true, data });
   } catch (err) {
