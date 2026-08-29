@@ -35,10 +35,15 @@ export interface Connection {
   service: string;
   connectionName: string;
   authType: string;
+  virtual?: boolean;
   identity?: {
     label: string;
     email?: string;
   };
+}
+
+export function isRealConnection(conn: Connection): boolean {
+  return conn.virtual !== true && conn.authType !== 'no_auth';
 }
 
 export interface Action {
@@ -258,8 +263,9 @@ export class OpenConnectorClient {
     return response;
   }
 
-  async disconnectService(service: string): Promise<void> {
-    await this.request<void>(`/api/connections/${encodeURIComponent(service)}`, {
+  async disconnectService(service: string, connectionName?: string): Promise<void> {
+    const query = connectionName ? `?connectionName=${encodeURIComponent(connectionName)}` : '';
+    await this.request<void>(`/api/connections/${encodeURIComponent(service)}${query}`, {
       method: 'DELETE',
     });
   }

@@ -19,7 +19,7 @@ import {
 } from '../core/settings.ts';
 import { listProjects, createProject, getProject } from '../core/memory.ts';
 import { getWhatsAppClient } from '../whatsapp/client.ts';
-import { createClient } from '../open-connector/client.ts';
+import { createClient, isRealConnection } from '../open-connector/client.ts';
 
 const log = createChildLogger('http');
 
@@ -385,14 +385,16 @@ addRoute('GET', '/api/connector/status', async (req, res) => {
   try {
     const healthy = await connector.checkHealth();
     const connections = healthy ? await connector.listConnections() : [];
+    const realConnections = connections.filter(isRealConnection);
 
+    const realConnections = connections.filter(isRealConnection);
     sendJson(res, {
       success: true,
       data: {
         healthy,
         url: config.openConnectorUrl,
         consoleUrl: getConsoleUrl(),
-        connectionCount: connections.length,
+        connectionCount: realConnections.length,
       },
     });
   } catch (err) {
@@ -424,7 +426,8 @@ addRoute('GET', '/api/connector/onboarding', async (req, res) => {
     healthy = await connector.checkHealth();
     if (healthy) {
       const connections = await connector.listConnections();
-      connectionCount = connections.length;
+      const realConnections = connections.filter(isRealConnection);
+      connectionCount = realConnections.length;
     }
   } catch {
     healthy = false;
@@ -566,8 +569,9 @@ addRoute('GET', '/api/connector/tools', async (req, res) => {
 
   try {
     const connections = await connector.listConnections();
+    const realConnections = connections.filter(isRealConnection);
     
-    const tools: ToolInfo[] = connections.map((conn) => {
+    const tools: ToolInfo[] = realConnections.map((conn) => {
       const serviceId = conn.service;
       const overlay = SERVICE_HEBREW_OVERLAY[serviceId];
       
@@ -712,7 +716,20 @@ addRoute('DELETE', '/api/connector/services/:service', async (req, res) => {
   const connector = createClient(settings.activeProject);
 
   try {
-    await connector.disconnectService(service);
+    const connections = await connector.listConnections();
+    const realConnection = connections.find(
+      (c) => c.service === service && isRealConnection(c)
+    );
+
+    if (!realConnection) {
+      sendJson(res, {
+        success: false,
+        error: 'אי אפשר לנתק כלי שלא דורש התחברות',
+      }, 400);
+      return;
+    }
+
+    await connector.disconnectService(service, realConnection.connectionName);
     sendJson(res, { success: true });
   } catch (err) {
     log.error({ err, service }, 'Failed to disconnect service');

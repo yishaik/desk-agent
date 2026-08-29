@@ -195,4 +195,58 @@ describe('API Path Correctness', () => {
     expect(listActionsSource).toContain('Array.isArray');
     expect(listActionsSource).toContain('/v1/actions');
   });
+
+  it('disconnectService should accept connectionName parameter', async () => {
+    vi.resetModules();
+    
+    const { OpenConnectorClient } = await import('./client.ts');
+    
+    const client = new OpenConnectorClient();
+    
+    const disconnectServiceSource = client.disconnectService.toString();
+    expect(disconnectServiceSource).toContain('connectionName');
+    expect(disconnectServiceSource).toContain('?connectionName=');
+  });
+});
+
+describe('isRealConnection helper', () => {
+  it('identifies oauth2 as real connection', async () => {
+    vi.resetModules();
+    
+    const { isRealConnection } = await import('./client.ts');
+    
+    expect(isRealConnection({ service: 'gmail', connectionName: 'default', authType: 'oauth2' })).toBe(true);
+  });
+
+  it('identifies api_key as real connection', async () => {
+    vi.resetModules();
+    
+    const { isRealConnection } = await import('./client.ts');
+    
+    expect(isRealConnection({ service: 'openai', connectionName: 'default', authType: 'api_key' })).toBe(true);
+  });
+
+  it('rejects no_auth as NOT real', async () => {
+    vi.resetModules();
+    
+    const { isRealConnection } = await import('./client.ts');
+    
+    expect(isRealConnection({ service: 'arxiv', connectionName: 'default', authType: 'no_auth' })).toBe(false);
+  });
+
+  it('rejects virtual:true as NOT real', async () => {
+    vi.resetModules();
+    
+    const { isRealConnection } = await import('./client.ts');
+    
+    expect(isRealConnection({ service: 'test', connectionName: 'default', authType: 'oauth2', virtual: true })).toBe(false);
+  });
+
+  it('rejects virtual no_auth catalog providers', async () => {
+    vi.resetModules();
+    
+    const { isRealConnection } = await import('./client.ts');
+    
+    expect(isRealConnection({ service: 'wikipedia', connectionName: 'default', authType: 'no_auth', virtual: true })).toBe(false);
+  });
 });

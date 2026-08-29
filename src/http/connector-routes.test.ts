@@ -239,13 +239,66 @@ describe('Service Hebrew Overlay', () => {
   });
 });
 
-describe('Tools endpoint returns connected tools only', () => {
-  it('derives tools from connections, not full catalog', () => {
-    const mockConnections = [
+describe('isRealConnection filters virtual and no_auth', () => {
+  interface Connection {
+    service: string;
+    connectionName: string;
+    authType: string;
+    virtual?: boolean;
+  }
+
+  function isRealConnection(conn: Connection): boolean {
+    return conn.virtual !== true && conn.authType !== 'no_auth';
+  }
+
+  it('oauth2 connection is real', () => {
+    const conn = { service: 'gmail', connectionName: 'default', authType: 'oauth2' };
+    expect(isRealConnection(conn)).toBe(true);
+  });
+
+  it('api_key connection is real', () => {
+    const conn = { service: 'openai', connectionName: 'default', authType: 'api_key' };
+    expect(isRealConnection(conn)).toBe(true);
+  });
+
+  it('no_auth connection is NOT real', () => {
+    const conn = { service: 'arxiv', connectionName: 'default', authType: 'no_auth' };
+    expect(isRealConnection(conn)).toBe(false);
+  });
+
+  it('virtual connection is NOT real', () => {
+    const conn = { service: 'wikipedia', connectionName: 'default', authType: 'no_auth', virtual: true };
+    expect(isRealConnection(conn)).toBe(false);
+  });
+
+  it('virtual:true oauth2 is NOT real', () => {
+    const conn = { service: 'test', connectionName: 'default', authType: 'oauth2', virtual: true };
+    expect(isRealConnection(conn)).toBe(false);
+  });
+});
+
+describe('Tools endpoint returns real connections only', () => {
+  interface Connection {
+    service: string;
+    connectionName: string;
+    authType: string;
+    virtual?: boolean;
+    identity?: { label: string };
+  }
+
+  function isRealConnection(conn: Connection): boolean {
+    return conn.virtual !== true && conn.authType !== 'no_auth';
+  }
+
+  it('filters out virtual no_auth from tools list', () => {
+    const mockConnections: Connection[] = [
       { service: 'gmail', connectionName: 'default', authType: 'oauth2', identity: { label: 'user@gmail.com' } },
+      { service: 'arxiv', connectionName: 'default', authType: 'no_auth', virtual: true },
+      { service: 'wikipedia', connectionName: 'default', authType: 'no_auth', virtual: true },
     ];
     
-    const tools = mockConnections.map((conn) => ({
+    const realConnections = mockConnections.filter(isRealConnection);
+    const tools = realConnections.map((conn) => ({
       id: conn.service,
       serviceId: conn.service,
       identity: conn.identity?.label,
@@ -255,10 +308,75 @@ describe('Tools endpoint returns connected tools only', () => {
     expect(tools[0]?.id).toBe('gmail');
   });
 
-  it('returns empty array when no connections', () => {
-    const mockConnections: unknown[] = [];
-    const tools = mockConnections.map(() => ({}));
-    expect(tools).toHaveLength(0);
+  it('returns empty array when only virtual connections exist', () => {
+    const mockConnections: Connection[] = [
+      { service: 'arxiv', connectionName: 'default', authType: 'no_auth', virtual: true },
+      { service: 'wikipedia', connectionName: 'default', authType: 'no_auth', virtual: true },
+    ];
+    
+    const realConnections = mockConnections.filter(isRealConnection);
+    expect(realConnections).toHaveLength(0);
+  });
+
+  it('connectionCount uses real connections only', () => {
+    const mockConnections: Connection[] = [
+      { service: 'gmail', connectionName: 'default', authType: 'oauth2' },
+      { service: 'slack', connectionName: 'default', authType: 'oauth2' },
+      { service: 'arxiv', connectionName: 'default', authType: 'no_auth', virtual: true },
+    ];
+    
+    const realConnections = mockConnections.filter(isRealConnection);
+    expect(realConnections.length).toBe(2);
+  });
+});
+
+describe('DELETE refuses no_auth services', () => {
+  interface Connection {
+    service: string;
+    connectionName: string;
+    authType: string;
+    virtual?: boolean;
+  }
+
+  function isRealConnection(conn: Connection): boolean {
+    return conn.virtual !== true && conn.authType !== 'no_auth';
+  }
+
+  it('refuses to disconnect arxiv (no_auth)', () => {
+    const connections: Connection[] = [
+      { service: 'arxiv', connectionName: 'default', authType: 'no_auth', virtual: true },
+    ];
+    
+    const realConnection = connections.find(
+      (c) => c.service === 'arxiv' && isRealConnection(c)
+    );
+    
+    expect(realConnection).toBeUndefined();
+  });
+
+  it('allows disconnect for gmail (oauth2)', () => {
+    const connections: Connection[] = [
+      { service: 'gmail', connectionName: 'my-gmail', authType: 'oauth2' },
+    ];
+    
+    const realConnection = connections.find(
+      (c) => c.service === 'gmail' && isRealConnection(c)
+    );
+    
+    expect(realConnection).toBeDefined();
+    expect(realConnection?.connectionName).toBe('my-gmail');
+  });
+
+  it('uses connectionName from the real connection', () => {
+    const connections: Connection[] = [
+      { service: 'gmail', connectionName: 'work-account', authType: 'oauth2' },
+    ];
+    
+    const realConnection = connections.find(
+      (c) => c.service === 'gmail' && isRealConnection(c)
+    );
+    
+    expect(realConnection?.connectionName).toBe('work-account');
   });
 });
 
