@@ -18,6 +18,15 @@ import {
 import { listProjects, createProject, getProject } from '../core/memory.ts';
 import { getWhatsAppClient } from '../whatsapp/client.ts';
 import { createClient } from '../open-connector/client.ts';
+import { 
+  checkAuthStatus, 
+  getDefaultModelForProvider,
+  clearRuntimeCache,
+} from '../core/auth.ts';
+import { 
+  recreateSessionForProvider, 
+  clearAllSessions,
+} from '../agent/session.ts';
 
 const log = createChildLogger('http');
 
@@ -379,6 +388,99 @@ addRoute('GET', '/api/connector/status', async (req, res) => {
         connectionCount: 0,
       },
     });
+  }
+});
+
+addRoute('GET', '/api/ai-auth/status', async (req, res) => {
+  if (!isAuthenticated(req)) {
+    sendError(res, 'Unauthorized', 401);
+    return;
+  }
+
+  try {
+    const status = await checkAuthStatus();
+    sendJson(res, { 
+      success: true, 
+      data: {
+        hasAnyCredential: status.hasAnyCredential,
+        credentials: status.credentials,
+        configuredProviders: status.configuredProviders,
+      },
+    });
+  } catch (err) {
+    log.error({ err }, 'Failed to check AI auth status');
+    sendError(res, 'Failed to check auth status', 500);
+  }
+});
+
+addRoute('POST', '/api/ai-auth/oauth-complete', async (req, res) => {
+  if (!isAuthenticated(req)) {
+    sendError(res, 'Unauthorized', 401);
+    return;
+  }
+
+  const body = await parseBody<{ providerId: string }>(req).catch(() => ({ providerId: '' }));
+  
+  if (!body.providerId) {
+    sendError(res, 'providerId is required');
+    return;
+  }
+
+  try {
+    clearRuntimeCache();
+    
+    const status = await checkAuthStatus();
+    
+    if (!status.configuredProviders.includes(body.providerId)) {
+      sendError(res, `Provider ${body.providerId} not authenticated`, 400);
+      return;
+    }
+
+    const settings = loadSettings();
+    const defaultModel = getDefaultModelForProvider(body.providerId);
+    
+    updateSettings({ model: defaultModel });
+    
+    await recreateSessionForProvider(settings.activeProject, body.providerId);
+
+    log.info({ providerId: body.providerId, model: defaultModel }, 'OAuth complete - session recreated');
+
+    sendJson(res, { 
+      success: true, 
+      data: {
+        providerId: body.providerId,
+        model: defaultModel,
+        message: `Connected to ${body.providerId}. Model set to ${defaultModel}.`,
+      },
+    });
+  } catch (err) {
+    log.error({ err, providerId: body.providerId }, 'Failed to handle OAuth complete');
+    sendError(res, 'Failed to complete OAuth setup', 500);
+  }
+});
+
+addRoute('POST', '/api/ai-auth/refresh', async (req, res) => {
+  if (!isAuthenticated(req)) {
+    sendError(res, 'Unauthorized', 401);
+    return;
+  }
+
+  try {
+    clearRuntimeCache();
+    clearAllSessions();
+    
+    const status = await checkAuthStatus();
+    
+    sendJson(res, { 
+      success: true, 
+      data: {
+        hasAnyCredential: status.hasAnyCredential,
+        configuredProviders: status.configuredProviders,
+      },
+    });
+  } catch (err) {
+    log.error({ err }, 'Failed to refresh AI auth');
+    sendError(res, 'Failed to refresh auth', 500);
   }
 });
 
@@ -902,6 +1004,10 @@ function getDashboardHtml(settings: ReturnType<typeof loadSettings>, pairingStat
           <h2>🔌 Open Connector</h2>
           <div id="connectorStatus">בודק...</div>
         </div>
+        <div class="card">
+          <h2>🧠 ספק AI</h2>
+          <div id="aiAuthStatus">בודק...</div>
+        </div>
       </div>
 
       <div class="card" style="margin-top: 20px;">
@@ -944,6 +1050,28 @@ function getDashboardHtml(settings: ReturnType<typeof loadSettings>, pairingStat
           
           <button type="submit" style="margin-top: 12px;">שמור</button>
         </form>
+      </div>
+
+      <div class="card" style="margin-top: 20px;">
+        <h2>🧠 חיבור לספק AI</h2>
+        <p style="color: #888; margin-bottom: 16px;">התחבר עם המנוי שלך ל-ChatGPT Plus/Pro או Claude Pro/Max</p>
+        <div id="aiAuthSettings">
+          <div id="aiProvidersList">טוען...</div>
+          <div style="display: flex; gap: 12px; margin-top: 16px; flex-wrap: wrap;">
+            <button onclick="startOAuth('openai')" class="secondary" style="display: flex; align-items: center; gap: 8px;">
+              <span>🤖</span> התחבר עם ChatGPT
+            </button>
+            <button onclick="startOAuth('anthropic')" class="secondary" style="display: flex; align-items: center; gap: 8px;">
+              <span>🟣</span> התחבר עם Claude
+            </button>
+            <button onclick="refreshAiAuth()" style="display: flex; align-items: center; gap: 8px;">
+              <span>🔄</span> רענן חיבורים
+            </button>
+          </div>
+          <p style="color: #666; font-size: 12px; margin-top: 12px;">
+            * לאחר התחברות דרך הטרמינל (npx pi /login), לחץ "רענן חיבורים" לעדכון.
+          </p>
+        </div>
       </div>
 
       <div class="card" style="margin-top: 20px;">
@@ -1091,7 +1219,80 @@ function getDashboardHtml(settings: ReturnType<typeof loadSettings>, pairingStat
       alert('נשמר!');
     });
 
+    async function loadAiAuthStatus() {
+      try {
+        const res = await fetch('/api/ai-auth/status');
+        const { data } = await res.json();
+        
+        const dashboardEl = document.getElementById('aiAuthStatus');
+        const settingsEl = document.getElementById('aiProvidersList');
+        
+        if (!data.hasAnyCredential) {
+          dashboardEl.innerHTML = \`
+            <div class="stat">❌</div>
+            <div class="stat-label">לא מחובר</div>
+            <p style="margin-top: 12px; color: #888;">עבור להגדרות כדי להתחבר</p>
+          \`;
+          settingsEl.innerHTML = '<p style="color: #f87171;">לא מחובר לאף ספק AI</p>';
+          return;
+        }
+        
+        const providers = data.credentials.map(c => {
+          const icon = c.isConfigured ? '✅' : '⚠️';
+          const type = c.authType === 'oauth' ? 'OAuth' : 
+                       c.authType === 'subscription' ? 'מנוי' : 
+                       c.authType === 'api_key' ? 'API Key' : '';
+          return \`<div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">
+            <span>\${icon}</span>
+            <span>\${c.providerId}</span>
+            <span style="color: #888; font-size: 12px;">\${type}</span>
+            \${c.label ? \`<span style="color: #666; font-size: 12px;">(\${c.label})</span>\` : ''}
+          </div>\`;
+        }).join('');
+        
+        const activeProvider = data.configuredProviders[0] || 'לא ידוע';
+        dashboardEl.innerHTML = \`
+          <div class="stat">✅</div>
+          <div class="stat-label">\${activeProvider}</div>
+        \`;
+        
+        settingsEl.innerHTML = providers || '<p style="color: #888;">טוען...</p>';
+      } catch (err) {
+        document.getElementById('aiAuthStatus').innerHTML = '<div class="stat">❓</div><div class="stat-label">שגיאה</div>';
+        document.getElementById('aiProvidersList').innerHTML = '<p style="color: #f87171;">שגיאה בטעינת סטטוס</p>';
+      }
+    }
+
+    async function startOAuth(providerId) {
+      const confirmed = confirm(\`להתחיל התחברות עם \${providerId === 'openai' ? 'ChatGPT' : 'Claude'}?\\n\\nתיפתח חלונית התחברות של Pi Agent.\`);
+      if (!confirmed) return;
+      
+      alert(\`להתחברות, הרץ את הפקודה הבאה בטרמינל:\\n\\nnpx pi /login\\n\\nבחר \${providerId === 'openai' ? 'OpenAI' : 'Anthropic'} ועקוב אחרי ההוראות.\\n\\nלאחר ההתחברות, לחץ על "רענן חיבורים" כאן.\`);
+    }
+
+    async function refreshAiAuth() {
+      try {
+        const res = await fetch('/api/ai-auth/refresh', { method: 'POST' });
+        const { data } = await res.json();
+        
+        if (data.hasAnyCredential) {
+          const providerId = data.configuredProviders[0];
+          await fetch('/api/ai-auth/oauth-complete', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ providerId })
+          });
+          alert('החיבור התעדכן בהצלחה!');
+        }
+        
+        loadAiAuthStatus();
+      } catch (err) {
+        alert('שגיאה ברענון החיבורים');
+      }
+    }
+
     loadConnectorStatus();
+    loadAiAuthStatus();
   </script>
 </body>
 </html>`;

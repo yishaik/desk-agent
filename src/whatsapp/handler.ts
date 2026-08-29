@@ -14,6 +14,7 @@ import {
   confirmAction,
   cancelConfirmation,
   cleanupOldConfirmations,
+  AuthRequiredError,
 } from '../agent/session.ts';
 import { 
   type ReactionState, 
@@ -23,6 +24,7 @@ import {
   shouldUpdateReaction,
   type ReactionTracker,
 } from './reaction-state.ts';
+import { checkAuthStatus } from '../core/auth.ts';
 
 const log = createChildLogger('handler');
 
@@ -198,7 +200,19 @@ export async function handleMessage(message: Message): Promise<void> {
   } catch (err) {
     log.error({ err }, 'Error processing message');
     await updateReaction(tracker, 'error');
-    await wa.sendMessage(ownerJid, `שגיאה: ${err instanceof Error ? err.message : 'Unknown error'}`);
+    
+    if (err instanceof AuthRequiredError) {
+      await wa.sendMessage(ownerJid, `⚠️ *נדרשת התחברות לספק AI*
+
+${err.message}
+
+🔗 היכנס לממשק הניהול בכתובת:
+${config.host === '0.0.0.0' ? 'http://localhost' : `http://${config.host}`}:${config.port}
+
+ולחץ על "התחבר עם ChatGPT" או "התחבר עם Claude".`);
+    } else {
+      await wa.sendMessage(ownerJid, `שגיאה: ${err instanceof Error ? err.message : 'Unknown error'}`);
+    }
   }
 }
 
@@ -284,12 +298,19 @@ _שלח הודעה לעצמך כדי לדבר עם הסוכן_`,
       const wa = getWhatsAppClient();
       const token = getActiveConnectorToken(settings);
       const connectorHealth = await checkConnectorHealth();
+      const aiStatus = await checkAuthStatus();
+      
+      let aiStatusText = '❌ לא מחובר';
+      if (aiStatus.hasAnyCredential && aiStatus.configuredProviders.length > 0) {
+        aiStatusText = `✅ ${aiStatus.configuredProviders.join(', ')}`;
+      }
       
       return {
         handled: true,
         response: `*סטטוס מערכת*
 
 📱 WhatsApp: ${wa.isConnected() ? '✅ מחובר' : '❌ מנותק'}
+🧠 ספק AI: ${aiStatusText}
 🔌 Open Connector: ${connectorHealth ? '✅ תקין' : '❌ לא זמין'}
 📁 פרויקט פעיל: ${settings.activeProject}
 🔑 מצב מפתחות: ${settings.apiKeyMode === 'shared' ? 'משותף' : 'לפי פרויקט'}
@@ -438,24 +459,30 @@ _היכנס לממשק הניהול לשינוי הגדרות_`,
     }
 
     case 'login': {
+      const aiStatus = await checkAuthStatus();
+      let currentStatus = '❌ לא מחובר לאף ספק';
+      if (aiStatus.hasAnyCredential && aiStatus.configuredProviders.length > 0) {
+        currentStatus = `✅ מחובר: ${aiStatus.configuredProviders.join(', ')}`;
+      }
+      
       return {
         handled: true,
         response: `*התחברות לספק AI*
 
-1. פתח טרמינל בשרת
-2. הרץ: \`npx pi /login\`
-3. בחר ספק (Anthropic, OpenAI, וכו')
-4. עקוב אחרי ההוראות
+📊 סטטוס נוכחי: ${currentStatus}
 
-_או הגדר API key בקובץ .env:_
-\`MODEL_API_KEY=sk-ant-...\`
+*להתחברות:*
+1. היכנס לממשק הניהול:
+   ${config.host === '0.0.0.0' ? 'http://localhost' : `http://${config.host}`}:${config.port}
+2. עבור ללשונית "הגדרות"
+3. לחץ "התחבר עם ChatGPT" או "התחבר עם Claude"
+4. עקוב אחרי הוראות ההתחברות
 
-ספקים נתמכים:
-- Anthropic (Claude Pro/Max subscription)
+*ספקים נתמכים:*
 - OpenAI (ChatGPT Plus/Pro)
-- GitHub Copilot
-- Google Gemini
-- ועוד...`,
+- Anthropic (Claude Pro/Max)
+
+_ההתחברות משתמשת ב-OAuth - לא צריך להזין API key._`,
       };
     }
 

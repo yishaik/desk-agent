@@ -5,12 +5,18 @@ import {
   type AgentSession,
   type ToolDefinition,
 } from '@earendil-works/pi-coding-agent';
-import { Type, type Static, type TObject, type TString, type TOptional, type TRecord, type TBoolean, type TUnknown } from 'typebox';
+import { Type, type Static } from 'typebox';
 import { createChildLogger } from '../core/logger.ts';
 import { loadSettings, getActiveConnectorToken, updateSettings } from '../core/settings.ts';
 import { config } from '../core/config.ts';
 import { OpenConnectorClient } from '../open-connector/client.ts';
 import { join } from 'node:path';
+import { 
+  resolveValidModel, 
+  clearRuntimeCache, 
+  getDefaultModelForProvider,
+  checkAuthStatus,
+} from '../core/auth.ts';
 
 const log = createChildLogger('pi-session');
 
@@ -315,6 +321,59 @@ function createOpenConnectorTools(projectId: string): ToolDefinition[] {
   return [searchActionsTool, getActionGuideTool, executeActionTool, listConnectionsTool] as ToolDefinition[];
 }
 
+interface ResolvedModelResult {
+  model: string;
+  providerId: string;
+  isValid: boolean;
+  fallbackReason?: string;
+}
+
+async function resolveActiveModel(
+  requestedModel: string,
+  runtime: ModelRuntime
+): Promise<ResolvedModelResult> {
+  const resolved = await resolveValidModel(requestedModel);
+  
+  if (resolved.isValid) {
+    const model = runtime.getModel(resolved.providerId, resolved.model);
+    if (model) {
+      return resolved;
+    }
+    const modelIdOnly = resolved.model.split('/').pop() ?? resolved.model;
+    const modelById = runtime.getModel(resolved.providerId, modelIdOnly);
+    if (modelById) {
+      return { ...resolved, model: modelIdOnly };
+    }
+  }
+  
+  return resolved;
+}
+
+export async function recreateSessionForProvider(
+  projectId: string,
+  providerId: string
+): Promise<void> {
+  clearSession(projectId);
+  clearRuntimeCache();
+  
+  const defaultModel = getDefaultModelForProvider(providerId);
+  updateSettings({ model: defaultModel });
+  
+  log.info({ projectId, providerId, model: defaultModel }, 'Recreating session for new provider');
+  await getOrCreateSession(projectId);
+}
+
+export async function getAuthStatus(): Promise<{
+  hasCredentials: boolean;
+  configuredProviders: string[];
+}> {
+  const status = await checkAuthStatus();
+  return {
+    hasCredentials: status.hasAnyCredential,
+    configuredProviders: status.configuredProviders,
+  };
+}
+
 export async function getOrCreateSession(projectId: string): Promise<ProjectSession> {
   const existing = activeSessions.get(projectId);
   if (existing) {
@@ -360,13 +419,27 @@ For send/create/update/delete actions, always wait for the user to confirm befor
 
   const piAgentDir = join(config.dataDir, 'pi-agent');
 
-  let model;
-  if (settings.model) {
-    const [providerId, ...modelParts] = settings.model.split('/');
-    const modelId = modelParts.join('/') || settings.model;
-    model = modelRuntime.getModel(providerId ?? 'anthropic', modelId) ?? 
-            modelRuntime.getModel('anthropic', settings.model);
+  const resolvedModel = await resolveActiveModel(settings.model, modelRuntime);
+  
+  if (!resolvedModel.isValid) {
+    log.warn(
+      { requestedModel: settings.model, reason: resolvedModel.fallbackReason },
+      'No valid credential for model - session will fail on prompt'
+    );
   }
+  
+  if (resolvedModel.fallbackReason && resolvedModel.isValid && resolvedModel.model !== settings.model) {
+    log.info(
+      { original: settings.model, resolved: resolvedModel.model, provider: resolvedModel.providerId },
+      'Using fallback model due to missing credentials'
+    );
+    updateSettings({ model: resolvedModel.model });
+  }
+
+  const model = resolvedModel.isValid && resolvedModel.model
+    ? modelRuntime.getModel(resolvedModel.providerId, resolvedModel.model) ??
+      modelRuntime.getModel(resolvedModel.providerId, resolvedModel.model.split('/').pop() ?? resolvedModel.model)
+    : undefined;
 
   const { session } = await createAgentSession({
     cwd: projectCwd,
@@ -417,6 +490,17 @@ export function clearSession(projectId: string): void {
   }
 }
 
+export function clearAllSessions(): void {
+  for (const [projectId, session] of activeSessions) {
+    session.session.dispose();
+    log.info({ projectId }, 'Pi session disposed');
+  }
+  activeSessions.clear();
+  sharedModelRuntime = null;
+  clearRuntimeCache();
+  log.info('All sessions and runtime cleared');
+}
+
 export function getSession(projectId: string): ProjectSession | undefined {
   return activeSessions.get(projectId);
 }
@@ -457,14 +541,52 @@ export interface RunPromptCallbacks {
   onMessageEnd?: () => void;
 }
 
+export class AuthRequiredError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'AuthRequiredError';
+  }
+}
+
+function isAuthError(error: unknown): boolean {
+  if (error instanceof Error) {
+    const msg = error.message.toLowerCase();
+    return (
+      msg.includes('no api key') ||
+      msg.includes('api key not found') ||
+      msg.includes('use /login') ||
+      msg.includes('unauthorized') ||
+      msg.includes('authentication') ||
+      msg.includes('credential')
+    );
+  }
+  return false;
+}
+
 export async function runPrompt(projectId: string, text: string): Promise<string | null> {
-  const { session } = await getOrCreateSession(projectId);
+  const authStatus = await checkAuthStatus();
+  
+  if (!authStatus.hasAnyCredential) {
+    throw new AuthRequiredError(
+      'אין חיבור לספק AI. היכנס להגדרות ולחץ "התחבר עם ChatGPT" או "התחבר עם Claude" כדי להפעיל את הסוכן.'
+    );
+  }
 
-  await session.prompt(text);
-  await session.waitForIdle();
+  try {
+    const { session } = await getOrCreateSession(projectId);
+    await session.prompt(text);
+    await session.waitForIdle();
 
-  const messages = session.state.messages;
-  return extractTextFromMessages(messages);
+    const messages = session.state.messages;
+    return extractTextFromMessages(messages);
+  } catch (err) {
+    if (isAuthError(err)) {
+      throw new AuthRequiredError(
+        'החיבור לספק AI נכשל. היכנס להגדרות וודא שהחיבור פעיל, או התחבר מחדש.'
+      );
+    }
+    throw err;
+  }
 }
 
 export async function runPromptWithCallbacks(
@@ -472,7 +594,26 @@ export async function runPromptWithCallbacks(
   text: string,
   callbacks: RunPromptCallbacks
 ): Promise<string | null> {
-  const { session } = await getOrCreateSession(projectId);
+  const authStatus = await checkAuthStatus();
+  
+  if (!authStatus.hasAnyCredential) {
+    throw new AuthRequiredError(
+      'אין חיבור לספק AI. היכנס להגדרות ולחץ "התחבר עם ChatGPT" או "התחבר עם Claude" כדי להפעיל את הסוכן.'
+    );
+  }
+
+  let session: AgentSession;
+  try {
+    const result = await getOrCreateSession(projectId);
+    session = result.session;
+  } catch (err) {
+    if (isAuthError(err)) {
+      throw new AuthRequiredError(
+        'החיבור לספק AI נכשל. היכנס להגדרות וודא שהחיבור פעיל, או התחבר מחדש.'
+      );
+    }
+    throw err;
+  }
 
   const unsubscribe = session.subscribe((event) => {
     switch (event.type) {
@@ -505,6 +646,13 @@ export async function runPromptWithCallbacks(
 
     const messages = session.state.messages;
     return extractTextFromMessages(messages);
+  } catch (err) {
+    if (isAuthError(err)) {
+      throw new AuthRequiredError(
+        'החיבור לספק AI נכשל. היכנס להגדרות וודא שהחיבור פעיל, או התחבר מחדש.'
+      );
+    }
+    throw err;
   } finally {
     unsubscribe();
   }
