@@ -913,12 +913,13 @@ export function getSettingsHtml(data: SettingsPageData): string {
         });
         
         const json = await res.json();
+        const authorizeUrl = (json.data && json.data.authorizationUrl) || json.authorizationUrl;
         
-        if (json.authorizationUrl) {
+        if (authorizeUrl) {
           if (popup && !popup.closed) {
-            popup.location = json.authorizationUrl;
+            popup.location = authorizeUrl;
           } else {
-            window.open(json.authorizationUrl, '_blank');
+            window.open(authorizeUrl, '_blank');
           }
           
           showToast('עוקב אחרי חלון ההתחברות...', 'success');

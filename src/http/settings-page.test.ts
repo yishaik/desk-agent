@@ -228,6 +228,13 @@ describe('getSettingsHtml', () => {
     expect(html).toContain('authorizationUrl');
   });
 
+  it('extracts authorizationUrl from nested data or top-level', () => {
+    const html = getSettingsHtml(createTestData());
+    
+    expect(html).toContain('json.data && json.data.authorizationUrl');
+    expect(html).toContain('authorizeUrl');
+  });
+
   it('handles 400 error with consoleUrl by updating console link', () => {
     const html = getSettingsHtml(createTestData());
     
