@@ -155,3 +155,32 @@ describe('Self-Chat Gate', () => {
     }, ownerJid)).toBe(false);
   });
 });
+
+describe('Auth Module', () => {
+  it('listProviders returns provider info structure', async () => {
+    const { listProviders } = await import('./auth.ts');
+    
+    const providers = await listProviders();
+    
+    expect(Array.isArray(providers)).toBe(true);
+    expect(providers.length).toBeGreaterThan(0);
+    
+    for (const provider of providers) {
+      expect(provider).toHaveProperty('id');
+      expect(provider).toHaveProperty('name');
+      expect(provider).toHaveProperty('isConnected');
+      expect(typeof provider.id).toBe('string');
+      expect(typeof provider.name).toBe('string');
+      expect(typeof provider.isConnected).toBe('boolean');
+    }
+  });
+
+  it('logout returns result structure', async () => {
+    const { logout } = await import('./auth.ts');
+    
+    const result = await logout('anthropic');
+    
+    expect(result).toHaveProperty('success');
+    expect(typeof result.success).toBe('boolean');
+  });
+});

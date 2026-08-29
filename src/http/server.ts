@@ -23,6 +23,15 @@ import {
 import { listProjects, createProject, getProject } from '../core/memory.ts';
 import { getWhatsAppClient } from '../whatsapp/client.ts';
 import { createClient, isRealConnection } from '../open-connector/client.ts';
+import { 
+  startLogin, 
+  completeLogin, 
+  getLoginStatusAsync, 
+  listProviders, 
+  logout 
+} from './auth.ts';
+import { writeIdentityFiles } from '../core/identity-files.ts';
+import { getSettingsHtml, type SettingsPageData } from './settings-page.ts';
 
 const log = createChildLogger('http');
 
@@ -163,6 +172,164 @@ addRoute('GET', '/', async (req, res) => {
   sendHtml(res, dashboardHtml);
 });
 
+addRoute('GET', '/settings', async (req, res) => {
+  if (!isAuthenticated(req)) {
+    redirect(res, '/');
+    return;
+  }
+
+  const settings = loadSettings();
+  
+  if (!settings.setupComplete) {
+    redirect(res, '/');
+    return;
+  }
+
+  const wa = getWhatsAppClient();
+  const pairingState = wa.getPairingState();
+  const connector = createClient(settings.activeProject);
+
+  let connectorStatus = {
+    healthy: false,
+    connectionCount: 0,
+    consoleUrl: config.openConnectorUrl,
+  };
+
+  try {
+    const healthy = await connector.checkHealth();
+    if (healthy) {
+      const connections = await connector.listConnections();
+      connectorStatus = {
+        healthy: true,
+        connectionCount: connections.length,
+        consoleUrl: config.openConnectorUrl,
+      };
+    }
+  } catch {
+    // Keep defaults
+  }
+
+  const pageData: SettingsPageData = {
+    settings,
+    pairingState,
+    connectorStatus,
+  };
+
+  const html = getSettingsHtml(pageData);
+  sendHtml(res, html);
+});
+
+addRoute('GET', '/api/auth/providers', async (req, res) => {
+  if (!isAuthenticated(req)) {
+    sendError(res, 'Unauthorized', 401);
+    return;
+  }
+
+  try {
+    const providers = await listProviders();
+    sendJson(res, { success: true, data: providers });
+  } catch (err) {
+    log.error({ err }, 'Failed to list providers');
+    sendError(res, 'Failed to list providers', 500);
+  }
+});
+
+addRoute('POST', '/api/auth/login', async (req, res) => {
+  if (!isAuthenticated(req)) {
+    sendError(res, 'Unauthorized', 401);
+    return;
+  }
+
+  const body = await parseBody<{ provider: string }>(req);
+  if (!body.provider) {
+    sendError(res, 'Provider is required');
+    return;
+  }
+
+  try {
+    const result = await startLogin(body.provider);
+    if (result.error) {
+      sendError(res, result.error);
+    } else {
+      sendJson(res, { success: true, authorizeUrl: result.authorizeUrl });
+    }
+  } catch (err) {
+    log.error({ err }, 'Login error');
+    sendError(res, 'Login failed', 500);
+  }
+});
+
+addRoute('GET', '/api/auth/login/:provider/status', async (req, res, params) => {
+  if (!isAuthenticated(req)) {
+    sendError(res, 'Unauthorized', 401);
+    return;
+  }
+
+  const provider = params.provider;
+  if (!provider) {
+    sendError(res, 'Provider is required');
+    return;
+  }
+
+  try {
+    const status = await getLoginStatusAsync(provider);
+    sendJson(res, { success: true, data: status });
+  } catch (err) {
+    log.error({ err }, 'Login status error');
+    sendError(res, 'Failed to get login status', 500);
+  }
+});
+
+addRoute('POST', '/api/auth/complete', async (req, res) => {
+  if (!isAuthenticated(req)) {
+    sendError(res, 'Unauthorized', 401);
+    return;
+  }
+
+  const body = await parseBody<{ provider: string; codeOrRedirectUrl: string }>(req);
+  if (!body.provider || !body.codeOrRedirectUrl) {
+    sendError(res, 'Provider and codeOrRedirectUrl are required');
+    return;
+  }
+
+  try {
+    const result = await completeLogin(body.provider, body.codeOrRedirectUrl);
+    if (result.success) {
+      sendJson(res, { success: true });
+    } else {
+      sendError(res, result.error || 'Failed to complete login');
+    }
+  } catch (err) {
+    log.error({ err }, 'Complete login error');
+    sendError(res, 'Failed to complete login', 500);
+  }
+});
+
+addRoute('POST', '/api/auth/logout', async (req, res) => {
+  if (!isAuthenticated(req)) {
+    sendError(res, 'Unauthorized', 401);
+    return;
+  }
+
+  const body = await parseBody<{ provider: string }>(req);
+  if (!body.provider) {
+    sendError(res, 'Provider is required');
+    return;
+  }
+
+  try {
+    const result = await logout(body.provider);
+    if (result.success) {
+      sendJson(res, { success: true });
+    } else {
+      sendError(res, result.error || 'Failed to logout');
+    }
+  } catch (err) {
+    log.error({ err }, 'Logout error');
+    sendError(res, 'Failed to logout', 500);
+  }
+});
+
 addRoute('POST', '/auth', async (req, res) => {
   const body = await parseBody<{ token?: string }>(req).catch(() => ({ token: undefined }));
   const token = body.token;
@@ -219,6 +386,10 @@ addRoute('PUT', '/api/settings', async (req, res) => {
   const body = await parseBody<Partial<{
     botName: string;
     ownerName: string;
+    businessName: string;
+    businessDescription: string;
+    agentVoice: string;
+    agentBoundaries: string;
     timezone: string;
     model: string;
     apiKeyMode: 'shared' | 'per-project';
@@ -226,14 +397,21 @@ addRoute('PUT', '/api/settings', async (req, res) => {
   }>>(req);
 
   const updates: Partial<typeof body> = {};
-  if (body.botName) updates.botName = body.botName;
-  if (body.ownerName) updates.ownerName = body.ownerName;
-  if (body.timezone) updates.timezone = body.timezone;
-  if (body.model) updates.model = body.model;
-  if (body.apiKeyMode) updates.apiKeyMode = body.apiKeyMode;
-  if (body.sharedConnectorToken) updates.sharedConnectorToken = body.sharedConnectorToken;
+  if (body.botName !== undefined) updates.botName = body.botName;
+  if (body.ownerName !== undefined) updates.ownerName = body.ownerName;
+  if (body.businessName !== undefined) updates.businessName = body.businessName;
+  if (body.businessDescription !== undefined) updates.businessDescription = body.businessDescription;
+  if (body.agentVoice !== undefined) updates.agentVoice = body.agentVoice;
+  if (body.agentBoundaries !== undefined) updates.agentBoundaries = body.agentBoundaries;
+  if (body.timezone !== undefined) updates.timezone = body.timezone;
+  if (body.model !== undefined) updates.model = body.model;
+  if (body.apiKeyMode !== undefined) updates.apiKeyMode = body.apiKeyMode;
+  if (body.sharedConnectorToken !== undefined) updates.sharedConnectorToken = body.sharedConnectorToken;
 
   const settings = updateSettings(updates);
+  
+  writeIdentityFiles(settings);
+
   sendJson(res, { success: true, data: { ...settings, sharedConnectorToken: '***' } });
 });
 
@@ -1402,6 +1580,18 @@ function getDashboardHtml(settings: ReturnType<typeof loadSettings>, pairingStat
       border-bottom: 1px solid rgba(255,255,255,0.1);
     }
     .navbar h1 { font-size: 20px; }
+    .nav-links {
+      display: flex;
+      align-items: center;
+      gap: 24px;
+    }
+    .nav-link {
+      color: #a1a1aa;
+      text-decoration: none;
+      font-size: 14px;
+      transition: color 0.2s;
+    }
+    .nav-link:hover { color: #fff; }
     .nav-status {
       display: flex;
       align-items: center;
@@ -1524,9 +1714,12 @@ function getDashboardHtml(settings: ReturnType<typeof loadSettings>, pairingStat
 <body>
   <nav class="navbar">
     <h1>🤖 ${settings.botName}</h1>
-    <div class="nav-status">
-      <span class="status-dot ${pairingState.isPaired ? '' : 'offline'}"></span>
-      <span>${pairingState.isPaired ? `${pairingState.name || pairingState.phoneNumber}` : 'מנותק'}</span>
+    <div class="nav-links">
+      <a href="/settings" class="nav-link">⚙️ הגדרות</a>
+      <div class="nav-status">
+        <span class="status-dot ${pairingState.isPaired ? '' : 'offline'}"></span>
+        <span>${pairingState.isPaired ? `${pairingState.name || pairingState.phoneNumber}` : 'מנותק'}</span>
+      </div>
     </div>
   </nav>
 
