@@ -355,58 +355,97 @@ export function getSettingsHtml(data: SettingsPageData): string {
       text-decoration: underline;
     }
     
-    .tool-item {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      padding: 16px;
+    .tool-card {
       background: var(--bg-tertiary);
-      border-radius: 8px;
-      margin-bottom: 12px;
+      border-radius: 12px;
+      padding: 20px;
+      margin-bottom: 16px;
     }
     
-    .tool-info {
+    .tool-card-header {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      margin-bottom: 16px;
+    }
+    
+    .tool-card-info {
       display: flex;
       align-items: center;
-      gap: 12px;
+      gap: 14px;
       flex: 1;
       min-width: 0;
     }
     
-    .tool-icon {
+    .tool-logo {
+      width: 48px;
+      height: 48px;
+      border-radius: 12px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
       font-size: 24px;
-      width: 32px;
-      text-align: center;
+      font-weight: 600;
       flex-shrink: 0;
     }
     
-    .tool-details {
+    .tool-card-details {
       flex: 1;
       min-width: 0;
     }
     
-    .tool-name {
-      font-weight: 500;
-      margin-bottom: 2px;
+    .tool-card-name {
+      font-weight: 600;
+      font-size: 16px;
+      margin-bottom: 4px;
     }
     
-    .tool-description {
+    .tool-card-identity {
       font-size: 13px;
-      color: var(--text-muted);
-      white-space: nowrap;
-      overflow: hidden;
-      text-overflow: ellipsis;
-    }
-    
-    .tool-identity {
-      font-size: 12px;
       color: var(--success);
-      margin-top: 4px;
+      display: flex;
+      align-items: center;
+      gap: 4px;
     }
     
-    .tool-actions {
-      flex-shrink: 0;
-      margin-right: 12px;
+    .tool-card-actions-header {
+      font-size: 12px;
+      color: var(--text-muted);
+      margin-bottom: 10px;
+      font-weight: 500;
+    }
+    
+    .action-chips {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+    
+    .action-chip {
+      background: var(--bg-secondary);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 6px 10px;
+      font-size: 12px;
+      color: var(--text-secondary);
+    }
+    
+    .action-chip-title {
+      font-weight: 500;
+      color: var(--text-primary);
+    }
+    
+    .action-chip-desc {
+      font-size: 11px;
+      color: var(--text-muted);
+      margin-top: 2px;
+    }
+    
+    .action-more {
+      background: transparent;
+      border: 1px dashed var(--border);
+      color: var(--text-muted);
+      font-style: italic;
     }
     
     .empty-state {
@@ -423,7 +462,7 @@ export function getSettingsHtml(data: SettingsPageData): string {
     
     .tools-grid {
       display: grid;
-      gap: 12px;
+      gap: 16px;
     }
   </style>
 </head>
@@ -541,9 +580,9 @@ export function getSettingsHtml(data: SettingsPageData): string {
     <div class="section">
       <div class="section-header">
         <span class="section-icon">🧰</span>
-        <h3 class="section-title">כלים</h3>
+        <h3 class="section-title">כלים מחוברים</h3>
       </div>
-      <p class="section-description">חיבור כלים ושירותים חיצוניים לסוכן</p>
+      <p class="section-description">הכלים והשירותים שהסוכן יכול להשתמש בהם</p>
       
       <div id="toolsContainer">
         <p style="color: var(--text-muted);">טוען...</p>
@@ -826,6 +865,46 @@ export function getSettingsHtml(data: SettingsPageData): string {
       }
     });
 
+    function humanizeAction(action) {
+      if (action.displayName) return action.displayName;
+      const id = action.id || '';
+      const parts = id.split('.');
+      const actionPart = parts.length > 1 ? parts.slice(1).join('.') : id;
+      return actionPart
+        .replace(/_/g, ' ')
+        .replace(/([a-z])([A-Z])/g, '$1 $2')
+        .split(' ')
+        .map(word => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
+        .join(' ');
+    }
+
+    function getToolLogo(tool) {
+      if (tool.icon && !tool.icon.includes('🔧')) {
+        return \`<span style="font-size: 28px;">\${escapeHtml(tool.icon)}</span>\`;
+      }
+      const name = tool.name || tool.id || '?';
+      const letter = name.charAt(0).toUpperCase();
+      const colors = [
+        ['#4285F4', '#fff'], ['#EA4335', '#fff'], ['#34A853', '#fff'], 
+        ['#FBBC05', '#000'], ['#6366f1', '#fff'], ['#8B5CF6', '#fff'],
+        ['#EC4899', '#fff'], ['#14B8A6', '#fff'], ['#F97316', '#fff']
+      ];
+      const colorIdx = name.charCodeAt(0) % colors.length;
+      const [bg, fg] = colors[colorIdx];
+      return \`<span style="background:\${bg}; color:\${fg}; width:100%; height:100%; display:flex; align-items:center; justify-content:center; border-radius:12px;">\${escapeHtml(letter)}</span>\`;
+    }
+
+    async function loadToolActions(serviceId) {
+      try {
+        const res = await fetch(\`/api/connector/actions?service=\${encodeURIComponent(serviceId)}\`);
+        if (!res.ok) return [];
+        const json = await res.json();
+        return json.data || [];
+      } catch {
+        return [];
+      }
+    }
+
     async function loadTools() {
       const container = document.getElementById('toolsContainer');
       
@@ -836,62 +915,96 @@ export function getSettingsHtml(data: SettingsPageData): string {
           res = await fetch('/api/connector/services');
         }
         
-        if (res.status === 404) {
+        if (res.status === 404 || !res.ok) {
+          const connectorRes = await fetch('/api/connector/onboarding');
+          const connectorData = connectorRes.ok ? (await connectorRes.json()).data : {};
+          const consoleUrl = connectorData.consoleUrl || '#';
+          
           container.innerHTML = \`
             <div class="empty-state">
               <div class="empty-state-icon">🧰</div>
-              <p>קטלוג הכלים לא זמין עדיין</p>
-              <p style="font-size: 13px; margin-top: 8px;">הכלים יופיעו כאן כשהקטלוג יהיה מוכן</p>
+              <p>אין כלים מחוברים</p>
+              <p style="font-size: 13px; margin-top: 8px;">
+                <a href="\${escapeHtml(consoleUrl)}" target="_blank" class="external-link">פתח את הקונסול</a> כדי לחבר כלים חדשים
+              </p>
             </div>
           \`;
           return;
-        }
-        
-        if (!res.ok) {
-          throw new Error('Failed to load tools');
         }
         
         const json = await res.json();
-        const tools = json.data || json.tools || [];
+        const allTools = json.data || json.tools || [];
         
-        if (tools.length === 0) {
+        const connectedTools = allTools
+          .filter(t => t.isConnected)
+          .map(t => ({
+            id: t.id || t.serviceId,
+            name: t.hebrewName || t.name || t.id || t.serviceId,
+            description: t.hebrewDescription || t.description || '',
+            icon: t.icon || '',
+            identity: t.identity || null
+          }));
+        
+        if (connectedTools.length === 0) {
+          const connectorRes = await fetch('/api/connector/onboarding');
+          const connectorData = connectorRes.ok ? (await connectorRes.json()).data : {};
+          const consoleUrl = connectorData.consoleUrl || '#';
+          
           container.innerHTML = \`
             <div class="empty-state">
               <div class="empty-state-icon">🧰</div>
-              <p>אין כלים זמינים</p>
-              <p style="font-size: 13px; margin-top: 8px;">כלים חדשים יופיעו כאן כשיתווספו לקטלוג</p>
+              <p>אין כלים מחוברים</p>
+              <p style="font-size: 13px; margin-top: 8px;">
+                <a href="\${escapeHtml(consoleUrl)}" target="_blank" class="external-link">פתח את הקונסול</a> כדי לחבר כלים חדשים
+              </p>
             </div>
           \`;
           return;
         }
         
-        const normalizedTools = tools.map(t => ({
-          id: t.id || t.serviceId,
-          name: t.hebrewName || t.name || t.id || t.serviceId,
-          description: t.hebrewDescription || t.description || '',
-          icon: t.icon || '🔧',
-          isConnected: t.isConnected || false,
-          identity: t.identity || null
-        }));
+        const toolsWithActions = await Promise.all(
+          connectedTools.map(async (tool) => {
+            const actions = await loadToolActions(tool.id);
+            return { ...tool, actions };
+          })
+        );
         
-        container.innerHTML = '<div class="tools-grid">' + normalizedTools.map(tool => \`
-          <div class="tool-item">
-            <div class="tool-info">
-              <span class="tool-icon">\${escapeHtml(tool.icon)}</span>
-              <div class="tool-details">
-                <div class="tool-name">\${escapeHtml(tool.name)}</div>
-                \${tool.description ? \`<div class="tool-description">\${escapeHtml(tool.description)}</div>\` : ''}
-                \${tool.isConnected && tool.identity ? \`<div class="tool-identity">✓ \${escapeHtml(typeof tool.identity === 'string' ? tool.identity : tool.identity.label || tool.identity.email || '')}</div>\` : ''}
+        const MAX_ACTIONS = 12;
+        
+        container.innerHTML = '<div class="tools-grid">' + toolsWithActions.map(tool => {
+          const identityStr = tool.identity 
+            ? (typeof tool.identity === 'string' ? tool.identity : tool.identity.label || tool.identity.email || '')
+            : '';
+          const displayActions = tool.actions.slice(0, MAX_ACTIONS);
+          const moreCount = tool.actions.length - MAX_ACTIONS;
+          
+          return \`
+            <div class="tool-card">
+              <div class="tool-card-header">
+                <div class="tool-card-info">
+                  <div class="tool-logo">\${getToolLogo(tool)}</div>
+                  <div class="tool-card-details">
+                    <div class="tool-card-name">\${escapeHtml(tool.name)}</div>
+                    \${identityStr ? \`<div class="tool-card-identity">✓ \${escapeHtml(identityStr)}</div>\` : ''}
+                  </div>
+                </div>
+                <button type="button" class="danger" onclick="disconnectTool('\${escapeHtml(tool.id)}', '\${escapeHtml(tool.name)}')">ניתוק</button>
               </div>
+              \${displayActions.length > 0 ? \`
+                <div class="tool-card-actions-header">פעולות זמינות</div>
+                <div class="action-chips">
+                  \${displayActions.map(action => \`
+                    <div class="action-chip" title="\${escapeHtml(action.description || '')}">
+                      <div class="action-chip-title">\${escapeHtml(humanizeAction(action))}</div>
+                      \${action.description ? \`<div class="action-chip-desc">\${escapeHtml(action.description.slice(0, 60))}\${action.description.length > 60 ? '...' : ''}</div>\` : ''}
+                    </div>
+                  \`).join('')}
+                  \${moreCount > 0 ? \`<div class="action-chip action-more">+\${moreCount} נוספות</div>\` : ''}
+                </div>
+              \` : ''}
             </div>
-            <div class="tool-actions">
-              \${tool.isConnected
-                ? \`<button type="button" class="danger" onclick="disconnectTool('\${escapeHtml(tool.id)}', '\${escapeHtml(tool.name)}')">ניתוק</button>\`
-                : \`<button type="button" onclick="connectTool('\${escapeHtml(tool.id)}')">חיבור</button>\`
-              }
-            </div>
-          </div>
-        \`).join('') + '</div>';
+          \`;
+        }).join('') + '</div>';
       } catch (err) {
         container.innerHTML = \`
           <div class="empty-state">
@@ -900,60 +1013,6 @@ export function getSettingsHtml(data: SettingsPageData): string {
             <button type="button" class="secondary" style="margin-top: 12px;" onclick="loadTools()">נסה שוב</button>
           </div>
         \`;
-      }
-    }
-
-    async function connectTool(serviceId) {
-      const popup = window.open('about:blank', '_blank', 'noopener');
-      
-      try {
-        const res = await fetch(\`/api/connector/services/\${encodeURIComponent(serviceId)}/connect\`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' }
-        });
-        
-        const json = await res.json();
-        const authorizeUrl = (json.data && json.data.authorizationUrl) || json.authorizationUrl;
-        
-        if (authorizeUrl) {
-          if (popup && !popup.closed) {
-            popup.location = authorizeUrl;
-          } else {
-            window.open(authorizeUrl, '_blank');
-          }
-          
-          showToast('עוקב אחרי חלון ההתחברות...', 'success');
-          
-          const pollInterval = setInterval(async () => {
-            try {
-              await loadTools();
-            } catch {}
-          }, 3000);
-          
-          setTimeout(() => {
-            clearInterval(pollInterval);
-            loadTools();
-          }, 120000);
-        } else if (json.success) {
-          if (popup && !popup.closed) popup.close();
-          showToast('הכלי חובר בהצלחה!');
-          loadTools();
-        } else {
-          if (popup && !popup.closed) popup.close();
-          
-          if (json.consoleUrl) {
-            const consoleLinks = document.querySelectorAll('a[href*="/connector"]');
-            consoleLinks.forEach(link => {
-              link.setAttribute('href', json.consoleUrl);
-            });
-            showToast((json.error || 'שגיאה בחיבור הכלי') + ' - פתח את הקונסול להגדרה', 'error');
-          } else {
-            showToast(json.error || json.message || 'שגיאה בחיבור הכלי', 'error');
-          }
-        }
-      } catch (err) {
-        if (popup && !popup.closed) popup.close();
-        showToast('שגיאה בחיבור הכלי', 'error');
       }
     }
 

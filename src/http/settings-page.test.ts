@@ -171,25 +171,18 @@ describe('getSettingsHtml', () => {
     expect(html).toContain('--accent: #6366f1');
   });
 
-  it('includes tools section', () => {
+  it('includes connected tools section', () => {
     const html = getSettingsHtml(createTestData());
     
-    expect(html).toContain('כלים');
+    expect(html).toContain('כלים מחוברים');
     expect(html).toContain('toolsContainer');
     expect(html).toContain('loadTools');
   });
 
-  it('includes connectTool and disconnectTool functions', () => {
+  it('includes disconnectTool function', () => {
     const html = getSettingsHtml(createTestData());
     
-    expect(html).toContain('async function connectTool(serviceId)');
     expect(html).toContain('async function disconnectTool(serviceId, serviceName)');
-  });
-
-  it('uses about:blank pattern for tool connection popup', () => {
-    const html = getSettingsHtml(createTestData());
-    
-    expect(html).toContain("window.open('about:blank'");
   });
 
   it('fetches tools from /api/connector/tools with fallback to /api/connector/services', () => {
@@ -199,11 +192,17 @@ describe('getSettingsHtml', () => {
     expect(html).toContain('/api/connector/services');
   });
 
-  it('handles empty tools catalog state', () => {
+  it('shows empty state for no connected tools with console link', () => {
     const html = getSettingsHtml(createTestData());
     
-    expect(html).toContain('קטלוג הכלים לא זמין עדיין');
-    expect(html).toContain('אין כלים זמינים');
+    expect(html).toContain('אין כלים מחוברים');
+    expect(html).toContain('פתח את הקונסול');
+  });
+
+  it('filters to connected tools only', () => {
+    const html = getSettingsHtml(createTestData());
+    
+    expect(html).toContain('filter(t => t.isConnected)');
   });
 
   it('normalizes tool fields from API response', () => {
@@ -220,27 +219,31 @@ describe('getSettingsHtml', () => {
     expect(html).toContain("method: 'DELETE'");
   });
 
-  it('uses POST for connecting tools with authorizationUrl', () => {
+  it('fetches actions for connected tools', () => {
     const html = getSettingsHtml(createTestData());
     
-    expect(html).toContain('/connect');
-    expect(html).toContain("method: 'POST'");
-    expect(html).toContain('authorizationUrl');
+    expect(html).toContain('/api/connector/actions?service=');
+    expect(html).toContain('loadToolActions');
   });
 
-  it('extracts authorizationUrl from nested data or top-level', () => {
+  it('humanizes action names', () => {
     const html = getSettingsHtml(createTestData());
     
-    expect(html).toContain('json.data && json.data.authorizationUrl');
-    expect(html).toContain('authorizeUrl');
+    expect(html).toContain('function humanizeAction');
+    expect(html).toContain('action.displayName');
   });
 
-  it('handles 400 error with consoleUrl by updating console link', () => {
+  it('caps actions at 12 per tool card', () => {
     const html = getSettingsHtml(createTestData());
     
-    expect(html).toContain('json.consoleUrl');
-    expect(html).toContain('querySelectorAll');
-    expect(html).toContain('setAttribute');
-    expect(html).toContain('פתח את הקונסול להגדרה');
+    expect(html).toContain('MAX_ACTIONS = 12');
+    expect(html).toContain('slice(0, MAX_ACTIONS)');
+  });
+
+  it('shows tool logo with colored monogram fallback', () => {
+    const html = getSettingsHtml(createTestData());
+    
+    expect(html).toContain('function getToolLogo');
+    expect(html).toContain('tool-logo');
   });
 });
