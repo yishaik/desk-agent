@@ -909,43 +909,16 @@ export function getSettingsHtml(data: SettingsPageData): string {
       const container = document.getElementById('toolsContainer');
       
       try {
-        let res = await fetch('/api/connector/tools');
+        const res = await fetch('/api/connector/tools');
         
-        if (res.status === 404) {
-          res = await fetch('/api/connector/services');
-        }
-        
-        if (res.status === 404 || !res.ok) {
-          const connectorRes = await fetch('/api/connector/onboarding');
-          const connectorData = connectorRes.ok ? (await connectorRes.json()).data : {};
-          const consoleUrl = connectorData.consoleUrl || '#';
-          
-          container.innerHTML = \`
-            <div class="empty-state">
-              <div class="empty-state-icon">🧰</div>
-              <p>אין כלים מחוברים</p>
-              <p style="font-size: 13px; margin-top: 8px;">
-                <a href="\${escapeHtml(consoleUrl)}" target="_blank" class="external-link">פתח את הקונסול</a> כדי לחבר כלים חדשים
-              </p>
-            </div>
-          \`;
-          return;
+        if (!res.ok) {
+          throw new Error('Failed to load tools');
         }
         
         const json = await res.json();
-        const allTools = json.data || json.tools || [];
+        const tools = json.data || [];
         
-        const connectedTools = allTools
-          .filter(t => t.isConnected)
-          .map(t => ({
-            id: t.id || t.serviceId,
-            name: t.hebrewName || t.name || t.id || t.serviceId,
-            description: t.hebrewDescription || t.description || '',
-            icon: t.icon || '',
-            identity: t.identity || null
-          }));
-        
-        if (connectedTools.length === 0) {
+        if (tools.length === 0) {
           const connectorRes = await fetch('/api/connector/onboarding');
           const connectorData = connectorRes.ok ? (await connectorRes.json()).data : {};
           const consoleUrl = connectorData.consoleUrl || '#';
@@ -961,6 +934,14 @@ export function getSettingsHtml(data: SettingsPageData): string {
           \`;
           return;
         }
+        
+        const connectedTools = tools.map(t => ({
+          id: t.id || t.serviceId,
+          name: t.hebrewName || t.name || t.id || t.serviceId,
+          description: t.hebrewDescription || t.description || '',
+          icon: t.icon || '',
+          identity: t.identity || null
+        }));
         
         const toolsWithActions = await Promise.all(
           connectedTools.map(async (tool) => {

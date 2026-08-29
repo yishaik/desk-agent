@@ -185,11 +185,11 @@ describe('getSettingsHtml', () => {
     expect(html).toContain('async function disconnectTool(serviceId, serviceName)');
   });
 
-  it('fetches tools from /api/connector/tools with fallback to /api/connector/services', () => {
+  it('fetches tools from /api/connector/tools only (no catalog fallback)', () => {
     const html = getSettingsHtml(createTestData());
     
-    expect(html).toContain('/api/connector/tools');
-    expect(html).toContain('/api/connector/services');
+    expect(html).toContain("fetch('/api/connector/tools')");
+    expect(html).not.toContain("fetch('/api/connector/services')");
   });
 
   it('shows empty state for no connected tools with console link', () => {
@@ -199,10 +199,10 @@ describe('getSettingsHtml', () => {
     expect(html).toContain('פתח את הקונסול');
   });
 
-  it('filters to connected tools only', () => {
+  it('maps tools from API response (connected-only from API)', () => {
     const html = getSettingsHtml(createTestData());
     
-    expect(html).toContain('filter(t => t.isConnected)');
+    expect(html).toContain('tools.map(t =>');
   });
 
   it('normalizes tool fields from API response', () => {
