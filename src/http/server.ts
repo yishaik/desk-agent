@@ -710,15 +710,6 @@ addRoute('PATCH', '/api/connector/tools/:service/actions/:action/enabled', async
       return;
     }
 
-    const actionPrefix = action.split('.')[0];
-    if (actionPrefix !== service) {
-      sendJson(res, {
-        success: false,
-        error: `Action '${action}' does not belong to service '${service}'`,
-      }, 400);
-      return;
-    }
-
     const actions = await connector.listActions(service);
     const actionExists = actions.some((a) => a.id === action);
     

@@ -540,20 +540,34 @@ describe('Action-level enable/disable', () => {
     expect(enabled).toBe(false);
   });
 
-  it('PATCH action enabled validates action belongs to service', () => {
+  it('PATCH action enabled validates action exists in listActions', () => {
+    const serviceActions = [
+      { id: 'gmail.send_email', service: 'gmail', displayName: 'Send Email', description: '' },
+      { id: 'gmail.fetch_emails', service: 'gmail', displayName: 'Fetch Emails', description: '' },
+    ];
     const actionId = 'gmail.send_email';
-    const service = 'gmail';
-    const actionPrefix = actionId.split('.')[0];
     
-    expect(actionPrefix).toBe(service);
+    const exists = serviceActions.some((a) => a.id === actionId);
+    expect(exists).toBe(true);
   });
 
-  it('PATCH action enabled rejects action from wrong service', () => {
-    const actionId = 'slack.post_message';
-    const service = 'gmail';
-    const actionPrefix = actionId.split('.')[0];
+  it('PATCH action enabled rejects action not in listActions (404)', () => {
+    const serviceActions = [
+      { id: 'gmail.send_email', service: 'gmail', displayName: 'Send Email', description: '' },
+      { id: 'gmail.fetch_emails', service: 'gmail', displayName: 'Fetch Emails', description: '' },
+    ];
+    const inventedActionId = 'gmail.invented_action';
     
-    expect(actionPrefix).not.toBe(service);
+    const exists = serviceActions.some((a) => a.id === inventedActionId);
+    expect(exists).toBe(false);
+  });
+
+  it('PATCH action enabled rejects if listActions is empty (404)', () => {
+    const serviceActions: { id: string }[] = [];
+    const actionId = 'gmail.send_email';
+    
+    const exists = serviceActions.some((a) => a.id === actionId);
+    expect(exists).toBe(false);
   });
 
   it('PATCH action enabled requires real connection', () => {
