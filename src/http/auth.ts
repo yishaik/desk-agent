@@ -228,3 +228,79 @@ export async function logout(provider: string): Promise<{ success: boolean; erro
     return { success: false, error: err instanceof Error ? err.message : String(err) };
   }
 }
+
+export interface ResolvedModel {
+  providerId: string;
+  modelId: string;
+  label: string;
+}
+
+const MODEL_LABELS: Record<string, string> = {
+  'claude-sonnet-4-6': 'Claude Sonnet 4.6',
+  'claude-sonnet-4-5': 'Claude Sonnet 4.5',
+  'claude-3-5-sonnet-20241022': 'Claude 3.5 Sonnet',
+  'claude-3-opus': 'Claude 3 Opus',
+  'gpt-5.5': 'GPT-5.5',
+  'gpt-4o': 'GPT-4o',
+  'gpt-4-turbo': 'GPT-4 Turbo',
+  'o1': 'O1',
+};
+
+export async function resolveActiveModel(settingsModel?: string): Promise<ResolvedModel | null> {
+  const runtime = await getRuntime();
+  
+  if (settingsModel) {
+    const parts = settingsModel.split('/');
+    const providerId = parts.length > 1 ? parts[0] : 'anthropic';
+    const modelId = parts.length > 1 ? parts.slice(1).join('/') : settingsModel;
+    
+    const model = runtime.getModel(providerId ?? 'anthropic', modelId);
+    if (model) {
+      return {
+        providerId: providerId ?? 'anthropic',
+        modelId,
+        label: MODEL_LABELS[modelId] || modelId,
+      };
+    }
+  }
+  
+  for (const provider of SUPPORTED_PROVIDERS) {
+    try {
+      const credentials = await runtime.listCredentials();
+      const hasCredential = credentials.some(c => c.providerId === provider.id);
+      
+      if (hasCredential) {
+        const authCheck = await runtime.checkAuth(provider.id);
+        if (authCheck) {
+          const defaultModels: Record<string, string> = {
+            'anthropic': 'claude-sonnet-4-6',
+            'openai-codex': 'gpt-5.5',
+          };
+          const modelId = defaultModels[provider.id] || 'unknown';
+          return {
+            providerId: provider.id,
+            modelId,
+            label: MODEL_LABELS[modelId] || `${provider.name} (OAuth)`,
+          };
+        }
+      }
+    } catch (err) {
+      log.debug({ err, provider: provider.id }, 'Error checking model for provider');
+    }
+  }
+  
+  return null;
+}
+
+export async function resolveActiveModelLabel(settingsModel?: string): Promise<string> {
+  const resolved = await resolveActiveModel(settingsModel);
+  if (resolved) {
+    return resolved.label;
+  }
+  
+  if (settingsModel) {
+    return MODEL_LABELS[settingsModel] || settingsModel;
+  }
+  
+  return 'לא מוגדר';
+}

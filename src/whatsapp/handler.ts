@@ -4,7 +4,9 @@ import { saveMessage, listProjects, createProject, getProject } from '../core/me
 import { config } from '../core/config.ts';
 import type { Message, MessageKey, Settings } from '../core/types.ts';
 import { getWhatsAppClient } from './client.ts';
+import { createClient, isRealConnection } from '../open-connector/client.ts';
 import { OpenConnectorClient } from '../open-connector/client.ts';
+import { listProviders, resolveActiveModelLabel } from '../http/auth.ts';
 import { 
   runPromptWithCallbacks, 
   clearSession, 
@@ -283,14 +285,41 @@ _שלח הודעה לעצמך כדי לדבר עם הסוכן_`,
     case 'status': {
       const wa = getWhatsAppClient();
       const token = getActiveConnectorToken(settings);
-      const connectorHealth = await checkConnectorHealth();
+      const connector = createClient(settings.activeProject);
+      
+      let connectorHealth = false;
+      let realConnectionCount = 0;
+      try {
+        connectorHealth = await connector.checkHealth();
+        if (connectorHealth) {
+          const connections = await connector.listConnections();
+          realConnectionCount = connections.filter(isRealConnection).length;
+        }
+      } catch {
+        connectorHealth = false;
+      }
+      
+      const modelLabel = await resolveActiveModelLabel(settings.model);
+      
+      let aiProviders = '';
+      try {
+        const providers = await listProviders();
+        const connected = providers.filter(p => p.isConnected);
+        aiProviders = connected.length > 0 
+          ? connected.map(p => p.name).join(', ')
+          : 'אין ספקים מחוברים';
+      } catch {
+        aiProviders = 'לא ניתן לבדוק';
+      }
       
       return {
         handled: true,
         response: `*סטטוס מערכת*
 
 📱 WhatsApp: ${wa.isConnected() ? '✅ מחובר' : '❌ מנותק'}
-🔌 Open Connector: ${connectorHealth ? '✅ תקין' : '❌ לא זמין'}
+🔌 Open Connector: ${connectorHealth ? `✅ תקין (${realConnectionCount} כלים)` : '❌ לא זמין'}
+🧠 מודל: ${modelLabel}
+🤖 ספקי AI: ${aiProviders}
 📁 פרויקט פעיל: ${settings.activeProject}
 🔑 מצב מפתחות: ${settings.apiKeyMode === 'shared' ? 'משותף' : 'לפי פרויקט'}
 🔐 טוקן OC: ${token ? '✅ מוגדר' : '❌ חסר'}`,
@@ -396,6 +425,8 @@ _שלח הודעה לעצמך כדי לדבר עם הסוכן_`,
     }
 
     case 'settings': {
+      const modelLabel = await resolveActiveModelLabel(settings.model);
+      
       return {
         handled: true,
         response: `*הגדרות*
@@ -403,7 +434,7 @@ _שלח הודעה לעצמך כדי לדבר עם הסוכן_`,
 🤖 שם הבוט: ${settings.botName}
 👤 שם הבעלים: ${settings.ownerName || '(לא הוגדר)'}
 🌍 אזור זמן: ${settings.timezone}
-🧠 מודל: ${settings.model}
+🧠 מודל: ${modelLabel}
 🔑 מצב מפתחות: ${settings.apiKeyMode}
 📁 פרויקט פעיל: ${settings.activeProject}
 
@@ -413,9 +444,10 @@ _היכנס לממשק הניהול לשינוי הגדרות_`,
 
     case 'model': {
       if (args.length === 0) {
+        const modelLabel = await resolveActiveModelLabel(settings.model);
         return {
           handled: true,
-          response: `מודל נוכחי: *${settings.model}*\n\nלהחלפה: /model <שם-מודל>\n\nדוגמאות:\n- /model claude-3-5-sonnet-20241022\n- /model claude-sonnet-4-5\n- /model gpt-4o\n\n_או השתמש ב-pi /login ו-/model בטרמינל_`,
+          response: `מודל נוכחי: *${modelLabel}*\n\nלהחלפה: /model <שם-מודל>\n\nדוגמאות:\n- /model claude-sonnet-4-6\n- /model claude-sonnet-4-5\n- /model gpt-5.5\n\nהתחבר לספק AI דרך ממשק הניהול או /login`,
         };
       }
       
@@ -424,15 +456,17 @@ _היכנס לממשק הניהול לשינוי הגדרות_`,
       const success = await setSessionModel(settings.activeProject, model);
       
       if (success) {
+        const newModelLabel = await resolveActiveModelLabel(model);
         return {
           handled: true,
-          response: `✅ מודל שונה ל: *${model}*\n\n_Pi session נוצר מחדש עם המודל החדש._`,
+          response: `✅ מודל שונה ל: *${newModelLabel}*\n\n_Pi session נוצר מחדש עם המודל החדש._`,
         };
       } else {
         updateSettings({ model });
+        const newModelLabel = await resolveActiveModelLabel(model);
         return {
           handled: true,
-          response: `✅ מודל שונה ל: *${model}* (ישתנה בהודעה הבאה)`,
+          response: `✅ מודל שונה ל: *${newModelLabel}* (ישתנה בהודעה הבאה)`,
         };
       }
     }
@@ -442,34 +476,19 @@ _היכנס לממשק הניהול לשינוי הגדרות_`,
         handled: true,
         response: `*התחברות לספק AI*
 
-1. פתח טרמינל בשרת
-2. הרץ: \`npx pi /login\`
-3. בחר ספק (Anthropic, OpenAI, וכו')
-4. עקוב אחרי ההוראות
-
-_או הגדר API key בקובץ .env:_
-\`MODEL_API_KEY=sk-ant-...\`
+היכנס לדף ההגדרות בממשק הניהול כדי להתחבר לספקי AI.
 
 ספקים נתמכים:
 - Anthropic (Claude Pro/Max subscription)
 - OpenAI (ChatGPT Plus/Pro)
-- GitHub Copilot
-- Google Gemini
-- ועוד...`,
+
+_לחלופין, הגדר API key:_
+\`MODEL_API_KEY=sk-ant-...\` (בקובץ .env)`,
       };
     }
 
     default:
       return { handled: false };
-  }
-}
-
-async function checkConnectorHealth(): Promise<boolean> {
-  try {
-    const response = await fetch(`${config.openConnectorUrl}/v1/health`);
-    return response.ok;
-  } catch {
-    return false;
   }
 }
 

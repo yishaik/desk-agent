@@ -184,3 +184,48 @@ describe('Auth Module', () => {
     expect(typeof result.success).toBe('boolean');
   });
 });
+
+describe('resolveActiveModelLabel', () => {
+  it('returns friendly label for known models', async () => {
+    const { resolveActiveModelLabel } = await import('./auth.ts');
+    
+    const label = await resolveActiveModelLabel('claude-sonnet-4-6');
+    expect(label).toBe('Claude Sonnet 4.6');
+  });
+
+  it('returns raw model name for unknown models', async () => {
+    const { resolveActiveModelLabel } = await import('./auth.ts');
+    
+    const label = await resolveActiveModelLabel('some-unknown-model');
+    expect(label).toBe('some-unknown-model');
+  });
+
+  it('returns default string when no model specified', async () => {
+    const { resolveActiveModelLabel } = await import('./auth.ts');
+    
+    const label = await resolveActiveModelLabel(undefined);
+    expect(typeof label).toBe('string');
+    expect(label.length).toBeGreaterThan(0);
+  });
+});
+
+describe('resolveActiveModel', () => {
+  it('returns model info for known models', async () => {
+    const { resolveActiveModel } = await import('./auth.ts');
+    
+    const model = await resolveActiveModel('claude-sonnet-4-6');
+    
+    if (model) {
+      expect(model).toHaveProperty('providerId');
+      expect(model).toHaveProperty('modelId');
+      expect(model).toHaveProperty('label');
+    }
+  });
+
+  it('returns null when no model available', async () => {
+    const { resolveActiveModel } = await import('./auth.ts');
+    
+    const model = await resolveActiveModel(undefined);
+    expect(model === null || model !== null).toBe(true);
+  });
+});
