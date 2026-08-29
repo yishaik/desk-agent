@@ -1,4 +1,5 @@
 import type { Settings, PairingState } from '../core/types.ts';
+import { getThemeCss } from './theme.ts';
 
 interface ConnectorStatus {
   healthy: boolean;
@@ -24,21 +25,7 @@ export function getSettingsHtml(data: SettingsPageData): string {
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>${safeBotName} - הגדרות</title>
   <style>
-    :root {
-      --bg-primary: #09090b;
-      --bg-secondary: #18181b;
-      --bg-tertiary: #27272a;
-      --text-primary: #fafafa;
-      --text-secondary: #a1a1aa;
-      --text-muted: #71717a;
-      --accent: #6366f1;
-      --accent-hover: #4f46e5;
-      --success: #10b981;
-      --error: #ef4444;
-      --warning: #f59e0b;
-      --border: #3f3f46;
-    }
-    
+    ${getThemeCss()}
     * { box-sizing: border-box; margin: 0; padding: 0; }
     
     body {
