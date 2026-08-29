@@ -169,7 +169,9 @@ addRoute('GET', '/', async (req, res) => {
   const pairingState = wa.getPairingState();
 
   if (isSetupRequired() || !pairingState.isPaired) {
-    const wizardHtml = getWizardHtml(settings, pairingState);
+    const providers = await listProviders();
+    const hasAiProvider = providers.some(p => p.isConnected);
+    const wizardHtml = getWizardHtml(settings, pairingState, hasAiProvider);
     sendHtml(res, wizardHtml);
     return;
   }
@@ -1301,7 +1303,7 @@ export function getLoginHtml(): string {
 </html>`;
 }
 
-export function getWizardHtml(settings: ReturnType<typeof loadSettings>, pairingState: { isPaired: boolean; qrCode?: string; qrDataUrl?: string; phoneNumber?: string }): string {
+export function getWizardHtml(settings: ReturnType<typeof loadSettings>, pairingState: { isPaired: boolean; qrCode?: string; qrDataUrl?: string; phoneNumber?: string }, hasAiProvider: boolean = false): string {
   const hasAdminToken = !!config.connectorAdminToken;
   const adminTokenAcked = settings.connectorAdminTokenAcknowledged;
   const needsConnectorAck = hasAdminToken && !adminTokenAcked;
@@ -1309,7 +1311,7 @@ export function getWizardHtml(settings: ReturnType<typeof loadSettings>, pairing
   let step: number;
   if (!pairingState.isPaired) {
     step = 1;
-  } else if (!settings.model || settings.model === 'claude-3-5-sonnet-20241022') {
+  } else if (!hasAiProvider) {
     step = 2;
   } else if (needsConnectorAck) {
     step = 3;
@@ -1501,10 +1503,10 @@ export function getWizardHtml(settings: ReturnType<typeof loadSettings>, pairing
             <span class="provider-icon">🤖</span>
             <div>
               <div class="provider-name">Claude (Anthropic)</div>
-              <div class="provider-status" id="claude-status">בודק...</div>
+              <div class="provider-status" id="anthropic-status">בודק...</div>
             </div>
           </div>
-          <button id="claude-btn" onclick="connectProvider('anthropic')">התחבר</button>
+          <button id="anthropic-btn" onclick="connectProvider('anthropic')">התחבר</button>
         </div>
         
         <div class="provider-card">
@@ -1512,10 +1514,10 @@ export function getWizardHtml(settings: ReturnType<typeof loadSettings>, pairing
             <span class="provider-icon">💬</span>
             <div>
               <div class="provider-name">ChatGPT (OpenAI)</div>
-              <div class="provider-status" id="openai-status">בודק...</div>
+              <div class="provider-status" id="openai-codex-status">בודק...</div>
             </div>
           </div>
-          <button id="openai-btn" onclick="connectProvider('openai-codex')">התחבר</button>
+          <button id="openai-codex-btn" onclick="connectProvider('openai-codex')">התחבר</button>
         </div>
       </div>
       
