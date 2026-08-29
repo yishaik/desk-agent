@@ -203,6 +203,10 @@ export async function handleMessage(message: Message): Promise<void> {
     if (response) {
       await updateReaction(tracker, 'finished');
       await sendSplitMessage(chatJid, response, message.id);
+    } else {
+      // Never fail silently — the user is staring at a chat with no reply.
+      await updateReaction(tracker, 'error');
+      await wa.sendMessage(chatJid, '⚠️ לא התקבלה תשובה מהמודל. נסה שוב, ואם זה חוזר — בדוק את חיבור ה-AI בהגדרות.');
     }
   } catch (err) {
     log.error({ err }, 'Error processing message');

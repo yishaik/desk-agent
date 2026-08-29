@@ -644,6 +644,12 @@ export async function runPromptWithCallbacks(
       case 'message_end':
         callbacks.onMessageEnd?.();
         break;
+      default:
+        log.debug({ event: JSON.stringify(event).slice(0, 500) }, 'Pi event');
+    }
+    const anyEvent = event as { type?: string };
+    if (anyEvent.type && anyEvent.type.toLowerCase().includes('error')) {
+      log.error({ event: JSON.stringify(event).slice(0, 2000) }, 'Pi session error event');
     }
   });
 
@@ -652,7 +658,15 @@ export async function runPromptWithCallbacks(
     await session.waitForIdle();
 
     const messages = session.state.messages;
-    return extractTextFromMessages(messages);
+    const result = extractTextFromMessages(messages);
+    if (!result) {
+      const last = messages[messages.length - 1];
+      log.error(
+        { lastMessage: JSON.stringify(last)?.slice(0, 2000), count: messages.length },
+        'Pi turn produced no assistant text'
+      );
+    }
+    return result;
   } finally {
     unsubscribe();
   }
