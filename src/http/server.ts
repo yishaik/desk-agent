@@ -4,6 +4,7 @@ import { parse as parseQuery } from 'node:querystring';
 import { readFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import QRCode from 'qrcode';
 import { config } from '../core/config.ts';
 import { createChildLogger } from '../core/logger.ts';
 import {
@@ -435,7 +436,11 @@ addRoute('GET', '/api/pairing', async (req, res) => {
 
   const wa = getWhatsAppClient();
   const state = wa.getPairingState();
-  sendJson(res, { success: true, data: state });
+  let qrDataUrl: string | undefined;
+  if (!state.isPaired && state.qrCode) {
+    qrDataUrl = await QRCode.toDataURL(state.qrCode, { width: 280, margin: 1 });
+  }
+  sendJson(res, { success: true, data: { ...state, qrDataUrl } });
 });
 
 addRoute('GET', '/api/settings', async (req, res) => {
