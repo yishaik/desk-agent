@@ -9,7 +9,7 @@ import type { WASocket } from '@whiskeysockets/baileys';
 import { Boom } from '@hapi/boom';
 import { join } from 'node:path';
 import { existsSync, mkdirSync } from 'node:fs';
-import * as qrcode from 'qrcode-terminal';
+import qrcode from 'qrcode-terminal';
 import pino from 'pino';
 import { config } from '../core/config.ts';
 import { createChildLogger } from '../core/logger.ts';
