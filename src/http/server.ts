@@ -706,6 +706,7 @@ addRoute('DELETE', '/api/connector/services/:service', async (req, res) => {
   const url = parseUrl(req.url ?? '', true);
   const pathParts = (url.pathname ?? '').split('/');
   const service = pathParts[4];
+  const queryConnectionName = url.query['connectionName'] as string | undefined;
 
   if (!service) {
     sendError(res, 'Service ID required', 400);
@@ -717,11 +718,12 @@ addRoute('DELETE', '/api/connector/services/:service', async (req, res) => {
 
   try {
     const connections = await connector.listConnections();
-    const realConnection = connections.find(
-      (c) => c.service === service && isRealConnection(c)
-    );
+    
+    const targetConnection = queryConnectionName
+      ? connections.find((c) => c.service === service && c.connectionName === queryConnectionName)
+      : connections.find((c) => c.service === service && isRealConnection(c));
 
-    if (!realConnection) {
+    if (!targetConnection || !isRealConnection(targetConnection)) {
       sendJson(res, {
         success: false,
         error: 'אי אפשר לנתק כלי שלא דורש התחברות',
@@ -729,7 +731,7 @@ addRoute('DELETE', '/api/connector/services/:service', async (req, res) => {
       return;
     }
 
-    await connector.disconnectService(service, realConnection.connectionName);
+    await connector.disconnectService(service, targetConnection.connectionName);
     sendJson(res, { success: true });
   } catch (err) {
     log.error({ err, service }, 'Failed to disconnect service');

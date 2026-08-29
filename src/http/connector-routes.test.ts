@@ -378,6 +378,34 @@ describe('DELETE refuses no_auth services', () => {
     
     expect(realConnection?.connectionName).toBe('work-account');
   });
+
+  it('honors query connectionName to disconnect specific alias', () => {
+    const connections: Connection[] = [
+      { service: 'gmail', connectionName: 'personal', authType: 'oauth2' },
+      { service: 'gmail', connectionName: 'work', authType: 'oauth2' },
+    ];
+    
+    const queryConnectionName = 'work';
+    const targetConnection = connections.find(
+      (c) => c.service === 'gmail' && c.connectionName === queryConnectionName
+    );
+    
+    expect(targetConnection?.connectionName).toBe('work');
+  });
+
+  it('refuses query connectionName if it points to no_auth', () => {
+    const connections: Connection[] = [
+      { service: 'arxiv', connectionName: 'default', authType: 'no_auth', virtual: true },
+    ];
+    
+    const queryConnectionName = 'default';
+    const targetConnection = connections.find(
+      (c) => c.service === 'arxiv' && c.connectionName === queryConnectionName
+    );
+    
+    expect(targetConnection).toBeDefined();
+    expect(isRealConnection(targetConnection!)).toBe(false);
+  });
 });
 
 describe('Connect endpoint accepts any OC OAuth service', () => {
