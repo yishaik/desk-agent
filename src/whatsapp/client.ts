@@ -243,7 +243,11 @@ export class WhatsAppClient {
       throw new Error('WhatsApp client not connected');
     }
 
-    const targetJid = this.resolveSelfChatJid() ?? messageKey.remoteJid;
+    const targetJid = this.resolveSelfChatJid();
+    if (!targetJid) {
+      log.warn('No self-chat JID available for reaction');
+      return;
+    }
 
     await this.socket.sendMessage(targetJid, {
       react: {
