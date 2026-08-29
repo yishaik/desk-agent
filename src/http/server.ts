@@ -14,6 +14,8 @@ import {
   setApiKeyMode,
   markSetupComplete,
   isSetupRequired,
+  acknowledgeAdminToken,
+  isAdminTokenAcknowledged,
 } from '../core/settings.ts';
 import { listProjects, createProject, getProject } from '../core/memory.ts';
 import { getWhatsAppClient } from '../whatsapp/client.ts';
@@ -363,6 +365,14 @@ addRoute('POST', '/api/setup/complete', async (req, res) => {
   sendJson(res, { success: true });
 });
 
+function getConsoleUrl(): string {
+  const origin = config.connectorOrigin;
+  if (config.isProduction && origin.includes('localhost')) {
+    throw new Error('CONNECTOR_ORIGIN must be set to a public URL in production');
+  }
+  return origin;
+}
+
 addRoute('GET', '/api/connector/status', async (req, res) => {
   if (!isAuthenticated(req)) {
     sendError(res, 'Unauthorized', 401);
@@ -381,6 +391,7 @@ addRoute('GET', '/api/connector/status', async (req, res) => {
       data: {
         healthy,
         url: config.openConnectorUrl,
+        consoleUrl: getConsoleUrl(),
         connectionCount: connections.length,
       },
     });
@@ -390,6 +401,7 @@ addRoute('GET', '/api/connector/status', async (req, res) => {
       data: {
         healthy: false,
         url: config.openConnectorUrl,
+        consoleUrl: getConsoleUrl(),
         connectionCount: 0,
       },
     });
@@ -418,7 +430,7 @@ addRoute('GET', '/api/connector/onboarding', async (req, res) => {
     healthy = false;
   }
 
-  const consoleUrl = config.connectorOrigin;
+  const consoleUrl = getConsoleUrl();
   const hasAdminToken = !!config.connectorAdminToken;
   const acknowledged = settings.connectorAdminTokenAcknowledged;
 
@@ -451,6 +463,186 @@ addRoute('POST', '/api/connector/ack-admin-token', async (req, res) => {
   updateSettings({ connectorAdminTokenAcknowledged: true });
   sendJson(res, { success: true });
 });
+
+interface ServiceInfo {
+  id: string;
+  name: string;
+  description?: string;
+  authTypes: string[];
+  isConnected: boolean;
+  identity?: string;
+}
+
+addRoute('GET', '/api/connector/services', async (req, res) => {
+  if (!isAuthenticated(req)) {
+    sendError(res, 'Unauthorized', 401);
+    return;
+  }
+
+  const settings = loadSettings();
+  const connector = createClient(settings.activeProject);
+
+  try {
+    const [providers, connections] = await Promise.all([
+      connector.listProviders(),
+      connector.listConnections(),
+    ]);
+
+    const connectionMap = new Map(connections.map((c) => [c.service, c]));
+
+    const data: ServiceInfo[] = providers.map((p) => {
+      const conn = connectionMap.get(p.id);
+      return {
+        id: p.id,
+        name: p.displayName,
+        description: p.description,
+        authTypes: p.authTypes,
+        isConnected: !!conn,
+        identity: conn?.identity?.label ?? conn?.identity?.email,
+      };
+    });
+
+    sendJson(res, { success: true, data });
+  } catch (err) {
+    log.error({ err }, 'Failed to fetch connector services');
+    sendError(res, 'Failed to fetch services', 500);
+  }
+});
+
+interface ToolInfo {
+  id: string;
+  hebrewName: string;
+  hebrewDescription: string;
+  icon: string;
+  serviceId: string;
+  isConnected: boolean;
+  identity?: string;
+}
+
+const SERVICE_HEBREW_INFO: Record<string, { name: string; description: string; icon: string }> = {
+  gmail: {
+    name: 'Gmail',
+    description: 'קריאת ושליחת מיילים',
+    icon: '📧',
+  },
+  googlecalendar: {
+    name: 'יומן',
+    description: 'ניהול אירועים ופגישות',
+    icon: '📅',
+  },
+};
+
+addRoute('GET', '/api/connector/tools', async (req, res) => {
+  if (!isAuthenticated(req)) {
+    sendError(res, 'Unauthorized', 401);
+    return;
+  }
+
+  const settings = loadSettings();
+  const connector = createClient(settings.activeProject);
+
+  try {
+    const connections = await connector.listConnections();
+    const connectionMap = new Map(connections.map((c) => [c.service, c]));
+
+    const tools: ToolInfo[] = Object.entries(SERVICE_HEBREW_INFO).map(
+      ([serviceId, info]) => {
+        const conn = connectionMap.get(serviceId);
+        return {
+          id: serviceId,
+          hebrewName: info.name,
+          hebrewDescription: info.description,
+          icon: info.icon,
+          serviceId,
+          isConnected: !!conn,
+          identity: conn?.identity?.label ?? conn?.identity?.email,
+        };
+      }
+    );
+
+    sendJson(res, { success: true, data: tools });
+  } catch (err) {
+    log.error({ err }, 'Failed to fetch tools');
+    sendError(res, 'Failed to fetch tools', 500);
+  }
+});
+
+addRoute('POST', '/api/connector/services/:service/connect', async (req, res) => {
+  if (!isAuthenticated(req)) {
+    sendError(res, 'Unauthorized', 401);
+    return;
+  }
+
+  const url = parseUrl(req.url ?? '', true);
+  const pathParts = (url.pathname ?? '').split('/');
+  const service = pathParts[4];
+
+  if (!service) {
+    sendError(res, 'Service ID required', 400);
+    return;
+  }
+
+  const validServices = ['gmail', 'googlecalendar'];
+  if (!validServices.includes(service)) {
+    sendError(res, `Invalid service: ${service}. Valid services: ${validServices.join(', ')}`, 400);
+    return;
+  }
+
+  const settings = loadSettings();
+  const connector = createClient(settings.activeProject);
+
+  try {
+    const result = await connector.startOAuth(service);
+    sendJson(res, {
+      success: true,
+      data: {
+        authorizationUrl: result.authorizationUrl,
+      },
+    });
+  } catch (err) {
+    const errorMessage = err instanceof Error ? err.message : 'Unknown error';
+    log.error({ err, service }, 'Failed to start OAuth');
+    
+    if (errorMessage.includes('OAuth client') || errorMessage.includes('clientId')) {
+      sendError(
+        res,
+        'Google OAuth app not configured. Configure clientId/clientSecret in Open Connector first.',
+        400
+      );
+      return;
+    }
+    
+    sendError(res, `Failed to start OAuth: ${errorMessage}`, 500);
+  }
+});
+
+addRoute('DELETE', '/api/connector/services/:service', async (req, res) => {
+  if (!isAuthenticated(req)) {
+    sendError(res, 'Unauthorized', 401);
+    return;
+  }
+
+  const url = parseUrl(req.url ?? '', true);
+  const pathParts = (url.pathname ?? '').split('/');
+  const service = pathParts[4];
+
+  if (!service) {
+    sendError(res, 'Service ID required', 400);
+    return;
+  }
+
+  const settings = loadSettings();
+  const connector = createClient(settings.activeProject);
+
+  try {
+    await connector.disconnectService(service);
+    sendJson(res, { success: true });
+  } catch (err) {
+    log.error({ err, service }, 'Failed to disconnect service');
+    sendError(res, 'Failed to disconnect service', 500);
+  }
+});
+
 
 function getLoginHtml(): string {
   return `<!DOCTYPE html>

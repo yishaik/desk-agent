@@ -132,3 +132,16 @@ export function isSetupRequired(): boolean {
   const settings = loadSettings();
   return !settings.setupComplete;
 }
+
+export function acknowledgeAdminToken(): Settings {
+  const settings = loadSettings();
+  settings.connectorAdminTokenAcknowledged = true;
+  saveSettings(settings);
+  log.info('Admin token acknowledged');
+  return settings;
+}
+
+export function isAdminTokenAcknowledged(): boolean {
+  const settings = loadSettings();
+  return settings.connectorAdminTokenAcknowledged;
+}

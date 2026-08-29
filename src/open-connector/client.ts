@@ -50,6 +50,22 @@ export interface Action {
   requiredScopes?: string[];
 }
 
+export interface ConnectedApp {
+  service: string;
+  displayName: string;
+  description?: string;
+  authType: string;
+  identity?: {
+    label: string;
+    email?: string;
+  };
+}
+
+export interface OAuthStartResponse {
+  authorizationUrl: string;
+  state: string;
+}
+
 export class OpenConnectorClient {
   private baseUrl: string;
   private projectId?: string;
@@ -99,10 +115,8 @@ export class OpenConnectorClient {
   }
 
   async listProviders(): Promise<Provider[]> {
-    const response = await this.request<{ success: boolean; data: Provider[] }>(
-      '/v1/apps'
-    );
-    return response.data;
+    const response = await this.request<Provider[]>('/v1/providers');
+    return response;
   }
 
   async getProvider(serviceId: string): Promise<Provider | null> {
@@ -117,10 +131,8 @@ export class OpenConnectorClient {
   }
 
   async listConnections(): Promise<Connection[]> {
-    const response = await this.request<{ success: boolean; data: Connection[] }>(
-      '/api/connections'
-    );
-    return response.data;
+    const response = await this.request<Connection[]>('/api/connections');
+    return response;
   }
 
   async getAuthenticatedServices(services: string[]): Promise<string[]> {
@@ -218,6 +230,35 @@ export class OpenConnectorClient {
     } catch {
       return false;
     }
+  }
+
+  async listConnectedApps(): Promise<ConnectedApp[]> {
+    const response = await this.request<ConnectedApp[]>('/v1/apps');
+    return response;
+  }
+
+  async startOAuth(
+    service: string,
+    redirectUri?: string
+  ): Promise<OAuthStartResponse> {
+    const body: Record<string, unknown> = { service };
+    if (redirectUri) {
+      body.redirectUri = redirectUri;
+    }
+    const response = await this.request<OAuthStartResponse>(
+      '/api/oauth/authorizations',
+      {
+        method: 'POST',
+        body: JSON.stringify(body),
+      }
+    );
+    return response;
+  }
+
+  async disconnectService(service: string): Promise<void> {
+    await this.request<void>(`/api/connections/${encodeURIComponent(service)}`, {
+      method: 'DELETE',
+    });
   }
 }
 
