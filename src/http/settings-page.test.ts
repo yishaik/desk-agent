@@ -227,4 +227,13 @@ describe('getSettingsHtml', () => {
     expect(html).toContain("method: 'POST'");
     expect(html).toContain('authorizationUrl');
   });
+
+  it('handles 400 error with consoleUrl by updating console link', () => {
+    const html = getSettingsHtml(createTestData());
+    
+    expect(html).toContain('json.consoleUrl');
+    expect(html).toContain('querySelectorAll');
+    expect(html).toContain('setAttribute');
+    expect(html).toContain('פתח את הקונסול להגדרה');
+  });
 });

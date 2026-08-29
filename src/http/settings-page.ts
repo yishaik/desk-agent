@@ -939,7 +939,16 @@ export function getSettingsHtml(data: SettingsPageData): string {
           loadTools();
         } else {
           if (popup && !popup.closed) popup.close();
-          showToast(json.error || json.message || 'שגיאה בחיבור הכלי', 'error');
+          
+          if (json.consoleUrl) {
+            const consoleLinks = document.querySelectorAll('a[href*="/connector"]');
+            consoleLinks.forEach(link => {
+              link.setAttribute('href', json.consoleUrl);
+            });
+            showToast((json.error || 'שגיאה בחיבור הכלי') + ' - פתח את הקונסול להגדרה', 'error');
+          } else {
+            showToast(json.error || json.message || 'שגיאה בחיבור הכלי', 'error');
+          }
         }
       } catch (err) {
         if (popup && !popup.closed) popup.close();
