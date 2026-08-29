@@ -193,20 +193,34 @@ addRoute('GET', '/settings', async (req, res) => {
   const pairingState = wa.getPairingState();
   const connector = createClient(settings.activeProject);
 
-  let connectorStatus = {
+  const hasAdminToken = !!config.connectorAdminToken;
+  const adminTokenAcked = settings.connectorAdminTokenAcknowledged;
+  
+  let connectorStatus: {
+    healthy: boolean;
+    connectionCount: number;
+    consoleUrl: string;
+    adminToken?: string;
+    requiresAck: boolean;
+  } = {
     healthy: false,
     connectionCount: 0,
     consoleUrl: config.openConnectorUrl,
+    requiresAck: hasAdminToken && !adminTokenAcked,
   };
+
+  if (hasAdminToken && !adminTokenAcked) {
+    connectorStatus.adminToken = config.connectorAdminToken;
+  }
 
   try {
     const healthy = await connector.checkHealth();
     if (healthy) {
       const connections = await connector.listConnections();
       connectorStatus = {
+        ...connectorStatus,
         healthy: true,
         connectionCount: connections.length,
-        consoleUrl: config.openConnectorUrl,
       };
     }
   } catch {

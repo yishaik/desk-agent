@@ -4,6 +4,8 @@ interface ConnectorStatus {
   healthy: boolean;
   connectionCount: number;
   consoleUrl?: string;
+  adminToken?: string;
+  requiresAck?: boolean;
 }
 
 export interface SettingsPageData {
@@ -123,6 +125,49 @@ export function getSettingsHtml(data: SettingsPageData): string {
       color: var(--text-secondary);
       font-size: 14px;
       margin-bottom: 20px;
+    }
+
+    .admin-token-card {
+      background: rgba(79, 70, 229, 0.1);
+      border: 1px solid rgba(79, 70, 229, 0.3);
+      border-radius: 8px;
+      padding: 16px;
+      margin-top: 16px;
+    }
+
+    .admin-token-title {
+      margin: 0 0 8px 0;
+      color: #a5b4fc;
+      font-size: 14px;
+    }
+
+    .admin-token-hint {
+      color: var(--text-muted);
+      font-size: 12px;
+      margin: 0 0 12px 0;
+    }
+
+    .admin-token-value {
+      background: rgba(0, 0, 0, 0.3);
+      padding: 12px;
+      border-radius: 6px;
+      font-family: monospace;
+      word-break: break-all;
+      margin-bottom: 12px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+    }
+
+    .admin-token-value code {
+      flex: 1;
+      font-size: 12px;
+    }
+
+    .admin-token-card button.small {
+      padding: 4px 8px;
+      font-size: 12px;
     }
     
     .form-group {
@@ -684,6 +729,18 @@ export function getSettingsHtml(data: SettingsPageData): string {
           <button type="button" class="secondary">פתח את הקונסול</button>
         </a>
       </div>
+      
+      ${connectorStatus.requiresAck && connectorStatus.adminToken ? `
+      <div id="adminTokenCard" class="admin-token-card">
+        <h4 class="admin-token-title">🔑 טוקן ניהול (חד-פעמי)</h4>
+        <p class="admin-token-hint">שמור את הטוקן הזה - לא יוצג שוב!</p>
+        <div class="admin-token-value">
+          <code>${escapeHtml(connectorStatus.adminToken)}</code>
+          <button type="button" class="secondary small" onclick="copyAdminToken()">העתק</button>
+        </div>
+        <button type="button" class="primary" onclick="ackAdminToken()">שמרתי את הטוקן</button>
+      </div>
+      ` : ''}
     </div>
 
     <!-- Tools Section -->
@@ -777,6 +834,29 @@ export function getSettingsHtml(data: SettingsPageData): string {
       toast.className = 'toast ' + type;
       toast.style.display = 'block';
       setTimeout(() => { toast.style.display = 'none'; }, 3000);
+    }
+
+    function copyAdminToken() {
+      const tokenEl = document.querySelector('#adminTokenCard code');
+      if (tokenEl) {
+        navigator.clipboard.writeText(tokenEl.textContent);
+        showToast('הטוקן הועתק');
+      }
+    }
+
+    async function ackAdminToken() {
+      try {
+        const res = await fetch('/api/connector/ack-admin-token', { method: 'POST' });
+        if (res.ok) {
+          const card = document.getElementById('adminTokenCard');
+          if (card) card.style.display = 'none';
+          showToast('הטוקן אושר');
+        } else {
+          showToast('שגיאה באישור הטוקן', 'error');
+        }
+      } catch {
+        showToast('שגיאה באישור הטוקן', 'error');
+      }
     }
 
     function closeModal() {

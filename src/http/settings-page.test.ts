@@ -332,4 +332,68 @@ describe('getSettingsHtml', () => {
     
     expect(html).toContain("showToast('נשמר והוחל')");
   });
+
+  it('shows admin token card when requiresAck is true', () => {
+    const html = getSettingsHtml(createTestData({
+      connectorStatus: {
+        healthy: true,
+        connectionCount: 1,
+        consoleUrl: 'http://localhost:3000',
+        adminToken: 'test-admin-token-123',
+        requiresAck: true,
+      },
+    }));
+    
+    expect(html).toContain('adminTokenCard');
+    expect(html).toContain('טוקן ניהול');
+    expect(html).toContain('שמרתי את הטוקן');
+    expect(html).toContain('test-admin-token-123');
+  });
+
+  it('hides admin token card when requiresAck is false', () => {
+    const html = getSettingsHtml(createTestData({
+      connectorStatus: {
+        healthy: true,
+        connectionCount: 1,
+        consoleUrl: 'http://localhost:3000',
+        requiresAck: false,
+      },
+    }));
+    
+    expect(html).not.toContain('id="adminTokenCard"');
+    expect(html).not.toContain('🔑 טוקן ניהול');
+  });
+
+  it('uses טוקן terminology not אסימון', () => {
+    const html = getSettingsHtml(createTestData({
+      connectorStatus: {
+        healthy: true,
+        connectionCount: 1,
+        consoleUrl: 'http://localhost:3000',
+        adminToken: 'test-token',
+        requiresAck: true,
+      },
+    }));
+    
+    expect(html).toContain('טוקן ניהול');
+    expect(html).toContain('שמרתי את הטוקן');
+    expect(html).toContain('שגיאה באישור הטוקן');
+    expect(html).not.toContain('אסימון');
+  });
+
+  it('includes copyAdminToken and ackAdminToken functions', () => {
+    const html = getSettingsHtml(createTestData({
+      connectorStatus: {
+        healthy: true,
+        connectionCount: 1,
+        consoleUrl: 'http://localhost:3000',
+        adminToken: 'test-token',
+        requiresAck: true,
+      },
+    }));
+    
+    expect(html).toContain('function copyAdminToken');
+    expect(html).toContain('function ackAdminToken');
+    expect(html).toContain('/api/connector/ack-admin-token');
+  });
 });
