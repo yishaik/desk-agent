@@ -267,11 +267,9 @@ async function handleCommand(text: string, settings: Settings): Promise<CommandR
 /status - סטטוס חיבור
 /project [name] - החלף/צור פרויקט (מחליף Pi session)
 /projects - רשימת פרויקטים
-/mode [shared|per-project] - מצב מפתחות API
 /services - רשימת שירותים מחוברים
 /settings - הצג הגדרות
 /model [name] - החלף מודל
-/login - התחברות לספק AI
 
 *פעולות Open Connector:*
 שאל "מה אני יכול לעשות עם Gmail?" או "שלח מייל ל..."
