@@ -519,7 +519,7 @@ interface ToolInfo {
   identity?: string;
 }
 
-const SERVICE_HEBREW_INFO: Record<string, { name: string; description: string; icon: string }> = {
+const SERVICE_HEBREW_OVERLAY: Record<string, { name: string; description: string; icon: string }> = {
   gmail: {
     name: 'Gmail',
     description: 'קריאת ושליחת מיילים',
@@ -530,7 +530,32 @@ const SERVICE_HEBREW_INFO: Record<string, { name: string; description: string; i
     description: 'ניהול אירועים ופגישות',
     icon: '📅',
   },
+  slack: {
+    name: 'Slack',
+    description: 'הודעות וערוצים',
+    icon: '💬',
+  },
+  notion: {
+    name: 'Notion',
+    description: 'מסמכים ומאגרי מידע',
+    icon: '📝',
+  },
+  github: {
+    name: 'GitHub',
+    description: 'ניהול קוד ופרויקטים',
+    icon: '🐙',
+  },
+  linear: {
+    name: 'Linear',
+    description: 'ניהול משימות',
+    icon: '📋',
+  },
 };
+
+function getDefaultIcon(serviceId: string): string {
+  const firstChar = serviceId.charAt(0).toUpperCase();
+  return `🔌`;
+}
 
 addRoute('GET', '/api/connector/tools', async (req, res) => {
   if (!isAuthenticated(req)) {
@@ -542,23 +567,28 @@ addRoute('GET', '/api/connector/tools', async (req, res) => {
   const connector = createClient(settings.activeProject);
 
   try {
-    const connections = await connector.listConnections();
+    const [providers, connections] = await Promise.all([
+      connector.listProviders(),
+      connector.listConnections(),
+    ]);
+    
     const connectionMap = new Map(connections.map((c) => [c.service, c]));
 
-    const tools: ToolInfo[] = Object.entries(SERVICE_HEBREW_INFO).map(
-      ([serviceId, info]) => {
-        const conn = connectionMap.get(serviceId);
-        return {
-          id: serviceId,
-          hebrewName: info.name,
-          hebrewDescription: info.description,
-          icon: info.icon,
-          serviceId,
-          isConnected: !!conn,
-          identity: conn?.identity?.label ?? conn?.identity?.email,
-        };
-      }
-    );
+    const tools: ToolInfo[] = providers.map((provider) => {
+      const serviceId = provider.id;
+      const conn = connectionMap.get(serviceId);
+      const overlay = SERVICE_HEBREW_OVERLAY[serviceId];
+      
+      return {
+        id: serviceId,
+        hebrewName: overlay?.name ?? provider.displayName,
+        hebrewDescription: overlay?.description ?? provider.description ?? '',
+        icon: overlay?.icon ?? getDefaultIcon(serviceId),
+        serviceId,
+        isConnected: !!conn,
+        identity: conn?.identity?.label ?? conn?.identity?.email,
+      };
+    });
 
     sendJson(res, { success: true, data: tools });
   } catch (err) {
@@ -582,16 +612,35 @@ addRoute('POST', '/api/connector/services/:service/connect', async (req, res) =>
     return;
   }
 
-  const validServices = ['gmail', 'googlecalendar'];
-  if (!validServices.includes(service)) {
-    sendError(res, `Invalid service: ${service}. Valid services: ${validServices.join(', ')}`, 400);
-    return;
-  }
-
   const settings = loadSettings();
   const connector = createClient(settings.activeProject);
 
   try {
+    const providers = await connector.listProviders();
+    const provider = providers.find((p) => p.id === service);
+    
+    if (!provider) {
+      sendJson(res, {
+        success: false,
+        error: `Service '${service}' not found in Open Connector catalog`,
+        consoleUrl: getConsoleUrl(),
+      }, 404);
+      return;
+    }
+
+    if (!provider.authTypes.includes('oauth2')) {
+      const authTypesDisplay = provider.authTypes.length > 0 
+        ? provider.authTypes.join(', ') 
+        : 'none';
+      sendJson(res, {
+        success: false,
+        error: `Service '${service}' does not support OAuth2 (supports: ${authTypesDisplay}). Configure it in Open Connector console.`,
+        consoleUrl: getConsoleUrl(),
+        authTypes: provider.authTypes,
+      }, 400);
+      return;
+    }
+
     const result = await connector.startOAuth(service);
     sendJson(res, {
       success: true,
@@ -603,12 +652,12 @@ addRoute('POST', '/api/connector/services/:service/connect', async (req, res) =>
     const errorMessage = err instanceof Error ? err.message : 'Unknown error';
     log.error({ err, service }, 'Failed to start OAuth');
     
-    if (errorMessage.includes('OAuth client') || errorMessage.includes('clientId')) {
-      sendError(
-        res,
-        'Google OAuth app not configured. Configure clientId/clientSecret in Open Connector first.',
-        400
-      );
+    if (errorMessage.includes('OAuth') || errorMessage.includes('client') || errorMessage.includes('config')) {
+      sendJson(res, {
+        success: false,
+        error: `OAuth not configured for '${service}'. Configure OAuth credentials in Open Connector console.`,
+        consoleUrl: getConsoleUrl(),
+      }, 400);
       return;
     }
     

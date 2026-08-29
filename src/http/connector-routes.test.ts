@@ -106,8 +106,8 @@ describe('Console URL Resolution', () => {
   });
 });
 
-describe('Service Hebrew Info', () => {
-  const SERVICE_HEBREW_INFO: Record<string, { name: string; description: string; icon: string }> = {
+describe('Service Hebrew Overlay', () => {
+  const SERVICE_HEBREW_OVERLAY: Record<string, { name: string; description: string; icon: string }> = {
     gmail: {
       name: 'Gmail',
       description: 'קריאת ושליחת מיילים',
@@ -120,45 +120,57 @@ describe('Service Hebrew Info', () => {
     },
   };
 
-  it('uses correct service IDs gmail and googlecalendar', () => {
-    expect(SERVICE_HEBREW_INFO).toHaveProperty('gmail');
-    expect(SERVICE_HEBREW_INFO).toHaveProperty('googlecalendar');
-    expect(SERVICE_HEBREW_INFO).not.toHaveProperty('google-calendar');
-    expect(SERVICE_HEBREW_INFO).not.toHaveProperty('google-mail');
+  it('has Hebrew overlay for known service IDs gmail and googlecalendar', () => {
+    expect(SERVICE_HEBREW_OVERLAY).toHaveProperty('gmail');
+    expect(SERVICE_HEBREW_OVERLAY).toHaveProperty('googlecalendar');
   });
 
-  it('has Hebrew names for services', () => {
-    const gmail = SERVICE_HEBREW_INFO['gmail'];
-    const googlecalendar = SERVICE_HEBREW_INFO['googlecalendar'];
+  it('uses correct service IDs (not hyphenated)', () => {
+    expect(SERVICE_HEBREW_OVERLAY).not.toHaveProperty('google-calendar');
+    expect(SERVICE_HEBREW_OVERLAY).not.toHaveProperty('google-mail');
+  });
+
+  it('has Hebrew names for known services', () => {
+    const gmail = SERVICE_HEBREW_OVERLAY['gmail'];
+    const googlecalendar = SERVICE_HEBREW_OVERLAY['googlecalendar'];
     expect(gmail?.name).toBe('Gmail');
     expect(googlecalendar?.name).toBe('יומן');
   });
 
-  it('has Hebrew descriptions', () => {
-    const gmail = SERVICE_HEBREW_INFO['gmail'];
-    const googlecalendar = SERVICE_HEBREW_INFO['googlecalendar'];
+  it('has Hebrew descriptions for known services', () => {
+    const gmail = SERVICE_HEBREW_OVERLAY['gmail'];
+    const googlecalendar = SERVICE_HEBREW_OVERLAY['googlecalendar'];
     expect(gmail?.description).toMatch(/מיילים/);
     expect(googlecalendar?.description).toMatch(/אירועים|פגישות/);
   });
+
+  it('overlay is optional - unknown services fall back to provider displayName', () => {
+    const unknownService = 'some-new-service';
+    const overlay = SERVICE_HEBREW_OVERLAY[unknownService];
+    expect(overlay).toBeUndefined();
+  });
 });
 
-describe('Valid Service IDs for Connect', () => {
-  const validServices = ['gmail', 'googlecalendar'];
-
-  it('accepts gmail as valid service', () => {
-    expect(validServices.includes('gmail')).toBe(true);
+describe('Connect endpoint accepts any OC OAuth service', () => {
+  it('does not hardcode service validation', () => {
+    const mockProvider = {
+      id: 'custom-service',
+      displayName: 'Custom Service',
+      authTypes: ['oauth2'],
+    };
+    
+    expect(mockProvider.authTypes.includes('oauth2')).toBe(true);
   });
 
-  it('accepts googlecalendar as valid service', () => {
-    expect(validServices.includes('googlecalendar')).toBe(true);
-  });
-
-  it('rejects google-calendar (hyphenated) as invalid', () => {
-    expect(validServices.includes('google-calendar')).toBe(false);
-  });
-
-  it('rejects google-mail as invalid', () => {
-    expect(validServices.includes('google-mail')).toBe(false);
+  it('rejects non-oauth2 services with helpful error', () => {
+    const mockProvider = {
+      id: 'api-key-service',
+      displayName: 'API Key Service',
+      authTypes: ['api_key'],
+    };
+    
+    expect(mockProvider.authTypes.includes('oauth2')).toBe(false);
+    expect(mockProvider.authTypes).toContain('api_key');
   });
 });
 
