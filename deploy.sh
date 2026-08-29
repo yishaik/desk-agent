@@ -20,6 +20,7 @@
 #   - Cloud-level firewall (OCI security list/NSG, Hetzner firewall, etc.)
 #     allowing TCP 80+443 in.
 set -euo pipefail
+trap 'echo "❌ deploy.sh failed at line $LINENO" >&2' ERR
 
 DOMAIN="${1:-}"
 CONSOLE_DOMAIN="${2:-}"
@@ -100,7 +101,7 @@ fi
 # --- 5. DNS sanity (warn only) ---------------------------------------------
 PUBLIC_IP="$(curl -s --max-time 8 ifconfig.me || true)"
 for NAME in "$DOMAIN" "$CONSOLE_DOMAIN"; do
-  RESOLVED="$(getent ahostsv4 "$NAME" 2>/dev/null | awk 'NR==1{print $1}')"
+  RESOLVED="$(getent ahostsv4 "$NAME" 2>/dev/null | awk 'NR==1{print $1}' || true)"
   if [ -z "$RESOLVED" ]; then
     echo "⚠️  ${NAME} does not resolve yet — create its A record (→ ${PUBLIC_IP:-this server}), HTTPS will fail until it does"
   elif [ -n "$PUBLIC_IP" ] && [ "$RESOLVED" != "$PUBLIC_IP" ]; then
