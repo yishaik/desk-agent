@@ -1515,7 +1515,7 @@ export function getWizardHtml(settings: ReturnType<typeof loadSettings>, pairing
               <div class="provider-status" id="openai-status">בודק...</div>
             </div>
           </div>
-          <button id="openai-btn" onclick="connectProvider('openai')">התחבר</button>
+          <button id="openai-btn" onclick="connectProvider('openai-codex')">התחבר</button>
         </div>
       </div>
       
