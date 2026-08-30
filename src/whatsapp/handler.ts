@@ -19,10 +19,15 @@ import {
   recreateSessionAfterCredentialChange,
   CredentialError,
 } from '../agent/session.ts';
-import { 
+import {
   listRuntimeCredentials,
   resolveActiveModel,
 } from '../http/auth.ts';
+import {
+  isClaudeCodeConnected,
+  runClaudeCodePrompt,
+  clearClaudeCodeSession,
+} from '../agent/claude-code.ts';
 import { 
   type ReactionState, 
   createReactionTracker, 
@@ -371,6 +376,7 @@ _שלח הודעה לעצמך כדי לדבר עם הסוכן_`,
       }
       
       clearSession(settings.activeProject);
+      clearClaudeCodeSession(settings.activeProject);
       
       updateSettings({ activeProject: projectId });
       
@@ -515,6 +521,33 @@ async function processWithPi(
   tracker: ReactionTracker | null
 ): Promise<string | null> {
   await updateReaction(tracker, 'processing');
+
+  // Claude Code (customer's own subscription login) takes precedence — it is
+  // the only path that draws on Pro/Max plan limits.
+  if (isClaudeCodeConnected()) {
+    log.info({ projectId: settings.activeProject, message: message.body.slice(0, 50) }, 'Processing with Claude Code');
+    const response = await runClaudeCodePrompt(settings.activeProject, message.body, {
+      onToolStart: (toolName) => {
+        log.debug({ toolName }, 'Claude Code tool started');
+        updateReaction(tracker, 'using_tools').catch(() => {});
+      },
+      onThinking: () => {
+        updateReaction(tracker, 'thinking').catch(() => {});
+      },
+    });
+    if (response) {
+      saveMessage({
+        id: `bot_${Date.now()}`,
+        from: 'bot',
+        to: message.from,
+        body: response,
+        timestamp: Math.floor(Date.now() / 1000),
+        isFromMe: false,
+        projectId: settings.activeProject,
+      });
+    }
+    return response;
+  }
 
   const credentialCheck = await checkCredentialsBeforePrompt();
   

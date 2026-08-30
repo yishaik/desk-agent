@@ -1524,9 +1524,20 @@ export function getWizardHtml(settings: ReturnType<typeof loadSettings>, pairing
       <div id="providersContainer">
         <div class="provider-card">
           <div class="provider-info">
+            <span class="provider-icon">⭐</span>
+            <div>
+              <div class="provider-name">Claude — מנוי Pro/Max (מומלץ)</div>
+              <div class="provider-status" id="claude-code-status">בודק...</div>
+            </div>
+          </div>
+          <button id="claude-code-btn" onclick="connectProvider('claude-code')">התחבר</button>
+        </div>
+
+        <div class="provider-card">
+          <div class="provider-info">
             <span class="provider-icon">🤖</span>
             <div>
-              <div class="provider-name">Claude (Anthropic)</div>
+              <div class="provider-name">Claude (Anthropic · extra usage)</div>
               <div class="provider-status" id="anthropic-status">בודק...</div>
             </div>
           </div>

@@ -9,7 +9,12 @@ RUN apt-get update && apt-get install -y \
     make \
     g++ \
     wget \
+    util-linux \
     && rm -rf /var/lib/apt/lists/*
+
+# Claude Code engine: the unmodified official binary; customers sign in with
+# their own subscription (see src/agent/claude-code.ts for the compliance note)
+RUN npm install -g @anthropic-ai/claude-code
 
 WORKDIR /app
 

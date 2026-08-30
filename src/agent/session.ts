@@ -32,77 +32,20 @@ const activeSessions = new Map<string, ProjectSession>();
 
 let sharedModelRuntime: ModelRuntime | null = null;
 
-const pendingConfirmations = new Map<string, {
-  actionId: string;
-  input: Record<string, unknown>;
-  connectionName?: string;
-  createdAt: number;
-}>();
-
-const MUTATING_ACTION_PATTERNS = [
-  /\.send[A-Z_]/i,
-  /\.create[A-Z_]/i,
-  /\.update[A-Z_]/i,
-  /\.delete[A-Z_]/i,
-  /\.remove[A-Z_]/i,
-  /\.post[A-Z_]/i,
-  /\.publish[A-Z_]/i,
-  /send[A-Z]/i,
-  /create[A-Z]/i,
-  /update[A-Z]/i,
-  /delete[A-Z]/i,
-  /remove[A-Z]/i,
-  /post[A-Z]/i,
-  /publish[A-Z]/i,
-];
-
-function requiresConfirmation(actionId: string): boolean {
-  return MUTATING_ACTION_PATTERNS.some((pattern) => pattern.test(actionId));
-}
-
-function generateConfirmationId(): string {
-  return `confirm_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-}
-
-export function getPendingConfirmation(confirmationId: string) {
-  return pendingConfirmations.get(confirmationId);
-}
-
-export function confirmAction(confirmationId: string): boolean {
-  const pending = pendingConfirmations.get(confirmationId);
-  if (pending) {
-    pendingConfirmations.delete(confirmationId);
-    return true;
-  }
-  return false;
-}
-
-export function cancelConfirmation(confirmationId: string): boolean {
-  return pendingConfirmations.delete(confirmationId);
-}
-
-/** Most recently created pending confirmation — the one a plain "yes" refers to. */
-export function getLatestPendingConfirmation():
-  | { confirmationId: string; actionId: string; input: Record<string, unknown>; connectionName?: string }
-  | null {
-  let latest: { confirmationId: string; actionId: string; input: Record<string, unknown>; connectionName?: string; createdAt: number } | null = null;
-  for (const [confirmationId, pending] of pendingConfirmations) {
-    if (!latest || pending.createdAt > latest.createdAt) {
-      latest = { confirmationId, ...pending };
-    }
-  }
-  return latest;
-}
-
-export function cleanupOldConfirmations(): void {
-  const MAX_AGE_MS = 10 * 60 * 1000;
-  const now = Date.now();
-  for (const [id, pending] of pendingConfirmations) {
-    if (now - pending.createdAt > MAX_AGE_MS) {
-      pendingConfirmations.delete(id);
-    }
-  }
-}
+// The pending-confirmation store is file-backed and shared with the connector
+// MCP server (Claude Code engine). Re-exported for existing importers.
+import {
+  requiresConfirmation,
+  createPendingConfirmation,
+  confirmAction,
+} from '../core/confirmations.ts';
+export {
+  getPendingConfirmation,
+  getLatestPendingConfirmation,
+  confirmAction,
+  cancelConfirmation,
+  cleanupOldConfirmations,
+} from '../core/confirmations.ts';
 
 async function getOrCreateModelRuntime(): Promise<ModelRuntime> {
   if (sharedModelRuntime) {
@@ -312,12 +255,10 @@ function createOpenConnectorTools(projectId: string): ToolDefinition[] {
 
       if (requiresConfirmation(params.actionId)) {
         if (!params.confirmed) {
-          const confirmationId = generateConfirmationId();
-          pendingConfirmations.set(confirmationId, {
+          const confirmationId = createPendingConfirmation({
             actionId: params.actionId,
             input: params.input as Record<string, unknown>,
             connectionName: params.connectionName,
-            createdAt: Date.now(),
           });
 
           return {

@@ -3,6 +3,12 @@ import { config } from '../core/config.ts';
 import { createChildLogger } from '../core/logger.ts';
 import { join } from 'node:path';
 import { existsSync, mkdirSync, readFileSync } from 'node:fs';
+import {
+  isClaudeCodeConnected,
+  disconnectClaudeCode,
+  startClaudeCodeLogin,
+  completeClaudeCodeLogin,
+} from '../agent/claude-code.ts';
 
 const log = createChildLogger('auth');
 
@@ -274,16 +280,27 @@ export interface LoginStatus {
 }
 
 const SUPPORTED_PROVIDERS = [
-  { id: 'anthropic', name: 'Anthropic (Claude)' },
+  { id: 'claude-code', name: 'Claude (מנוי — Claude Code)' },
+  { id: 'anthropic', name: 'Anthropic (Claude · extra usage)' },
   { id: 'openai-codex', name: 'OpenAI' },
 ];
 
 export async function listProviders(): Promise<ProviderInfo[]> {
   const runtime = await getRuntime();
-  
+
   const result: ProviderInfo[] = [];
-  
+
   for (const provider of SUPPORTED_PROVIDERS) {
+    if (provider.id === 'claude-code') {
+      const connected = isClaudeCodeConnected();
+      result.push({
+        id: provider.id,
+        name: provider.name,
+        isConnected: connected,
+        account: connected ? 'Claude Code · מכסת המנוי' : undefined,
+      });
+      continue;
+    }
     let isConnected = false;
     
     try {
@@ -310,6 +327,15 @@ export async function listProviders(): Promise<ProviderInfo[]> {
 }
 
 export async function startLogin(provider: string): Promise<LoginResult> {
+  if (provider === 'claude-code') {
+    const r = await startClaudeCodeLogin();
+    if (r.error) return { error: r.error };
+    return {
+      authorizeUrl: r.authorizeUrl,
+      instructions: 'אשר בחלון שנפתח, העתק את הקוד ש-Claude מציג, והדבק אותו כאן.',
+    };
+  }
+
   // A repeat click while a login is already pending must return the same URL —
   // starting a second runtime.login() while one is in flight fails. If the URL
   // hasn't arrived yet (pre-URL window), wait for the in-flight attempt rather
@@ -417,6 +443,10 @@ export async function startLogin(provider: string): Promise<LoginResult> {
 }
 
 export async function completeLogin(provider: string, codeOrRedirectUrl: string): Promise<{ success: boolean; error?: string }> {
+  if (provider === 'claude-code') {
+    return completeClaudeCodeLogin(codeOrRedirectUrl);
+  }
+
   const pending = pendingLogins.get(provider);
   
   if (!pending) {
@@ -444,8 +474,12 @@ export async function completeLogin(provider: string, codeOrRedirectUrl: string)
 }
 
 export async function getLoginStatusAsync(provider: string): Promise<LoginStatus> {
+  if (provider === 'claude-code') {
+    return isClaudeCodeConnected() ? { status: 'success' } : { status: 'pending' };
+  }
+
   const runtime = await getRuntime();
-  
+
   try {
     const credentials = await runtime.listCredentials();
     const hasCredential = credentials.some(c => c.providerId === provider);
@@ -470,8 +504,13 @@ export async function getLoginStatusAsync(provider: string): Promise<LoginStatus
 }
 
 export async function logout(provider: string): Promise<{ success: boolean; error?: string }> {
+  if (provider === 'claude-code') {
+    disconnectClaudeCode();
+    return { success: true };
+  }
+
   const runtime = await getRuntime();
-  
+
   try {
     log.info({ provider }, 'Logging out provider');
     if (typeof runtime.logout === 'function') {
