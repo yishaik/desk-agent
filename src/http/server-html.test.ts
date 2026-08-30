@@ -89,6 +89,64 @@ describe('Server HTML Source Code Requirements', () => {
       expect(serverCode).toContain('listProviders()');
       expect(serverCode).not.toContain("settings.model === 'claude-3-5-sonnet");
     });
+
+    it('device_code flow: shows deviceUserCode element for openai-codex', () => {
+      expect(serverCode).toContain('id="deviceUserCode"');
+      expect(serverCode).toContain('id="deviceCodeModal"');
+      expect(serverCode).toContain('deviceVerificationUrl');
+    });
+
+    it('device_code flow: checks loginMethod or userCode from response', () => {
+      expect(serverCode).toContain("json.loginMethod === 'device_code'");
+      expect(serverCode).toContain('json.userCode');
+    });
+
+    it('device_code flow: does not open popup for openai-codex', () => {
+      expect(serverCode).toContain("if (providerId === 'anthropic')");
+      expect(serverCode).toContain("popup = window.open('about:blank'");
+    });
+
+    it('device_code flow: shows verificationUri link only when present', () => {
+      expect(serverCode).toContain('json.verificationUri');
+      expect(serverCode).toContain('verificationUri');
+      expect(serverCode).not.toContain('chatgpt.com');
+    });
+
+    it('browser flow: Claude uses about:blank popup then sets location', () => {
+      expect(serverCode).toContain("window.open('about:blank', '_blank')");
+      expect(serverCode).toContain('popup.location = json.authorizeUrl');
+    });
+
+    it('handles alreadyConnected response', () => {
+      expect(serverCode).toContain('json.alreadyConnected');
+      expect(serverCode).toContain('location.reload()');
+    });
+
+    it('poll timeout ~90s keeps UI available with hint text', () => {
+      expect(serverCode).toContain('POLL_TIMEOUT_MS = 90000');
+      expect(serverCode).toContain('showPollTimeoutHint');
+      expect(serverCode).not.toContain("alert('timeout')");
+    });
+
+    it('polls openai-codex status endpoint', () => {
+      expect(serverCode).toContain("/api/auth/login/' + providerId + '/status");
+    });
+
+    it('paste fallback posts to /api/auth/complete', () => {
+      expect(serverCode).toContain("fetch('/api/auth/complete'");
+      expect(serverCode).toContain('codeOrRedirectUrl');
+    });
+
+    it('no fake /api/auth/callback endpoint', () => {
+      expect(serverCode).not.toContain('/api/auth/callback');
+    });
+
+    it('no /login or API key form in wizard', () => {
+      expect(serverCode).not.toMatch(/fetch\(['"]\/login['"]/);
+      expect(serverCode).not.toContain('MODEL_API_KEY');
+      expect(serverCode).not.toMatch(/placeholder=['"].*api.?key/i);
+      expect(serverCode).not.toMatch(/<label[^>]*>.*api.?key/i);
+    });
   });
 
   describe('getDashboardHtml requirements', () => {

@@ -1545,9 +1545,29 @@ export function getWizardHtml(settings: ReturnType<typeof loadSettings>, pairing
         </div>
       </div>
       
+      <div id="deviceCodeModal" style="display: none; margin-top: 24px; padding: 16px; background: var(--bg-tertiary); border-radius: 8px;">
+        <p style="margin-bottom: 12px; color: var(--text-secondary);">הזן את הקוד הבא באתר:</p>
+        <div style="background: var(--bg-primary); padding: 16px; border-radius: 8px; text-align: center; margin-bottom: 12px;">
+          <span id="deviceUserCode" style="font-size: 24px; font-weight: bold; font-family: monospace; letter-spacing: 2px;"></span>
+        </div>
+        <p id="deviceVerificationLink" style="margin-bottom: 12px; text-align: center; display: none;">
+          <a id="deviceVerificationUrl" href="#" target="_blank" style="color: var(--accent);">פתח את דף האימות</a>
+        </p>
+        <p id="deviceCodeHint" style="color: var(--text-muted); font-size: 13px; text-align: center;">ממתין לאישור...</p>
+        <div id="deviceCodePasteFallback" style="display: none; margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--border);">
+          <p style="margin-bottom: 12px; color: var(--text-secondary); font-size: 13px;">או הדבק את הקוד שחזר מהאתר:</p>
+          <input type="text" id="deviceCallbackCode" placeholder="הדבק כאן..." style="margin-bottom: 12px;">
+          <div class="btn-group">
+            <button onclick="submitCallback()">אשר</button>
+            <button class="secondary" onclick="closeDeviceCodeModal()">ביטול</button>
+          </div>
+        </div>
+      </div>
+
       <div id="pasteModal" style="display: none; margin-top: 24px; padding: 16px; background: var(--bg-tertiary); border-radius: 8px;">
         <p style="margin-bottom: 12px; color: var(--text-secondary);">אם החלון לא נפתח, הדבק את הקוד או URL שחזר:</p>
         <input type="text" id="callbackUrl" placeholder="הדבק כאן..." style="margin-bottom: 12px;">
+        <p id="pasteModalHint" style="color: var(--text-muted); font-size: 13px; margin-bottom: 12px; display: none;"></p>
         <div class="btn-group">
           <button onclick="submitCallback()">אשר</button>
           <button class="secondary" onclick="closePasteModal()">ביטול</button>
@@ -1557,6 +1577,8 @@ export function getWizardHtml(settings: ReturnType<typeof loadSettings>, pairing
     <script>
       let currentProvider = null;
       let loginPollInterval = null;
+      let loginPollStartTime = null;
+      const POLL_TIMEOUT_MS = 90000;
 
       async function loadProviders() {
         try {
@@ -1589,7 +1611,11 @@ export function getWizardHtml(settings: ReturnType<typeof loadSettings>, pairing
 
       async function connectProvider(providerId) {
         currentProvider = providerId;
-        const popup = window.open('about:blank', '_blank');
+        
+        let popup = null;
+        if (providerId === 'anthropic') {
+          popup = window.open('about:blank', '_blank');
+        }
         
         try {
           const res = await fetch('/api/auth/login', {
@@ -1600,10 +1626,23 @@ export function getWizardHtml(settings: ReturnType<typeof loadSettings>, pairing
           
           const json = await res.json();
           
+          if (json.alreadyConnected) {
+            if (popup && !popup.closed) popup.close();
+            location.reload();
+            return;
+          }
+          
+          if (json.loginMethod === 'device_code' || json.userCode) {
+            if (popup && !popup.closed) popup.close();
+            showDeviceCodeModal(json.userCode, json.verificationUri);
+            startLoginPoll(providerId);
+            return;
+          }
+          
           if (json.authorizeUrl) {
             if (popup && !popup.closed) {
               popup.location = json.authorizeUrl;
-            } else {
+            } else if (providerId === 'anthropic') {
               window.open(json.authorizeUrl, '_blank');
             }
             
@@ -1613,7 +1652,9 @@ export function getWizardHtml(settings: ReturnType<typeof loadSettings>, pairing
             }, 2000);
           } else {
             if (popup && !popup.closed) popup.close();
-            alert(json.error || 'שגיאה בהתחברות');
+            if (json.error) {
+              alert(json.error);
+            }
           }
         } catch (err) {
           if (popup && !popup.closed) popup.close();
@@ -1621,8 +1662,35 @@ export function getWizardHtml(settings: ReturnType<typeof loadSettings>, pairing
         }
       }
 
+      function showDeviceCodeModal(userCode, verificationUri) {
+        document.getElementById('deviceCodeModal').style.display = 'block';
+        document.getElementById('deviceUserCode').textContent = userCode || '';
+        
+        if (verificationUri) {
+          document.getElementById('deviceVerificationLink').style.display = 'block';
+          document.getElementById('deviceVerificationUrl').href = verificationUri;
+        } else {
+          document.getElementById('deviceVerificationLink').style.display = 'none';
+        }
+        
+        document.getElementById('deviceCodeHint').textContent = 'ממתין לאישור...';
+        document.getElementById('deviceCodePasteFallback').style.display = 'none';
+      }
+
+      function closeDeviceCodeModal() {
+        document.getElementById('deviceCodeModal').style.display = 'none';
+        document.getElementById('deviceUserCode').textContent = '';
+        document.getElementById('deviceCallbackCode').value = '';
+        if (loginPollInterval) {
+          clearInterval(loginPollInterval);
+          loginPollInterval = null;
+        }
+        currentProvider = null;
+      }
+
       function startLoginPoll(providerId) {
         if (loginPollInterval) clearInterval(loginPollInterval);
+        loginPollStartTime = Date.now();
         
         loginPollInterval = setInterval(async () => {
           try {
@@ -1631,36 +1699,60 @@ export function getWizardHtml(settings: ReturnType<typeof loadSettings>, pairing
             
             if (data.status === 'success') {
               clearInterval(loginPollInterval);
+              loginPollInterval = null;
               closePasteModal();
+              closeDeviceCodeModal();
               location.reload();
             } else if (data.status === 'failed') {
               clearInterval(loginPollInterval);
-              closePasteModal();
-              alert(data.error || 'ההתחברות נכשלה');
+              loginPollInterval = null;
+              showPollTimeoutHint('ההתחברות נכשלה. ' + (data.error || 'נסה שוב.'));
             }
           } catch (err) {}
+          
+          if (loginPollStartTime && Date.now() - loginPollStartTime > POLL_TIMEOUT_MS) {
+            clearInterval(loginPollInterval);
+            loginPollInterval = null;
+            showPollTimeoutHint('הזמן הקצוב פג. ניתן להמשיך להזין קוד ידנית.');
+          }
         }, 2000);
+      }
+
+      function showPollTimeoutHint(message) {
+        const deviceModal = document.getElementById('deviceCodeModal');
+        const pasteModal = document.getElementById('pasteModal');
         
-        setTimeout(() => {
-          if (loginPollInterval) clearInterval(loginPollInterval);
-        }, 120000);
+        if (deviceModal.style.display !== 'none') {
+          document.getElementById('deviceCodeHint').textContent = message;
+          document.getElementById('deviceCodePasteFallback').style.display = 'block';
+        }
+        
+        if (pasteModal.style.display !== 'none') {
+          const hintEl = document.getElementById('pasteModalHint');
+          hintEl.textContent = message;
+          hintEl.style.display = 'block';
+        }
       }
 
       async function submitCallback() {
-        const callbackUrl = document.getElementById('callbackUrl').value;
-        if (!callbackUrl || !currentProvider) return;
+        const deviceCode = document.getElementById('deviceCallbackCode')?.value;
+        const callbackUrl = document.getElementById('callbackUrl')?.value;
+        const codeOrUrl = deviceCode || callbackUrl;
+        
+        if (!codeOrUrl || !currentProvider) return;
         
         try {
           const res = await fetch('/api/auth/complete', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ provider: currentProvider, codeOrRedirectUrl: callbackUrl })
+            body: JSON.stringify({ provider: currentProvider, codeOrRedirectUrl: codeOrUrl })
           });
           
           const json = await res.json();
           
           if (json.success) {
             closePasteModal();
+            closeDeviceCodeModal();
             location.reload();
           } else {
             alert(json.error || 'שגיאה באישור');
@@ -1673,7 +1765,11 @@ export function getWizardHtml(settings: ReturnType<typeof loadSettings>, pairing
       function closePasteModal() {
         document.getElementById('pasteModal').style.display = 'none';
         document.getElementById('callbackUrl').value = '';
-        currentProvider = null;
+        document.getElementById('pasteModalHint').style.display = 'none';
+        if (!document.getElementById('deviceCodeModal').style.display || 
+            document.getElementById('deviceCodeModal').style.display === 'none') {
+          currentProvider = null;
+        }
       }
 
       loadProviders();
