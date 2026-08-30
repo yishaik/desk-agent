@@ -326,4 +326,106 @@ describe('getSettingsHtml', () => {
     
     expect(html).toContain('MAX_ACTIONS = 40');
   });
+
+  it('includes device code modal for ChatGPT', () => {
+    const html = getSettingsHtml(createTestData());
+    
+    expect(html).toContain('id="deviceCodeModal"');
+    expect(html).toContain('התחברות ל-ChatGPT');
+  });
+
+  it('includes device code display element', () => {
+    const html = getSettingsHtml(createTestData());
+    
+    expect(html).toContain('id="deviceCodeDisplay"');
+    expect(html).toContain('id="deviceCodeLink"');
+  });
+
+  it('includes device code Hebrew instructions', () => {
+    const html = getSettingsHtml(createTestData());
+    
+    expect(html).toContain('פתחו את הקישור, הזינו את הקוד ב-ChatGPT, ואשרו');
+    expect(html).toContain('אין צורך להדביק כתובת');
+  });
+
+  it('includes device code link label in Hebrew', () => {
+    const html = getSettingsHtml(createTestData());
+    
+    expect(html).toContain('פתח אישור ב-ChatGPT');
+  });
+
+  it('includes device code fallback for paste', () => {
+    const html = getSettingsHtml(createTestData());
+    
+    expect(html).toContain('id="deviceCodeFallback"');
+    expect(html).toContain('אם זה לא עובד, הדביקו את כתובת ה-callback');
+  });
+
+  it('includes showDeviceCodeModal function', () => {
+    const html = getSettingsHtml(createTestData());
+    
+    expect(html).toContain('function showDeviceCodeModal');
+    expect(html).toContain('deviceCodeDisplay');
+    expect(html).toContain('deviceCodeLink');
+  });
+
+  it('includes closeDeviceCodeModal function', () => {
+    const html = getSettingsHtml(createTestData());
+    
+    expect(html).toContain('function closeDeviceCodeModal');
+  });
+
+  it('includes submitDeviceCodeFallback function', () => {
+    const html = getSettingsHtml(createTestData());
+    
+    expect(html).toContain('function submitDeviceCodeFallback');
+  });
+
+  it('handles device_code loginMethod in connectProvider', () => {
+    const html = getSettingsHtml(createTestData());
+    
+    expect(html).toContain("json.loginMethod === 'device_code'");
+    expect(html).toContain('json.userCode');
+    expect(html).toContain('json.verificationUri');
+  });
+
+  it('includes reconnectProvider function for explicit reconnect', () => {
+    const html = getSettingsHtml(createTestData());
+    
+    expect(html).toContain('function reconnectProvider');
+    expect(html).toContain('forceReconnect');
+  });
+
+  it('handles alreadyConnected response', () => {
+    const html = getSettingsHtml(createTestData());
+    
+    expect(html).toContain('json.alreadyConnected');
+    expect(html).toContain('כבר מחובר');
+  });
+
+  it('shows reconnect button for connected providers', () => {
+    const html = getSettingsHtml(createTestData());
+    
+    expect(html).toContain('התחבר מחדש');
+    expect(html).toContain("reconnectProvider");
+  });
+
+  it('device code fallback shows after 90s timeout', () => {
+    const html = getSettingsHtml(createTestData());
+    
+    expect(html).toContain('deviceCodeFallbackTimeout');
+    expect(html).toContain('90000');
+  });
+
+  it('closes device code modal on login success', () => {
+    const html = getSettingsHtml(createTestData());
+    
+    expect(html).toContain('closeDeviceCodeModal()');
+  });
+
+  it('does not open popup for openai-codex provider', () => {
+    const html = getSettingsHtml(createTestData());
+    
+    expect(html).toContain("providerId !== 'openai-codex'");
+  });
 });

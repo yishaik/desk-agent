@@ -263,18 +263,26 @@ addRoute('POST', '/api/auth/login', async (req, res) => {
     return;
   }
 
-  const body = await parseBody<{ provider: string }>(req);
+  const body = await parseBody<{ provider: string; forceReconnect?: boolean }>(req);
   if (!body.provider) {
     sendError(res, 'Provider is required');
     return;
   }
 
   try {
-    const result = await startLogin(body.provider);
+    const result = await startLogin(body.provider, body.forceReconnect ?? false);
     if (result.error) {
       sendError(res, result.error);
+    } else if (result.alreadyConnected) {
+      sendJson(res, { success: true, alreadyConnected: true });
     } else {
-      sendJson(res, { success: true, authorizeUrl: result.authorizeUrl });
+      sendJson(res, {
+        success: true,
+        authorizeUrl: result.authorizeUrl,
+        userCode: result.userCode,
+        verificationUri: result.verificationUri,
+        loginMethod: result.loginMethod,
+      });
     }
   } catch (err) {
     log.error({ err }, 'Login error');
@@ -1556,12 +1564,31 @@ export function getWizardHtml(settings: ReturnType<typeof loadSettings>, pairing
         </div>
       </div>
       
+      <!-- Paste modal for Claude browser flow -->
       <div id="pasteModal" style="display: none; margin-top: 24px; padding: 16px; background: var(--bg-tertiary); border-radius: 8px;">
-        <p id="pasteHint" style="margin-bottom: 12px; color: var(--text-secondary);">הדבק את ה-callback URL שחזר מ-ChatGPT:</p>
+        <p id="pasteHint" style="margin-bottom: 12px; color: var(--text-secondary);">אם החלון לא נפתח, הדבק את הקוד או URL שחזר:</p>
         <input type="text" id="callbackUrl" placeholder="הדבק כאן..." style="margin-bottom: 12px;">
         <div class="btn-group">
           <button onclick="submitCallback()">אשר</button>
           <button class="secondary" onclick="closePasteModal()">ביטול</button>
+        </div>
+      </div>
+      
+      <!-- Device code modal for ChatGPT -->
+      <div id="deviceCodeModal" style="display: none; margin-top: 24px; padding: 16px; background: var(--bg-tertiary); border-radius: 8px;">
+        <h3 style="margin-bottom: 12px;">התחברות ל-ChatGPT</h3>
+        <p style="margin-bottom: 16px; color: var(--text-secondary);">פתחו את הקישור, הזינו את הקוד ב-ChatGPT, ואשרו. אין צורך להדביק כתובת.</p>
+        <div style="text-align: center; margin: 16px 0;">
+          <div id="deviceCodeDisplay" style="font-size: 28px; font-weight: bold; letter-spacing: 4px; padding: 12px; background: var(--bg-secondary); border-radius: 8px; margin-bottom: 12px;">----</div>
+          <a id="deviceCodeLink" href="#" target="_blank" style="color: var(--accent); font-size: 14px;">פתח אישור ב-ChatGPT</a>
+        </div>
+        <div id="deviceCodeFallback" style="display: none; margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--border);">
+          <p style="margin-bottom: 8px; color: var(--text-secondary);">אם זה לא עובד, הדביקו את כתובת ה-callback:</p>
+          <input type="text" id="deviceCodeFallbackUrl" placeholder="הדבק כאן..." style="margin-bottom: 8px;">
+          <button onclick="submitDeviceCodeFallback()">אשר</button>
+        </div>
+        <div class="btn-group" style="margin-top: 12px;">
+          <button class="secondary" onclick="closeDeviceCodeModal()">ביטול</button>
         </div>
       </div>
     </div>
@@ -1571,6 +1598,7 @@ export function getWizardHtml(settings: ReturnType<typeof loadSettings>, pairing
       let loginPollTicks = 0;
       const maxPollTicks = 45;
       let connectedProviders = new Set();
+      let deviceCodeFallbackTimeout = null;
 
       async function loadProviders() {
         try {
@@ -1605,7 +1633,52 @@ export function getWizardHtml(settings: ReturnType<typeof loadSettings>, pairing
         }
       }
 
-      async function connectProvider(providerId) {
+      function showDeviceCodeModal(userCode, verificationUri) {
+        document.getElementById('deviceCodeDisplay').textContent = userCode;
+        document.getElementById('deviceCodeLink').href = verificationUri;
+        document.getElementById('deviceCodeFallback').style.display = 'none';
+        document.getElementById('deviceCodeFallbackUrl').value = '';
+        document.getElementById('deviceCodeModal').style.display = 'block';
+        
+        // Show paste fallback after 90s timeout
+        deviceCodeFallbackTimeout = setTimeout(() => {
+          document.getElementById('deviceCodeFallback').style.display = 'block';
+        }, 90000);
+      }
+
+      function closeDeviceCodeModal() {
+        document.getElementById('deviceCodeModal').style.display = 'none';
+        if (deviceCodeFallbackTimeout) {
+          clearTimeout(deviceCodeFallbackTimeout);
+          deviceCodeFallbackTimeout = null;
+        }
+      }
+
+      async function submitDeviceCodeFallback() {
+        const callbackUrl = document.getElementById('deviceCodeFallbackUrl').value;
+        if (!callbackUrl || !currentProvider) return;
+        
+        try {
+          const res = await fetch('/api/auth/complete', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ provider: currentProvider, codeOrRedirectUrl: callbackUrl })
+          });
+          
+          const json = await res.json();
+          
+          if (json.success) {
+            closeDeviceCodeModal();
+            location.reload();
+          } else {
+            alert(json.error || 'שגיאה באישור');
+          }
+        } catch (err) {
+          alert('שגיאה באישור');
+        }
+      }
+
+      async function connectProvider(providerId, forceReconnect = false) {
         currentProvider = providerId;
         const btnEl = document.getElementById(providerId + '-btn');
         if (btnEl) {
@@ -1617,16 +1690,34 @@ export function getWizardHtml(settings: ReturnType<typeof loadSettings>, pairing
           const res = await fetch('/api/auth/login', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ provider: providerId })
+            body: JSON.stringify({ provider: providerId, forceReconnect })
           });
           
           const json = await res.json();
           
-          if (json.authorizeUrl) {
+          if (json.alreadyConnected) {
+            if (btnEl) {
+              btnEl.disabled = false;
+              btnEl.textContent = 'התחבר מחדש';
+            }
+            // Already connected, just reload to move to next step
+            location.reload();
+            return;
+          }
+          
+          if (json.loginMethod === 'device_code' && json.userCode && json.verificationUri) {
+            // Device code flow (ChatGPT)
+            showDeviceCodeModal(json.userCode, json.verificationUri);
+            startLoginPoll(providerId);
+          } else if (json.authorizeUrl) {
+            // Browser flow (Claude)
             window.open(json.authorizeUrl, '_blank');
             
-            if (providerId === 'openai-codex') {
-              document.getElementById('pasteModal').style.display = 'block';
+            // Show paste modal for Claude after short delay
+            if (providerId !== 'openai-codex') {
+              setTimeout(() => {
+                document.getElementById('pasteModal').style.display = 'block';
+              }, 2000);
             }
             
             startLoginPoll(providerId);
@@ -1657,12 +1748,9 @@ export function getWizardHtml(settings: ReturnType<typeof loadSettings>, pairing
             clearInterval(loginPollInterval);
             loginPollInterval = null;
             
+            // Show paste fallback for device-code flow after 90s
             if (providerId === 'openai-codex') {
-              const pasteHint = document.getElementById('pasteHint');
-              if (pasteHint) {
-                pasteHint.textContent = 'הדבק את ה-callback URL שחזר מ-ChatGPT';
-                pasteHint.style.color = 'var(--accent)';
-              }
+              document.getElementById('deviceCodeFallback').style.display = 'block';
             }
             return;
           }
@@ -1675,11 +1763,13 @@ export function getWizardHtml(settings: ReturnType<typeof loadSettings>, pairing
               clearInterval(loginPollInterval);
               loginPollInterval = null;
               closePasteModal();
+              closeDeviceCodeModal();
               location.reload();
             } else if (data.status === 'failed') {
               clearInterval(loginPollInterval);
               loginPollInterval = null;
               closePasteModal();
+              closeDeviceCodeModal();
               const btnEl = document.getElementById(providerId + '-btn');
               if (btnEl) {
                 btnEl.disabled = false;

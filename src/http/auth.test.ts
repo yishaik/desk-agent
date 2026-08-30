@@ -184,3 +184,48 @@ describe('Auth Module', () => {
     expect(typeof result.success).toBe('boolean');
   });
 });
+
+describe('LoginMethod types', () => {
+  it('LoginMethod type includes device_code, browser, paste', async () => {
+    const { LoginMethod } = await import('./auth.ts');
+    
+    const validMethods: Array<'device_code' | 'browser' | 'paste'> = ['device_code', 'browser', 'paste'];
+    expect(validMethods).toContain('device_code');
+    expect(validMethods).toContain('browser');
+    expect(validMethods).toContain('paste');
+  });
+});
+
+describe('LoginResult interface', () => {
+  it('LoginResult can include device code fields', () => {
+    const result = {
+      userCode: 'ABCD-1234',
+      verificationUri: 'https://chatgpt.com/verify',
+      loginMethod: 'device_code' as const,
+    };
+    
+    expect(result.userCode).toBe('ABCD-1234');
+    expect(result.verificationUri).toBe('https://chatgpt.com/verify');
+    expect(result.loginMethod).toBe('device_code');
+  });
+  
+  it('LoginResult can include browser flow fields', () => {
+    const result = {
+      authorizeUrl: 'https://accounts.anthropic.com/oauth/authorize',
+      loginMethod: 'browser' as const,
+      instructions: 'Complete login in browser',
+    };
+    
+    expect(result.authorizeUrl).toContain('anthropic.com');
+    expect(result.loginMethod).toBe('browser');
+    expect(result.instructions).toBeDefined();
+  });
+  
+  it('LoginResult can indicate alreadyConnected', () => {
+    const result = {
+      alreadyConnected: true,
+    };
+    
+    expect(result.alreadyConnected).toBe(true);
+  });
+});

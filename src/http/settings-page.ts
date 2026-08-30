@@ -728,7 +728,7 @@ export function getSettingsHtml(data: SettingsPageData): string {
     </div>
   </div>
 
-  <!-- Paste Callback Modal -->
+  <!-- Paste Callback Modal (for Claude browser flow) -->
   <div class="modal-backdrop" id="pasteModal">
     <div class="modal">
       <h3 class="modal-title">הדבק קוד אישור</h3>
@@ -740,6 +740,28 @@ export function getSettingsHtml(data: SettingsPageData): string {
       <div class="btn-group">
         <button type="button" onclick="submitCallback()">אשר</button>
         <button type="button" class="secondary" onclick="closeModal()">ביטול</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Device Code Modal (for ChatGPT) -->
+  <div class="modal-backdrop" id="deviceCodeModal">
+    <div class="modal">
+      <h3 class="modal-title">התחברות ל-ChatGPT</h3>
+      <p class="modal-description">פתחו את הקישור, הזינו את הקוד ב-ChatGPT, ואשרו. אין צורך להדביק כתובת.</p>
+      <div style="text-align: center; margin: 20px 0;">
+        <div style="font-size: 32px; font-weight: bold; letter-spacing: 4px; padding: 16px; background: var(--bg-tertiary); border-radius: 8px; margin-bottom: 16px;" id="deviceCodeDisplay">----</div>
+        <a id="deviceCodeLink" href="#" target="_blank" class="external-link" style="font-size: 16px;">פתח אישור ב-ChatGPT</a>
+      </div>
+      <div id="deviceCodeFallback" style="display: none; margin-top: 20px; padding-top: 20px; border-top: 1px solid var(--border);">
+        <p class="modal-description">אם זה לא עובד, הדביקו את כתובת ה-callback:</p>
+        <div class="form-group">
+          <input type="text" id="deviceCodeFallbackUrl" placeholder="הדבק כאן...">
+        </div>
+        <button type="button" onclick="submitDeviceCodeFallback()">אשר</button>
+      </div>
+      <div class="btn-group" style="margin-top: 16px;">
+        <button type="button" class="secondary" onclick="closeDeviceCodeModal()">ביטול</button>
       </div>
     </div>
   </div>
@@ -771,6 +793,58 @@ export function getSettingsHtml(data: SettingsPageData): string {
       currentProvider = null;
     }
 
+    let deviceCodeFallbackTimeout = null;
+
+    function closeDeviceCodeModal() {
+      document.getElementById('deviceCodeModal').classList.remove('active');
+      if (deviceCodeFallbackTimeout) {
+        clearTimeout(deviceCodeFallbackTimeout);
+        deviceCodeFallbackTimeout = null;
+      }
+      currentProvider = null;
+    }
+
+    function showDeviceCodeModal(userCode, verificationUri) {
+      document.getElementById('deviceCodeDisplay').textContent = userCode;
+      document.getElementById('deviceCodeLink').href = verificationUri;
+      document.getElementById('deviceCodeFallback').style.display = 'none';
+      document.getElementById('deviceCodeFallbackUrl').value = '';
+      document.getElementById('deviceCodeModal').classList.add('active');
+      
+      // Show paste fallback after 90s timeout
+      deviceCodeFallbackTimeout = setTimeout(() => {
+        document.getElementById('deviceCodeFallback').style.display = 'block';
+      }, 90000);
+    }
+
+    async function submitDeviceCodeFallback() {
+      const callbackUrl = document.getElementById('deviceCodeFallbackUrl').value;
+      if (!callbackUrl || !currentProvider) return;
+      
+      try {
+        const res = await fetch('/api/auth/complete', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ 
+            provider: currentProvider, 
+            codeOrRedirectUrl: callbackUrl 
+          })
+        });
+        
+        const json = await res.json();
+        
+        if (json.success) {
+          closeDeviceCodeModal();
+          showToast('התחברות הצליחה!');
+          loadProviders();
+        } else {
+          showToast(json.error || 'שגיאה באישור', 'error');
+        }
+      } catch (err) {
+        showToast('שגיאה באישור', 'error');
+      }
+    }
+
     async function loadProviders() {
       try {
         const res = await fetch('/api/auth/providers');
@@ -781,11 +855,11 @@ export function getSettingsHtml(data: SettingsPageData): string {
           <div class="provider-item">
             <div class="provider-info">
               <span class="provider-name">\${escapeHtml(p.name)}</span>
-              <span class="provider-status">\${p.isConnected ? (p.account ? '✓ מחובר — ' + p.account : '✓ מחובר') : 'לא מחובר'}</span>
+              <span class="provider-status">\${p.isConnected ? (p.account ? '✓ מחובר — ' + escapeHtml(p.account) : '✓ מחובר') : 'לא מחובר'}</span>
             </div>
-            <div>
+            <div style="display: flex; gap: 8px;">
               \${p.isConnected 
-                ? \`<button type="button" class="danger" onclick="disconnectProvider('\${p.id}')">ניתוק</button>\`
+                ? \`<button type="button" class="secondary" onclick="reconnectProvider('\${p.id}')">התחבר מחדש</button><button type="button" class="danger" onclick="disconnectProvider('\${p.id}')">ניתוק</button>\`
                 : \`<button type="button" onclick="connectProvider('\${p.id}')">התחבר</button>\`
               }
             </div>
@@ -797,21 +871,35 @@ export function getSettingsHtml(data: SettingsPageData): string {
       }
     }
 
-    async function connectProvider(providerId) {
+    async function connectProvider(providerId, forceReconnect = false) {
       currentProvider = providerId;
       
-      const popup = window.open('about:blank', '_blank');
+      // Only open popup for browser flow (Claude), not for device-code (ChatGPT)
+      const popup = providerId !== 'openai-codex' ? window.open('about:blank', '_blank') : null;
       
       try {
         const res = await fetch('/api/auth/login', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ provider: providerId })
+          body: JSON.stringify({ provider: providerId, forceReconnect })
         });
         
         const json = await res.json();
         
-        if (json.authorizeUrl) {
+        if (json.alreadyConnected) {
+          if (popup && !popup.closed) popup.close();
+          showToast('כבר מחובר');
+          loadProviders();
+          return;
+        }
+        
+        if (json.loginMethod === 'device_code' && json.userCode && json.verificationUri) {
+          // Device code flow (ChatGPT)
+          if (popup && !popup.closed) popup.close();
+          showDeviceCodeModal(json.userCode, json.verificationUri);
+          startLoginPoll(providerId);
+        } else if (json.authorizeUrl) {
+          // Browser flow (Claude)
           if (popup && !popup.closed) {
             popup.location = json.authorizeUrl;
           } else {
@@ -833,6 +921,10 @@ export function getSettingsHtml(data: SettingsPageData): string {
       }
     }
 
+    function reconnectProvider(providerId) {
+      connectProvider(providerId, true);
+    }
+
     function startLoginPoll(providerId) {
       if (loginPollInterval) {
         clearInterval(loginPollInterval);
@@ -847,12 +939,14 @@ export function getSettingsHtml(data: SettingsPageData): string {
             clearInterval(loginPollInterval);
             loginPollInterval = null;
             closeModal();
+            closeDeviceCodeModal();
             showToast('התחברות הצליחה!');
             loadProviders();
           } else if (data.status === 'failed') {
             clearInterval(loginPollInterval);
             loginPollInterval = null;
             closeModal();
+            closeDeviceCodeModal();
             showToast(data.error || 'ההתחברות נכשלה', 'error');
           }
         } catch (err) {

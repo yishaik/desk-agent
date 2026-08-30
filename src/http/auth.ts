@@ -27,12 +27,19 @@ export interface ModelResolution {
   error?: string;
 }
 
-const pendingLogins = new Map<string, {
+export type LoginMethod = 'device_code' | 'browser' | 'paste';
+
+interface PendingLogin {
   loginPromise: Promise<unknown>;
   manualCodeResolver: ((code: string) => void) | null;
   authorizeUrl: string | null;
+  userCode: string | null;
+  verificationUri: string | null;
+  loginMethod: LoginMethod;
   failedError?: string;
-}>();
+}
+
+const pendingLogins = new Map<string, PendingLogin>();
 
 async function getRuntime(): Promise<ModelRuntime> {
   if (sharedRuntime) {
@@ -270,6 +277,10 @@ export async function getProviderIdentity(providerId: string): Promise<string | 
 
 export interface LoginResult {
   authorizeUrl?: string;
+  userCode?: string;
+  verificationUri?: string;
+  loginMethod?: LoginMethod;
+  alreadyConnected?: boolean;
   instructions?: string;
   error?: string;
 }
@@ -326,30 +337,49 @@ export async function listProviders(): Promise<ProviderInfo[]> {
   return result;
 }
 
-export async function startLogin(provider: string): Promise<LoginResult> {
+export async function startLogin(provider: string, forceReconnect = false): Promise<LoginResult> {
   if (provider === 'claude-code') {
     const r = await startClaudeCodeLogin();
     if (r.error) return { error: r.error };
     return {
       authorizeUrl: r.authorizeUrl,
+      loginMethod: 'browser',
       instructions: 'אשר בחלון שנפתח, העתק את הקוד ש-Claude מציג, והדבק אותו כאן.',
     };
   }
 
-  // A repeat click while a login is already pending must return the same URL —
-  // starting a second runtime.login() while one is in flight fails. If the URL
+  // Skip new OAuth if already connected (live credential) unless explicit reconnect
+  if (!forceReconnect) {
+    const hasLiveCredential = await providerHasLiveCredential(provider);
+    if (hasLiveCredential) {
+      log.info({ provider }, 'Provider already connected, skipping OAuth');
+      return { alreadyConnected: true };
+    }
+  }
+
+  // A repeat click while a login is already pending must return the same URL/code —
+  // starting a second runtime.login() while one is in flight fails. If the URL/code
   // hasn't arrived yet (pre-URL window), wait for the in-flight attempt rather
   // than starting a parallel one.
   const existing = pendingLogins.get(provider);
   if (existing && !existing.failedError) {
     const waitStart = Date.now();
-    while (!existing.authorizeUrl && !existing.failedError && Date.now() - waitStart < 5000) {
+    while (!existing.authorizeUrl && !existing.userCode && !existing.failedError && Date.now() - waitStart < 5000) {
       await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    if (existing.userCode && existing.verificationUri) {
+      log.info({ provider }, 'Reusing pending device code');
+      return {
+        userCode: existing.userCode,
+        verificationUri: existing.verificationUri,
+        loginMethod: 'device_code',
+      };
     }
     if (existing.authorizeUrl) {
       log.info({ provider }, 'Reusing pending authorize URL');
       return {
         authorizeUrl: existing.authorizeUrl,
+        loginMethod: existing.loginMethod,
         instructions: 'השלם את ההתחברות בחלון שנפתח. אם החלון לא נפתח, הדבק את הקוד שקיבלת.',
       };
     }
@@ -365,24 +395,57 @@ export async function startLogin(provider: string): Promise<LoginResult> {
   log.info({ provider }, 'Starting OAuth login flow');
   
   let authorizeUrl: string | null = null;
+  let userCode: string | null = null;
+  let verificationUri: string | null = null;
+  let loginMethod: LoginMethod = 'browser';
   let manualCodeResolver: ((code: string) => void) | null = null;
   
   const loginPromise = runtime.login(provider, 'oauth', {
     notify: (event) => {
-      const e = event as { type: string; url?: string };
-      if (e.type === 'auth_url' && e.url) {
+      const e = event as { type: string; url?: string; userCode?: string; verificationUri?: string };
+      if (e.type === 'device_code' && e.userCode && e.verificationUri) {
+        userCode = e.userCode;
+        verificationUri = e.verificationUri;
+        loginMethod = 'device_code';
+        log.info({ provider, userCode, verificationUri }, 'Received device code');
+        const pending = pendingLogins.get(provider);
+        if (pending) {
+          pending.userCode = userCode;
+          pending.verificationUri = verificationUri;
+          pending.loginMethod = 'device_code';
+        }
+      } else if (e.type === 'auth_url' && e.url) {
         authorizeUrl = e.url;
         log.info({ provider, url: e.url }, 'Received authorize URL');
+        const pending = pendingLogins.get(provider);
+        if (pending) {
+          pending.authorizeUrl = authorizeUrl;
+        }
       }
     },
     prompt: async (prompt) => {
       const p = prompt as { type: string; options?: readonly { id: string }[] };
       if (p.type === 'select') {
-        const hasBrowser = (p.options ?? []).some(o => o.id === 'browser');
-        return hasBrowser ? 'browser' : (p.options?.[0]?.id ?? 'browser');
+        const options = p.options ?? [];
+        // For openai-codex: prefer device_code if available
+        if (provider === 'openai-codex') {
+          const hasDeviceCode = options.some(o => o.id === 'device_code');
+          if (hasDeviceCode) {
+            log.info({ provider }, 'Selecting device_code flow');
+            return 'device_code';
+          }
+        }
+        // For Claude (anthropic): prefer browser
+        const hasBrowser = options.some(o => o.id === 'browser');
+        return hasBrowser ? 'browser' : (options[0]?.id ?? 'browser');
       }
       
       if (p.type === 'manual_code') {
+        loginMethod = 'paste';
+        const pending = pendingLogins.get(provider);
+        if (pending) {
+          pending.loginMethod = 'paste';
+        }
         return new Promise<string>((resolve) => {
           manualCodeResolver = resolve;
           const pending = pendingLogins.get(provider);
@@ -400,6 +463,9 @@ export async function startLogin(provider: string): Promise<LoginResult> {
     loginPromise,
     manualCodeResolver,
     authorizeUrl,
+    userCode,
+    verificationUri,
+    loginMethod,
   });
 
   // In the browser flow nothing ever awaits loginPromise — without this catch,
@@ -417,28 +483,38 @@ export async function startLogin(provider: string): Promise<LoginResult> {
   const startTime = Date.now();
   const timeout = 5000;
   
-  while (!authorizeUrl && Date.now() - startTime < timeout) {
+  // Wait for either device_code or authorize URL
+  while (!authorizeUrl && !userCode && Date.now() - startTime < timeout) {
     await new Promise(resolve => setTimeout(resolve, 100));
     const pending = pendingLogins.get(provider);
     if (pending) {
-      pending.authorizeUrl = authorizeUrl;
+      authorizeUrl = pending.authorizeUrl;
+      userCode = pending.userCode;
+      verificationUri = pending.verificationUri;
+      loginMethod = pending.loginMethod;
     }
   }
   
+  // Device code flow (for openai-codex)
+  if (userCode && verificationUri) {
+    return {
+      userCode,
+      verificationUri,
+      loginMethod: 'device_code',
+    };
+  }
+  
+  // Browser flow (for anthropic/Claude)
   if (authorizeUrl) {
-    const pending = pendingLogins.get(provider);
-    if (pending) {
-      pending.authorizeUrl = authorizeUrl;
-    }
-    
     return {
       authorizeUrl,
+      loginMethod,
       instructions: 'השלם את ההתחברות בחלון שנפתח. אם החלון לא נפתח, הדבק את הקוד שקיבלת.',
     };
   }
   
   pendingLogins.delete(provider);
-  log.error({ provider }, 'Failed to get authorize URL');
+  log.error({ provider }, 'Failed to get authorize URL or device code');
   return { error: 'שגיאה בהתחלת ההתחברות' };
 }
 
