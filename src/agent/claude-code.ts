@@ -5,9 +5,9 @@
  * Why: Anthropic bills third-party OAuth (the Pi runtime path) from extra
  * usage per token. The one compliant way to use a customer's Pro/Max plan
  * limits is the end user signing in to the unmodified Claude Code binary
- * (see code.claude.com/docs/en/legal-and-compliance). Auth uses Claude Code's
- * own `setup-token` flow; the credential belongs to the customer and lives
- * only inside their stack.
+ * (see code.claude.com/docs/en/legal-and-compliance). Auth drives Claude
+ * Code's own interactive login; the credential belongs to the customer and
+ * lives only inside their stack, managed by the binary itself.
  *
  * Open Connector tools are provided to Claude Code via a stdio MCP server
  * (connector-mcp.ts) that shares the file-backed confirmation store with the
@@ -23,9 +23,10 @@ import { loadSettings } from '../core/settings.ts';
 const log = createChildLogger('claude-code');
 
 const BASE_DIR = join(config.dataDir, 'claude-code');
-const TOKEN_PATH = join(BASE_DIR, 'token');
+const TOKEN_PATH = join(BASE_DIR, 'token'); // legacy setup-token artifact, no longer used
 const SESSIONS_PATH = join(BASE_DIR, 'sessions.json');
 const CONFIG_DIR = join(BASE_DIR, 'config');
+const CREDENTIALS_PATH = join(CONFIG_DIR, '.credentials.json');
 
 const PROMPT_TIMEOUT_MS = 240_000;
 const CLAUDE_BIN = process.env['CLAUDE_CODE_BIN'] || 'claude';
@@ -35,20 +36,13 @@ function ensureDirs(): void {
 }
 
 export function isClaudeCodeConnected(): boolean {
-  try {
-    return readFileSync(TOKEN_PATH, 'utf8').trim().length > 0;
-  } catch {
-    return false;
-  }
+  return existsSync(CREDENTIALS_PATH);
 }
 
 export function disconnectClaudeCode(): void {
+  rmSync(CREDENTIALS_PATH, { force: true });
   rmSync(TOKEN_PATH, { force: true });
   rmSync(SESSIONS_PATH, { force: true });
-}
-
-function readToken(): string {
-  return readFileSync(TOKEN_PATH, 'utf8').trim();
 }
 
 function loadSessions(): Record<string, string> {
@@ -74,10 +68,12 @@ export function clearClaudeCodeSession(projectId: string): void {
   }
 }
 
-// --- setup-token login flow ------------------------------------------------
-// `claude setup-token` is Claude Code's own headless auth flow: it prints an
-// authorize URL, the user approves in a browser and pastes a code back, and
-// the CLI prints a long-lived token. We drive it under a pseudo-TTY.
+// --- interactive login flow ------------------------------------------------
+// setup-token's sk-ant-oat01 tokens are rejected by the API (Feb 2026 change),
+// so we drive Claude Code's own interactive first-run login under a pseudo-TTY
+// instead. The binary stores access+refresh credentials itself
+// (.credentials.json) — exactly the auth path an ordinary Claude Code user
+// gets, drawing on the customer's Pro/Max plan limits.
 
 interface SetupState {
   child: ChildProcess;
@@ -85,6 +81,7 @@ interface SetupState {
   authorizeUrl?: string;
   done: boolean;
   error?: string;
+  handled: Set<string>;
 }
 
 let setupState: SetupState | null = null;
@@ -92,6 +89,23 @@ let setupState: SetupState | null = null;
 function stripAnsi(s: string): string {
   // eslint-disable-next-line no-control-regex
   return s.replace(/\x1b\[[0-9;?]*[a-zA-Z]/g, '').replace(/\r/g, '');
+}
+
+// One-shot answers to the first-run TUI prompts, whichever of them appear.
+function driveOnboarding(state: SetupState): void {
+  const out = state.output;
+  const press = (key: string, tag: string) => {
+    if (state.handled.has(tag)) return;
+    state.handled.add(tag);
+    state.child.stdin?.write(key);
+    log.debug({ tag }, 'Answered onboarding prompt');
+  };
+
+  if (/text style|theme|looks best/i.test(out)) press('\r', 'theme');
+  // Option 1 is "Claude account with subscription" — the default selection.
+  if (/log ?in method|subscription|Console account/i.test(out)) press('\r', 'method');
+  if (/security notes|press enter to continue/i.test(out) && state.handled.has('method')) press('\r', 'continue');
+  if (/trust the files|do you trust/i.test(out)) press('\r', 'trust');
 }
 
 export async function startClaudeCodeLogin(): Promise<{ authorizeUrl?: string; error?: string }> {
@@ -103,32 +117,36 @@ export async function startClaudeCodeLogin(): Promise<{ authorizeUrl?: string; e
   }
 
   ensureDirs();
-  // `script` allocates the TTY setup-token insists on.
-  // Wide pseudo-terminal — at 80 columns the printed token wraps mid-string.
-  const child = spawn('script', ['-qec', `stty cols 500 2>/dev/null; ${CLAUDE_BIN} setup-token`, '/dev/null'], {
+  // A fresh login must not reuse half-written credentials.
+  rmSync(CREDENTIALS_PATH, { force: true });
+
+  const child = spawn('script', ['-qec', `stty cols 500 2>/dev/null; ${CLAUDE_BIN}`, '/dev/null'], {
     env: { ...process.env, CLAUDE_CONFIG_DIR: CONFIG_DIR, HOME: BASE_DIR, TERM: 'xterm', COLUMNS: '500' },
     cwd: BASE_DIR,
   });
 
-  const state: SetupState = { child, output: '', done: false };
+  const state: SetupState = { child, output: '', done: false, handled: new Set() };
   setupState = state;
 
-  child.stdout?.on('data', (d: Buffer) => { state.output += stripAnsi(d.toString()); });
-  child.stderr?.on('data', (d: Buffer) => { state.output += stripAnsi(d.toString()); });
+  const onData = (d: Buffer) => {
+    state.output += stripAnsi(d.toString());
+    driveOnboarding(state);
+  };
+  child.stdout?.on('data', onData);
+  child.stderr?.on('data', onData);
   child.on('exit', (code) => {
     state.done = true;
-    if (code !== 0 && !state.output.includes('sk-ant-')) {
-      state.error = `setup-token exited with code ${code}`;
-      log.error({ code, tail: state.output.slice(-500) }, 'claude setup-token failed');
+    if (!isClaudeCodeConnected()) {
+      state.error = `claude exited with code ${code} before login completed`;
     }
   });
 
   const start = Date.now();
-  while (Date.now() - start < 30_000) {
+  while (Date.now() - start < 45_000) {
     const match = state.output.match(/https:\/\/[^\s"']*oauth[^\s"']*/);
     if (match) {
       state.authorizeUrl = match[0];
-      log.info('Claude Code setup-token authorize URL ready');
+      log.info('Claude Code login authorize URL ready');
       return { authorizeUrl: state.authorizeUrl };
     }
     if (state.done) break;
@@ -137,8 +155,8 @@ export async function startClaudeCodeLogin(): Promise<{ authorizeUrl?: string; e
 
   child.kill('SIGKILL');
   setupState = null;
-  log.error({ tail: state.output.slice(-500) }, 'setup-token produced no authorize URL');
-  return { error: 'לא התקבל קישור התחברות מ-Claude Code. ודא שהחבילה מותקנת ונסה שוב.' };
+  log.error({ tail: state.output.slice(-800) }, 'claude login produced no authorize URL');
+  return { error: 'לא התקבל קישור התחברות מ-Claude Code. נסה שוב.' };
 }
 
 export async function completeClaudeCodeLogin(code: string): Promise<{ success: boolean; error?: string }> {
@@ -147,33 +165,37 @@ export async function completeClaudeCodeLogin(code: string): Promise<{ success: 
     return { success: false, error: 'לא נמצאה התחברות פעילה. התחל מחדש.' };
   }
 
-  // The setup-token prompt is a raw-mode TUI: Enter must be '\r', and a short
-  // gap between the pasted code and the Enter keypress makes Ink register both.
+  // Raw-mode TUI: paste the code, then Enter as '\r' after a short gap.
   state.child.stdin?.write(code.trim());
   await new Promise((r) => setTimeout(r, 400));
   state.child.stdin?.write('\r');
 
   const start = Date.now();
   while (Date.now() - start < 45_000 && !state.done) {
+    if (isClaudeCodeConnected() || /login successful|logged in/i.test(state.output)) {
+      // Dismiss any "press enter" confirmation, let credentials flush, then
+      // shut the interactive session down.
+      state.child.stdin?.write('\r');
+      await new Promise((r) => setTimeout(r, 1500));
+      state.child.kill('SIGKILL');
+      setupState = null;
+      if (isClaudeCodeConnected()) {
+        log.info('Claude Code credentials stored');
+        return { success: true };
+      }
+      break;
+    }
+    if (/invalid|expired/i.test(state.output.slice(-300))) break;
     await new Promise((r) => setTimeout(r, 500));
   }
 
-  // Join wrapped lines before matching — a PTY may still split the token.
-  const flat = stripAnsi(state.output).replace(/[\r\n]/g, '');
-  const tokenMatch = flat.match(/sk-ant-[a-zA-Z0-9_-]{40,}/);
-  if (tokenMatch) {
-    ensureDirs();
-    writeFileSync(TOKEN_PATH, tokenMatch[0], { mode: 0o600 });
-    setupState = null;
-    log.info('Claude Code token stored');
-    return { success: true };
-  }
-
   const error = state.error ?? 'הקוד לא התקבל. נסה להתחבר מחדש.';
-  log.error({ tail: stripAnsi(state.output).slice(-500) }, 'setup-token completion failed');
-  if (state.done) setupState = null;
+  log.error({ tail: stripAnsi(state.output).slice(-800) }, 'claude login completion failed');
+  state.child.kill('SIGKILL');
+  setupState = null;
   return { success: false, error };
 }
+
 
 // --- prompt execution ------------------------------------------------------
 
@@ -251,7 +273,6 @@ export async function runClaudeCodePrompt(
         cwd: projectCwd,
         env: {
           ...process.env,
-          CLAUDE_CODE_OAUTH_TOKEN: readToken(),
           CLAUDE_CONFIG_DIR: CONFIG_DIR,
           HOME: BASE_DIR,
         },
