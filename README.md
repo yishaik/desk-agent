@@ -2,7 +2,9 @@
 
 Personal WhatsApp agent for SMBs. One isolated Docker stack per customer: agent + Open Connector + Caddy.
 
-**Built on [Pi Coding Agent](https://github.com/earendil-works/pi)** - AI runtime with sessions, skills, and extensions.
+**Two AI engines:**
+- **Claude Code (recommended)** — the unmodified official `claude` binary running headless. The customer signs in with their own Claude Pro/Max subscription, so usage draws on their **plan limits** (this is the only Anthropic-compliant way to do that; third-party OAuth is billed from extra usage per token and violates their ToS — see [legal & compliance](https://code.claude.com/docs/en/legal-and-compliance)). Tools are provided via a stdio MCP server wrapping Open Connector.
+- **[Pi Coding Agent](https://github.com/earendil-works/pi)** — used for the ChatGPT (Codex OAuth) path.
 
 ## What You Get
 
@@ -17,7 +19,7 @@ Personal WhatsApp agent for SMBs. One isolated Docker stack per customer: agent 
 After `docker compose up`, the Web UI guides you through:
 
 1. **WhatsApp Pairing** - Scan QR code with your phone (Settings → Linked Devices → Link a Device)
-2. **AI Provider Login** - Connect ChatGPT or Claude via browser OAuth (click Connect, authorize in popup, done)
+2. **AI Provider Login** - Connect **Claude (subscription — recommended)**: authorize in the browser, copy the code Claude shows, paste it in the wizard. Or connect ChatGPT via OAuth.
 3. **Identity Setup** - Enter your name, business name, and timezone (writes SOUL.md and AGENTS.md)
 4. **Open Connector** - Health check and connection status
 5. **Admin Token** - Shown once, save it securely, then acknowledge (never shown again)
@@ -95,18 +97,21 @@ Send these to yourself in WhatsApp:
 
 ## AI Provider Login
 
-Login happens in the browser via OAuth:
+Three options, shown in the wizard and Settings:
 
-1. Open **Settings** in the Web UI
-2. Click **Connect** next to ChatGPT or Claude
-3. Authorize in the popup window
-4. Paste callback URL if popup was blocked (fallback only)
+1. **⭐ Claude — Pro/Max subscription (recommended).** Drives Claude Code's own
+   interactive login: click Connect, authorize at claude.ai, copy the code
+   shown, paste it back. Credentials are stored by the `claude` binary inside
+   the customer's stack; usage draws on their plan limits. When connected,
+   this engine takes precedence.
+2. **ChatGPT.** Codex OAuth via the Pi runtime — authorize, then paste the
+   full `localhost:1455/...` redirect URL from the address bar. Uses the
+   ChatGPT subscription.
+3. **Claude via API OAuth (not recommended).** Billed from Anthropic
+   **extra usage** per token, not plan limits.
 
-After OAuth, the model is set to the provider default:
-- **OpenAI:** `openai-codex/gpt-5.5`
-- **Anthropic:** `anthropic/claude-sonnet-4-6`
-
-If OAuth expires, Settings shows a reconnect prompt.
+Neither flow requires an API key. If auth expires, Settings shows a reconnect
+prompt. Switch Claude Code models with `/model claude-code/<name>` in WhatsApp.
 
 ## Configuration
 
