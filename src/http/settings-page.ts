@@ -559,7 +559,130 @@ export function getSettingsHtml(data: SettingsPageData): string {
     
     .tools-grid {
       display: grid;
-      gap: 16px;
+      gap: 12px;
+    }
+
+    .tool-accordion {
+      background: var(--bg-tertiary);
+      border-radius: 12px;
+      overflow: hidden;
+    }
+
+    .tool-accordion-header {
+      display: grid;
+      grid-template-columns: auto 1fr auto auto auto auto;
+      align-items: center;
+      gap: 12px;
+      padding: 14px 16px;
+      cursor: pointer;
+      user-select: none;
+      transition: background 0.15s;
+    }
+
+    .tool-accordion-header:hover {
+      background: rgba(255, 255, 255, 0.03);
+    }
+
+    .tool-accordion-header:focus {
+      outline: 2px solid var(--accent);
+      outline-offset: -2px;
+    }
+
+    .tool-accordion-logo {
+      width: 40px;
+      height: 40px;
+      border-radius: 10px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 20px;
+      font-weight: 600;
+      flex-shrink: 0;
+    }
+
+    .tool-accordion-info {
+      min-width: 0;
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+    }
+
+    .tool-accordion-name {
+      font-weight: 600;
+      font-size: 15px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .tool-accordion-identity {
+      font-size: 12px;
+      color: var(--success);
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .tool-accordion-count {
+      background: var(--bg-secondary);
+      color: var(--text-muted);
+      font-size: 11px;
+      padding: 3px 8px;
+      border-radius: 10px;
+      white-space: nowrap;
+    }
+
+    .tool-accordion-mute {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .tool-accordion-disconnect {
+      padding: 6px 10px;
+      font-size: 12px;
+      background: var(--error);
+      color: white;
+      border: none;
+      border-radius: 6px;
+      cursor: pointer;
+      white-space: nowrap;
+      transition: background 0.2s;
+    }
+
+    .tool-accordion-disconnect:hover {
+      background: #dc2626;
+    }
+
+    .tool-accordion-chevron {
+      width: 20px;
+      height: 20px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: var(--text-muted);
+      transition: transform 0.2s ease;
+      flex-shrink: 0;
+    }
+
+    .tool-accordion[data-collapsed="false"] .tool-accordion-chevron {
+      transform: rotate(180deg);
+    }
+
+    .tool-accordion-panel {
+      padding: 0 16px 16px 16px;
+      display: none;
+    }
+
+    .tool-accordion[data-collapsed="false"] .tool-accordion-panel {
+      display: block;
+    }
+
+    .tool-accordion.tool-muted {
+      opacity: 0.5;
     }
   </style>
 </head>
@@ -983,7 +1106,7 @@ export function getSettingsHtml(data: SettingsPageData): string {
 
     function getToolLogo(tool) {
       if (tool.icon && !tool.icon.includes('🔧')) {
-        return \`<span style="font-size: 28px;">\${escapeHtml(tool.icon)}</span>\`;
+        return \`<span style="font-size: 20px;">\${escapeHtml(tool.icon)}</span>\`;
       }
       const name = tool.name || tool.id || '?';
       const letter = name.charAt(0).toUpperCase();
@@ -994,7 +1117,43 @@ export function getSettingsHtml(data: SettingsPageData): string {
       ];
       const colorIdx = name.charCodeAt(0) % colors.length;
       const [bg, fg] = colors[colorIdx];
-      return \`<span style="background:\${bg}; color:\${fg}; width:100%; height:100%; display:flex; align-items:center; justify-content:center; border-radius:12px;">\${escapeHtml(letter)}</span>\`;
+      return \`<span style="background:\${bg}; color:\${fg}; width:100%; height:100%; display:flex; align-items:center; justify-content:center; border-radius:10px;">\${escapeHtml(letter)}</span>\`;
+    }
+
+    const TOOLS_OPEN_STORAGE_KEY = 'desk-settings-tools-open';
+
+    function getOpenTools() {
+      try {
+        const stored = sessionStorage.getItem(TOOLS_OPEN_STORAGE_KEY);
+        return stored ? JSON.parse(stored) : [];
+      } catch {
+        return [];
+      }
+    }
+
+    function setOpenTools(ids) {
+      try {
+        sessionStorage.setItem(TOOLS_OPEN_STORAGE_KEY, JSON.stringify(ids));
+      } catch {}
+    }
+
+    function toggleToolAccordion(serviceId) {
+      const el = document.querySelector(\`[data-tool-accordion="\${serviceId}"]\`);
+      if (!el) return;
+      const collapsed = el.getAttribute('data-collapsed') === 'true';
+      el.setAttribute('data-collapsed', collapsed ? 'false' : 'true');
+      el.querySelector('.tool-accordion-header').setAttribute('aria-expanded', collapsed ? 'true' : 'false');
+      
+      const openTools = getOpenTools();
+      if (collapsed) {
+        if (!openTools.includes(serviceId)) {
+          openTools.push(serviceId);
+        }
+      } else {
+        const idx = openTools.indexOf(serviceId);
+        if (idx !== -1) openTools.splice(idx, 1);
+      }
+      setOpenTools(openTools);
     }
 
     async function loadToolActions(serviceId) {
@@ -1061,6 +1220,7 @@ export function getSettingsHtml(data: SettingsPageData): string {
         );
         
         const MAX_ACTIONS = 40;
+        const openTools = getOpenTools();
         
         container.innerHTML = '<div class="tools-grid">' + toolsWithActions.map(tool => {
           const identityStr = tool.identity 
@@ -1070,54 +1230,62 @@ export function getSettingsHtml(data: SettingsPageData): string {
           const moreCount = tool.actions.length - MAX_ACTIONS;
           const showDisconnect = canDisconnect(tool);
           const isRealTool = canDisconnect(tool);
+          const isCollapsed = !openTools.includes(tool.id);
+          const actionCount = tool.actions.length;
           
           return \`
-            <div class="tool-card\${tool.enabled ? '' : ' disabled'}">
-              <div class="tool-card-header">
-                <div class="tool-card-info">
-                  <div class="tool-logo">\${getToolLogo(tool)}</div>
-                  <div class="tool-card-details">
-                    <div class="tool-card-name">\${escapeHtml(tool.name)}</div>
-                    \${identityStr ? \`<div class="tool-card-identity">✓ \${escapeHtml(identityStr)}</div>\` : ''}
-                  </div>
+            <div class="tool-accordion\${tool.enabled ? '' : ' tool-muted'}" data-tool-accordion="\${escapeHtml(tool.id)}" data-collapsed="\${isCollapsed}">
+              <div class="tool-accordion-header" role="button" aria-expanded="\${!isCollapsed}" tabindex="0" onclick="toggleToolAccordion('\${escapeHtml(tool.id)}')" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();toggleToolAccordion('\${escapeHtml(tool.id)}');}">
+                <div class="tool-accordion-logo">\${getToolLogo(tool)}</div>
+                <div class="tool-accordion-info">
+                  <div class="tool-accordion-name">\${escapeHtml(tool.name)}</div>
+                  \${identityStr ? \`<div class="tool-accordion-identity">✓ \${escapeHtml(identityStr)}</div>\` : ''}
                 </div>
-                <div class="tool-card-controls">
-                  \${isRealTool ? \`
+                \${actionCount > 0 ? \`<span class="tool-accordion-count">\${actionCount} פעולות</span>\` : ''}
+                \${isRealTool ? \`
+                  <div class="tool-accordion-mute" onclick="event.stopPropagation();">
                     <div class="tool-switch" role="switch" aria-checked="\${tool.enabled}" onclick="toggleToolEnabled('\${escapeHtml(tool.id)}', \${!tool.enabled})">
                       <div class="tool-switch-track\${tool.enabled ? ' enabled' : ''}">
                         <div class="tool-switch-thumb"></div>
                       </div>
                       <span class="tool-switch-label">\${tool.enabled ? 'מופעל' : 'כבוי'}</span>
                     </div>
-                  \` : ''}
-                  \${showDisconnect ? \`<button type="button" class="danger" onclick="disconnectTool('\${escapeHtml(tool.id)}', '\${escapeHtml(tool.name)}')">ניתוק</button>\` : ''}
+                  </div>
+                \` : '<div></div>'}
+                \${showDisconnect ? \`<button type="button" class="tool-accordion-disconnect" onclick="event.stopPropagation(); disconnectTool('\${escapeHtml(tool.id)}', '\${escapeHtml(tool.name)}')">ניתוק</button>\` : '<div></div>'}
+                <div class="tool-accordion-chevron">
+                  <svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
+                    <path d="M4 6L8 10L12 6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+                  </svg>
                 </div>
               </div>
-              \${displayActions.length > 0 ? \`
-                <div class="tool-card-actions-header">פעולות זמינות</div>
-                <div class="action-chips">
-                  \${displayActions.map(action => {
-                    const actionEnabled = tool.enabled && (action.enabled !== false);
-                    return \`
-                      <div class="action-chip with-switch\${actionEnabled ? '' : ' disabled'}" title="\${escapeHtml(action.description || '')}">
-                        <div class="action-chip-content">
-                          <div class="action-chip-title">\${escapeHtml(humanizeAction(action))}</div>
-                          \${action.description ? \`<div class="action-chip-desc">\${escapeHtml(action.description.slice(0, 60))}\${action.description.length > 60 ? '...' : ''}</div>\` : ''}
-                        </div>
-                        \${isRealTool ? \`
-                          <div class="action-switch" role="switch" aria-checked="\${actionEnabled}" onclick="event.stopPropagation(); toggleActionEnabled('\${escapeHtml(tool.id)}', '\${escapeHtml(action.id)}', \${!action.enabled})" \${!tool.enabled ? 'style="pointer-events: none;"' : ''}>
-                            <div class="action-switch-track\${actionEnabled ? ' enabled' : ''}">
-                              <div class="action-switch-thumb"></div>
-                            </div>
-                            <span class="action-switch-label">\${actionEnabled ? 'מופעל' : 'כבוי'}</span>
+              <div class="tool-accordion-panel">
+                \${displayActions.length > 0 ? \`
+                  <div class="tool-card-actions-header">פעולות זמינות</div>
+                  <div class="action-chips">
+                    \${displayActions.map(action => {
+                      const actionEnabled = tool.enabled && (action.enabled !== false);
+                      return \`
+                        <div class="action-chip with-switch\${actionEnabled ? '' : ' disabled'}" title="\${escapeHtml(action.description || '')}">
+                          <div class="action-chip-content">
+                            <div class="action-chip-title">\${escapeHtml(humanizeAction(action))}</div>
+                            \${action.description ? \`<div class="action-chip-desc">\${escapeHtml(action.description.slice(0, 60))}\${action.description.length > 60 ? '...' : ''}</div>\` : ''}
                           </div>
-                        \` : ''}
-                      </div>
-                    \`;
-                  }).join('')}
-                  \${moreCount > 0 ? \`<div class="action-chip action-more">+\${moreCount} נוספות</div>\` : ''}
-                </div>
-              \` : ''}
+                          \${isRealTool ? \`
+                            <div class="action-switch" role="switch" aria-checked="\${actionEnabled}" onclick="event.stopPropagation(); toggleActionEnabled('\${escapeHtml(tool.id)}', '\${escapeHtml(action.id)}', \${!action.enabled})" \${!tool.enabled ? 'style="pointer-events: none;"' : ''}>
+                              <div class="action-switch-track\${actionEnabled ? ' enabled' : ''}">
+                                <div class="action-switch-thumb"></div>
+                              </div>
+                              <span class="action-switch-label">\${actionEnabled ? 'מופעל' : 'כבוי'}</span>
+                            </div>
+                          \` : ''}
+                        </div>
+                      \`;
+                    }).join('')}
+                    \${moreCount > 0 ? \`<div class="action-chip action-more">+\${moreCount} נוספות</div>\` : ''}
+                  </div>
+                \` : '<p style="color: var(--text-muted); font-size: 13px;">אין פעולות זמינות</p>'}
+              </div>
             </div>
           \`;
         }).join('') + '</div>';

@@ -287,10 +287,10 @@ describe('getSettingsHtml', () => {
     expect(html).toContain('t.enabled !== false');
   });
 
-  it('applies disabled class to tool card when not enabled', () => {
+  it('applies tool-muted class to accordion when not enabled', () => {
     const html = getSettingsHtml(createTestData());
     
-    expect(html).toContain("tool-card${tool.enabled ? '' : ' disabled'}");
+    expect(html).toContain("tool-accordion${tool.enabled ? '' : ' tool-muted'}");
   });
 
   it('includes action switch with Hebrew labels', () => {
@@ -325,5 +325,96 @@ describe('getSettingsHtml', () => {
     const html = getSettingsHtml(createTestData());
     
     expect(html).toContain('MAX_ACTIONS = 40');
+  });
+
+  describe('accordion markup', () => {
+    it('renders tool-accordion container with data-collapsed attribute', () => {
+      const html = getSettingsHtml(createTestData());
+      
+      expect(html).toContain('tool-accordion');
+      expect(html).toContain('data-tool-accordion=');
+      expect(html).toContain('data-collapsed=');
+    });
+
+    it('renders header with role=button and aria-expanded', () => {
+      const html = getSettingsHtml(createTestData());
+      
+      expect(html).toContain('tool-accordion-header');
+      expect(html).toContain('role="button"');
+      expect(html).toContain('aria-expanded=');
+    });
+
+    it('renders collapsible panel separate from header controls', () => {
+      const html = getSettingsHtml(createTestData());
+      
+      expect(html).toContain('tool-accordion-panel');
+    });
+
+    it('renders mute switch outside tool-accordion-panel (in header)', () => {
+      const html = getSettingsHtml(createTestData());
+      
+      expect(html).toContain('tool-accordion-mute');
+      expect(html).toContain('tool-switch');
+    });
+
+    it('renders ניתוק button outside tool-accordion-panel (in header)', () => {
+      const html = getSettingsHtml(createTestData());
+      
+      expect(html).toContain('tool-accordion-disconnect');
+      expect(html).toContain('>ניתוק</button>');
+    });
+
+    it('renders chevron in header for expand/collapse', () => {
+      const html = getSettingsHtml(createTestData());
+      
+      expect(html).toContain('tool-accordion-chevron');
+    });
+
+    it('renders action count chip in header', () => {
+      const html = getSettingsHtml(createTestData());
+      
+      expect(html).toContain('tool-accordion-count');
+      expect(html).toContain('פעולות');
+    });
+
+    it('includes toggleToolAccordion function', () => {
+      const html = getSettingsHtml(createTestData());
+      
+      expect(html).toContain('function toggleToolAccordion');
+    });
+
+    it('uses sessionStorage key for persisting open tools', () => {
+      const html = getSettingsHtml(createTestData());
+      
+      expect(html).toContain('desk-settings-tools-open');
+      expect(html).toContain('sessionStorage');
+    });
+
+    it('stops propagation on mute click to prevent accordion toggle', () => {
+      const html = getSettingsHtml(createTestData());
+      
+      expect(html).toContain('tool-accordion-mute');
+      expect(html).toMatch(/tool-accordion-mute.*onclick="event\.stopPropagation\(\)/s);
+    });
+
+    it('stops propagation on disconnect click to prevent accordion toggle', () => {
+      const html = getSettingsHtml(createTestData());
+      
+      expect(html).toContain('tool-accordion-disconnect');
+      expect(html).toMatch(/tool-accordion-disconnect.*onclick="event\.stopPropagation\(\)/s);
+    });
+
+    it('renders chevron rotation CSS for expanded state', () => {
+      const html = getSettingsHtml(createTestData());
+      
+      expect(html).toContain('[data-collapsed="false"] .tool-accordion-chevron');
+      expect(html).toContain('rotate(180deg)');
+    });
+
+    it('actions are inside tool-accordion-panel only', () => {
+      const html = getSettingsHtml(createTestData());
+      
+      expect(html).toMatch(/tool-accordion-panel[^]*action-chips/s);
+    });
   });
 });
