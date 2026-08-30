@@ -38,6 +38,9 @@ COPY skills-pack/ ./skills-pack/
 RUN mkdir -p /app/data/pi-agent
 
 # Set environment
+# Claude Code must not self-update inside the container — versions are pinned
+# by image builds, keeping the login TUI driver behavior predictable.
+ENV DISABLE_AUTOUPDATER=1
 ENV NODE_ENV=production
 ENV DATA_DIR=/app/data
 ENV HOST=0.0.0.0
