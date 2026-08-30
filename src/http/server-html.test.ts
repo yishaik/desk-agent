@@ -89,6 +89,29 @@ describe('Server HTML Source Code Requirements', () => {
       expect(serverCode).toContain('listProviders()');
       expect(serverCode).not.toContain("settings.model === 'claude-3-5-sonnet");
     });
+
+    it('wizard loginPoll has timeout with maxPollTicks and clearInterval', () => {
+      expect(serverCode).toContain('maxPollTicks');
+      expect(serverCode).toContain('clearInterval(loginPollInterval)');
+      expect(serverCode).toContain('loginPollTicks');
+      expect(serverCode).toContain('loginPollTicks >= maxPollTicks');
+    });
+
+    it('wizard timeout shows hint for paste callback, not error banner', () => {
+      expect(serverCode).toContain('pasteHint');
+      expect(serverCode).toContain('הדבק את ה-callback URL');
+      expect(serverCode).not.toContain('poll-timeout-error');
+    });
+
+    it('wizard shows paste modal for openai-codex only after authorize URL opens', () => {
+      expect(serverCode).toContain("providerId === 'openai-codex'");
+      expect(serverCode).toContain("document.getElementById('pasteModal').style.display = 'block'");
+    });
+
+    it('wizard allows reconnect for already-connected providers', () => {
+      expect(serverCode).toContain("btnEl.textContent = 'התחבר מחדש'");
+      expect(serverCode).toContain('connectedProviders.has(providerId)');
+    });
   });
 
   describe('getDashboardHtml requirements', () => {
