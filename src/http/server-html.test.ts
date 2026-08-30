@@ -89,6 +89,27 @@ describe('Server HTML Source Code Requirements', () => {
       expect(serverCode).toContain('listProviders()');
       expect(serverCode).not.toContain("settings.model === 'claude-3-5-sonnet");
     });
+
+    it('wizard loginPoll has timeout with maxPollTicks and clearInterval', () => {
+      expect(serverCode).toContain('maxPollTicks');
+      expect(serverCode).toContain('clearInterval(loginPollInterval)');
+      expect(serverCode).toContain('loginPollTicks');
+    });
+
+    it('wizard shows Hebrew timeout error message', () => {
+      expect(serverCode).toContain('הזמן פג');
+      expect(serverCode).toContain('poll-timeout-error');
+    });
+
+    it('wizard connectProvider skips if provider already connected', () => {
+      expect(serverCode).toContain('connectedProviders.has(providerId)');
+    });
+
+    it('wizard shows paste modal immediately (paste-first)', () => {
+      const connectProviderMatch = serverCode.match(/async function connectProvider\(providerId\)[\s\S]*?document\.getElementById\('pasteModal'\)\.style\.display = 'block'/);
+      expect(connectProviderMatch).not.toBeNull();
+      expect(serverCode).not.toMatch(/setTimeout\(\s*\(\)\s*=>\s*\{\s*document\.getElementById\('pasteModal'\)\.style\.display/);
+    });
   });
 
   describe('getDashboardHtml requirements', () => {

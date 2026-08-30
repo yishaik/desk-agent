@@ -1557,15 +1557,22 @@ export function getWizardHtml(settings: ReturnType<typeof loadSettings>, pairing
     <script>
       let currentProvider = null;
       let loginPollInterval = null;
+      let loginPollTicks = 0;
+      const maxPollTicks = 45;
+      let connectedProviders = new Set();
 
       async function loadProviders() {
         try {
           const res = await fetch('/api/auth/providers');
           const { data } = await res.json();
           
+          connectedProviders.clear();
           for (const p of data) {
             const statusEl = document.getElementById(p.id + '-status');
             const btnEl = document.getElementById(p.id + '-btn');
+            if (p.isConnected) {
+              connectedProviders.add(p.id);
+            }
             if (statusEl && btnEl) {
               if (p.isConnected) {
                 statusEl.textContent = '✓ מחובר';
@@ -1588,8 +1595,18 @@ export function getWizardHtml(settings: ReturnType<typeof loadSettings>, pairing
       }
 
       async function connectProvider(providerId) {
+        if (connectedProviders.has(providerId)) {
+          return;
+        }
+        
         currentProvider = providerId;
-        const popup = window.open('about:blank', '_blank');
+        const btnEl = document.getElementById(providerId + '-btn');
+        if (btnEl) {
+          btnEl.disabled = true;
+          btnEl.textContent = 'מתחבר...';
+        }
+        
+        document.getElementById('pasteModal').style.display = 'block';
         
         try {
           const res = await fetch('/api/auth/login', {
@@ -1601,49 +1618,77 @@ export function getWizardHtml(settings: ReturnType<typeof loadSettings>, pairing
           const json = await res.json();
           
           if (json.authorizeUrl) {
-            if (popup && !popup.closed) {
-              popup.location = json.authorizeUrl;
-            } else {
-              window.open(json.authorizeUrl, '_blank');
-            }
-            
+            window.open(json.authorizeUrl, '_blank');
             startLoginPoll(providerId);
-            setTimeout(() => {
-              document.getElementById('pasteModal').style.display = 'block';
-            }, 2000);
           } else {
-            if (popup && !popup.closed) popup.close();
+            closePasteModal();
+            if (btnEl) {
+              btnEl.disabled = false;
+              btnEl.textContent = 'התחבר';
+            }
             alert(json.error || 'שגיאה בהתחברות');
           }
         } catch (err) {
-          if (popup && !popup.closed) popup.close();
+          closePasteModal();
+          if (btnEl) {
+            btnEl.disabled = false;
+            btnEl.textContent = 'התחבר';
+          }
           alert('שגיאה בהתחברות');
         }
       }
 
       function startLoginPoll(providerId) {
         if (loginPollInterval) clearInterval(loginPollInterval);
+        loginPollTicks = 0;
         
         loginPollInterval = setInterval(async () => {
+          loginPollTicks++;
+          
+          if (loginPollTicks >= maxPollTicks) {
+            clearInterval(loginPollInterval);
+            loginPollInterval = null;
+            const btnEl = document.getElementById(providerId + '-btn');
+            if (btnEl) {
+              btnEl.disabled = false;
+              btnEl.textContent = 'התחבר';
+            }
+            const pasteModal = document.getElementById('pasteModal');
+            if (pasteModal) {
+              const errorMsg = document.createElement('p');
+              errorMsg.style.color = 'var(--error)';
+              errorMsg.style.marginTop = '12px';
+              errorMsg.textContent = 'הזמן פג - הדבק את הקוד או נסה שוב';
+              const existingError = pasteModal.querySelector('.poll-timeout-error');
+              if (existingError) existingError.remove();
+              errorMsg.className = 'poll-timeout-error';
+              pasteModal.appendChild(errorMsg);
+            }
+            return;
+          }
+          
           try {
             const res = await fetch('/api/auth/login/' + providerId + '/status');
             const { data } = await res.json();
             
             if (data.status === 'success') {
               clearInterval(loginPollInterval);
+              loginPollInterval = null;
               closePasteModal();
               location.reload();
             } else if (data.status === 'failed') {
               clearInterval(loginPollInterval);
+              loginPollInterval = null;
               closePasteModal();
+              const btnEl = document.getElementById(providerId + '-btn');
+              if (btnEl) {
+                btnEl.disabled = false;
+                btnEl.textContent = 'התחבר';
+              }
               alert(data.error || 'ההתחברות נכשלה');
             }
           } catch (err) {}
         }, 2000);
-        
-        setTimeout(() => {
-          if (loginPollInterval) clearInterval(loginPollInterval);
-        }, 120000);
       }
 
       async function submitCallback() {
@@ -1660,6 +1705,10 @@ export function getWizardHtml(settings: ReturnType<typeof loadSettings>, pairing
           const json = await res.json();
           
           if (json.success) {
+            if (loginPollInterval) {
+              clearInterval(loginPollInterval);
+              loginPollInterval = null;
+            }
             closePasteModal();
             location.reload();
           } else {
@@ -1671,7 +1720,12 @@ export function getWizardHtml(settings: ReturnType<typeof loadSettings>, pairing
       }
 
       function closePasteModal() {
-        document.getElementById('pasteModal').style.display = 'none';
+        const pasteModal = document.getElementById('pasteModal');
+        if (pasteModal) {
+          pasteModal.style.display = 'none';
+          const existingError = pasteModal.querySelector('.poll-timeout-error');
+          if (existingError) existingError.remove();
+        }
         document.getElementById('callbackUrl').value = '';
         currentProvider = null;
       }
