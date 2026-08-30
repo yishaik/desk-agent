@@ -781,7 +781,7 @@ export function getSettingsHtml(data: SettingsPageData): string {
           <div class="provider-item">
             <div class="provider-info">
               <span class="provider-name">\${escapeHtml(p.name)}</span>
-              <span class="provider-status">\${p.isConnected ? '✓ מחובר' : 'לא מחובר'}</span>
+              <span class="provider-status">\${p.isConnected ? (p.account ? '✓ מחובר — ' + p.account : '✓ מחובר') : 'לא מחובר'}</span>
             </div>
             <div>
               \${p.isConnected 

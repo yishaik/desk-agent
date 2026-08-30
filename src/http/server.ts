@@ -1568,7 +1568,7 @@ export function getWizardHtml(settings: ReturnType<typeof loadSettings>, pairing
             const btnEl = document.getElementById(p.id + '-btn');
             if (statusEl && btnEl) {
               if (p.isConnected) {
-                statusEl.textContent = '✓ מחובר';
+                statusEl.textContent = p.account ? ('✓ מחובר — ' + p.account) : '✓ מחובר';
                 statusEl.classList.add('connected');
                 btnEl.textContent = 'מחובר ✓';
                 btnEl.disabled = true;

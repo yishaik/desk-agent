@@ -2,7 +2,7 @@ import { ModelRuntime } from '@earendil-works/pi-coding-agent';
 import { config } from '../core/config.ts';
 import { createChildLogger } from '../core/logger.ts';
 import { join } from 'node:path';
-import { existsSync, mkdirSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync } from 'node:fs';
 
 const log = createChildLogger('auth');
 
@@ -194,6 +194,72 @@ export interface ProviderInfo {
   id: string;
   name: string;
   isConnected: boolean;
+  /** Human label of the connected account, e.g. "yishai@gmail.com · Claude Max" */
+  account?: string;
+}
+
+// --- connected-account identity ------------------------------------------
+// Knowing WHICH account is connected is essential for debugging quota/auth
+// problems, so show it next to the ✓. Results are cached briefly because the
+// wizard polls listProviders every few seconds.
+const identityCache = new Map<string, { label: string | undefined; at: number }>();
+const IDENTITY_CACHE_MS = 10 * 60 * 1000;
+
+function readStoredAuth(): Record<string, { access?: string; idToken?: string; id_token?: string }> {
+  try {
+    const authPath = join(config.dataDir, 'pi-agent', 'auth.json');
+    return JSON.parse(readFileSync(authPath, 'utf8'));
+  } catch {
+    return {};
+  }
+}
+
+function decodeJwtEmail(jwt: string): string | undefined {
+  try {
+    const payload = JSON.parse(Buffer.from(jwt.split('.')[1] ?? '', 'base64url').toString('utf8'));
+    return payload.email ?? payload.preferred_username;
+  } catch {
+    return undefined;
+  }
+}
+
+export async function getProviderIdentity(providerId: string): Promise<string | undefined> {
+  const auth = readStoredAuth();
+  const entry = auth[providerId];
+  if (!entry) return undefined;
+
+  const cacheKey = `${providerId}:${(entry.access ?? '').slice(0, 24)}`;
+  const cached = identityCache.get(cacheKey);
+  if (cached && Date.now() - cached.at < IDENTITY_CACHE_MS) {
+    return cached.label;
+  }
+
+  let label: string | undefined;
+  try {
+    if (providerId === 'anthropic' && entry.access) {
+      const res = await fetch('https://api.anthropic.com/api/oauth/profile', {
+        headers: { Authorization: `Bearer ${entry.access}`, 'anthropic-beta': 'oauth-2025-04-20' },
+        signal: AbortSignal.timeout(8000),
+      });
+      if (res.ok) {
+        const profile = await res.json() as {
+          account?: { email?: string; has_claude_max?: boolean; has_claude_pro?: boolean };
+        };
+        const email = profile.account?.email;
+        const plan = profile.account?.has_claude_max ? 'Claude Max'
+          : profile.account?.has_claude_pro ? 'Claude Pro' : undefined;
+        label = email ? (plan ? `${email} · ${plan}` : email) : undefined;
+      }
+    } else if (providerId === 'openai-codex') {
+      const jwt = entry.idToken ?? entry.id_token ?? (entry.access?.split('.').length === 3 ? entry.access : undefined);
+      label = jwt ? decodeJwtEmail(jwt) : undefined;
+    }
+  } catch (err) {
+    log.debug({ err, providerId }, 'Failed to fetch provider identity');
+  }
+
+  identityCache.set(cacheKey, { label, at: Date.now() });
+  return label;
 }
 
 export interface LoginResult {
@@ -236,6 +302,7 @@ export async function listProviders(): Promise<ProviderInfo[]> {
       id: provider.id,
       name: provider.name,
       isConnected,
+      account: isConnected ? await getProviderIdentity(provider.id) : undefined,
     });
   }
 
