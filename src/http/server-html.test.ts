@@ -94,21 +94,23 @@ describe('Server HTML Source Code Requirements', () => {
       expect(serverCode).toContain('maxPollTicks');
       expect(serverCode).toContain('clearInterval(loginPollInterval)');
       expect(serverCode).toContain('loginPollTicks');
+      expect(serverCode).toContain('loginPollTicks >= maxPollTicks');
     });
 
-    it('wizard shows Hebrew timeout error message', () => {
-      expect(serverCode).toContain('הזמן פג');
-      expect(serverCode).toContain('poll-timeout-error');
+    it('wizard timeout shows hint for paste callback, not error banner', () => {
+      expect(serverCode).toContain('pasteHint');
+      expect(serverCode).toContain('הדבק את ה-callback URL');
+      expect(serverCode).not.toContain('poll-timeout-error');
     });
 
-    it('wizard connectProvider skips if provider already connected', () => {
+    it('wizard shows paste modal for openai-codex only after authorize URL opens', () => {
+      expect(serverCode).toContain("providerId === 'openai-codex'");
+      expect(serverCode).toContain("document.getElementById('pasteModal').style.display = 'block'");
+    });
+
+    it('wizard allows reconnect for already-connected providers', () => {
+      expect(serverCode).toContain("btnEl.textContent = 'התחבר מחדש'");
       expect(serverCode).toContain('connectedProviders.has(providerId)');
-    });
-
-    it('wizard shows paste modal immediately (paste-first)', () => {
-      const connectProviderMatch = serverCode.match(/async function connectProvider\(providerId\)[\s\S]*?document\.getElementById\('pasteModal'\)\.style\.display = 'block'/);
-      expect(connectProviderMatch).not.toBeNull();
-      expect(serverCode).not.toMatch(/setTimeout\(\s*\(\)\s*=>\s*\{\s*document\.getElementById\('pasteModal'\)\.style\.display/);
     });
   });
 

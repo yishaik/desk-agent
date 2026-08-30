@@ -1546,7 +1546,7 @@ export function getWizardHtml(settings: ReturnType<typeof loadSettings>, pairing
       </div>
       
       <div id="pasteModal" style="display: none; margin-top: 24px; padding: 16px; background: var(--bg-tertiary); border-radius: 8px;">
-        <p style="margin-bottom: 12px; color: var(--text-secondary);">אם החלון לא נפתח, הדבק את הקוד או URL שחזר:</p>
+        <p id="pasteHint" style="margin-bottom: 12px; color: var(--text-secondary);">הדבק את ה-callback URL שחזר מ-ChatGPT:</p>
         <input type="text" id="callbackUrl" placeholder="הדבק כאן..." style="margin-bottom: 12px;">
         <div class="btn-group">
           <button onclick="submitCallback()">אשר</button>
@@ -1577,8 +1577,8 @@ export function getWizardHtml(settings: ReturnType<typeof loadSettings>, pairing
               if (p.isConnected) {
                 statusEl.textContent = '✓ מחובר';
                 statusEl.classList.add('connected');
-                btnEl.textContent = 'מחובר ✓';
-                btnEl.disabled = true;
+                btnEl.textContent = 'התחבר מחדש';
+                btnEl.disabled = false;
               } else {
                 statusEl.textContent = 'לא מחובר';
               }
@@ -1595,18 +1595,12 @@ export function getWizardHtml(settings: ReturnType<typeof loadSettings>, pairing
       }
 
       async function connectProvider(providerId) {
-        if (connectedProviders.has(providerId)) {
-          return;
-        }
-        
         currentProvider = providerId;
         const btnEl = document.getElementById(providerId + '-btn');
         if (btnEl) {
           btnEl.disabled = true;
           btnEl.textContent = 'מתחבר...';
         }
-        
-        document.getElementById('pasteModal').style.display = 'block';
         
         try {
           const res = await fetch('/api/auth/login', {
@@ -1619,20 +1613,23 @@ export function getWizardHtml(settings: ReturnType<typeof loadSettings>, pairing
           
           if (json.authorizeUrl) {
             window.open(json.authorizeUrl, '_blank');
+            
+            if (providerId === 'openai-codex') {
+              document.getElementById('pasteModal').style.display = 'block';
+            }
+            
             startLoginPoll(providerId);
           } else {
-            closePasteModal();
             if (btnEl) {
               btnEl.disabled = false;
-              btnEl.textContent = 'התחבר';
+              btnEl.textContent = connectedProviders.has(providerId) ? 'התחבר מחדש' : 'התחבר';
             }
             alert(json.error || 'שגיאה בהתחברות');
           }
         } catch (err) {
-          closePasteModal();
           if (btnEl) {
             btnEl.disabled = false;
-            btnEl.textContent = 'התחבר';
+            btnEl.textContent = connectedProviders.has(providerId) ? 'התחבר מחדש' : 'התחבר';
           }
           alert('שגיאה בהתחברות');
         }
@@ -1648,21 +1645,13 @@ export function getWizardHtml(settings: ReturnType<typeof loadSettings>, pairing
           if (loginPollTicks >= maxPollTicks) {
             clearInterval(loginPollInterval);
             loginPollInterval = null;
-            const btnEl = document.getElementById(providerId + '-btn');
-            if (btnEl) {
-              btnEl.disabled = false;
-              btnEl.textContent = 'התחבר';
-            }
-            const pasteModal = document.getElementById('pasteModal');
-            if (pasteModal) {
-              const errorMsg = document.createElement('p');
-              errorMsg.style.color = 'var(--error)';
-              errorMsg.style.marginTop = '12px';
-              errorMsg.textContent = 'הזמן פג - הדבק את הקוד או נסה שוב';
-              const existingError = pasteModal.querySelector('.poll-timeout-error');
-              if (existingError) existingError.remove();
-              errorMsg.className = 'poll-timeout-error';
-              pasteModal.appendChild(errorMsg);
+            
+            if (providerId === 'openai-codex') {
+              const pasteHint = document.getElementById('pasteHint');
+              if (pasteHint) {
+                pasteHint.textContent = 'הדבק את ה-callback URL שחזר מ-ChatGPT';
+                pasteHint.style.color = 'var(--accent)';
+              }
             }
             return;
           }
@@ -1683,7 +1672,7 @@ export function getWizardHtml(settings: ReturnType<typeof loadSettings>, pairing
               const btnEl = document.getElementById(providerId + '-btn');
               if (btnEl) {
                 btnEl.disabled = false;
-                btnEl.textContent = 'התחבר';
+                btnEl.textContent = connectedProviders.has(providerId) ? 'התחבר מחדש' : 'התחבר';
               }
               alert(data.error || 'ההתחברות נכשלה');
             }
@@ -1723,10 +1712,20 @@ export function getWizardHtml(settings: ReturnType<typeof loadSettings>, pairing
         const pasteModal = document.getElementById('pasteModal');
         if (pasteModal) {
           pasteModal.style.display = 'none';
-          const existingError = pasteModal.querySelector('.poll-timeout-error');
-          if (existingError) existingError.remove();
+        }
+        const pasteHint = document.getElementById('pasteHint');
+        if (pasteHint) {
+          pasteHint.textContent = 'הדבק את ה-callback URL שחזר מ-ChatGPT:';
+          pasteHint.style.color = 'var(--text-secondary)';
         }
         document.getElementById('callbackUrl').value = '';
+        if (currentProvider) {
+          const btnEl = document.getElementById(currentProvider + '-btn');
+          if (btnEl) {
+            btnEl.disabled = false;
+            btnEl.textContent = connectedProviders.has(currentProvider) ? 'התחבר מחדש' : 'התחבר';
+          }
+        }
         currentProvider = null;
       }
 
