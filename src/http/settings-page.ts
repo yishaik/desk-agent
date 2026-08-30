@@ -731,10 +731,11 @@ export function getSettingsHtml(data: SettingsPageData): string {
   <!-- Paste Callback Modal -->
   <div class="modal-backdrop" id="pasteModal">
     <div class="modal">
-      <h3 class="modal-title">הדבק קוד אישור</h3>
-      <p class="modal-description">אם החלון לא נפתח, העתק את הקישור מכאן והדבק את הקוד שחזר:</p>
+      <h3 class="modal-title" id="pasteModalTitle">הדבק קוד אישור</h3>
+      <p class="modal-description" id="pasteModalDescription">אם החלון לא נפתח, העתק את הקישור מכאן והדבק את הקוד שחזר:</p>
+      <p class="modal-description" id="pasteModalHint" style="display: none; color: var(--warning);"></p>
       <div class="form-group">
-        <label for="callbackUrl">קוד או URL מלא</label>
+        <label for="callbackUrl">כתובת ה-callback המלאה</label>
         <input type="text" id="callbackUrl" placeholder="הדבק כאן...">
       </div>
       <div class="btn-group">
@@ -768,7 +769,13 @@ export function getSettingsHtml(data: SettingsPageData): string {
 
     function closeModal() {
       document.getElementById('pasteModal').classList.remove('active');
+      document.getElementById('pasteModalHint').style.display = 'none';
+      document.getElementById('callbackUrl').value = '';
       currentProvider = null;
+      if (loginPollInterval) {
+        clearInterval(loginPollInterval);
+        loginPollInterval = null;
+      }
     }
 
     async function loadProviders() {
@@ -811,6 +818,13 @@ export function getSettingsHtml(data: SettingsPageData): string {
         
         const json = await res.json();
         
+        if (json.alreadyConnected) {
+          if (popup && !popup.closed) popup.close();
+          showToast('כבר מחובר לספק זה');
+          loadProviders();
+          return;
+        }
+        
         if (json.authorizeUrl) {
           if (popup && !popup.closed) {
             popup.location = json.authorizeUrl;
@@ -819,6 +833,20 @@ export function getSettingsHtml(data: SettingsPageData): string {
           }
           
           startLoginPoll(providerId);
+          
+          const isChatGPT = providerId === 'openai-codex';
+          const modalTitle = document.getElementById('pasteModalTitle');
+          const modalDesc = document.getElementById('pasteModalDescription');
+          const modalHint = document.getElementById('pasteModalHint');
+          
+          if (isChatGPT) {
+            modalTitle.textContent = 'השלמת ההתחברות';
+            modalDesc.textContent = 'אחרי ההתחברות ב-ChatGPT הדפדפן עלול להגיע לכתובת localhost. העתיקו את הכתובת המלאה (כתובת ה-callback) והדביקו אותה כאן.';
+          } else {
+            modalTitle.textContent = 'הדבק קוד אישור';
+            modalDesc.textContent = 'אם החלון לא נפתח, או אחרי ההתחברות, הדביקו את כתובת ה-callback';
+          }
+          modalHint.style.display = 'none';
           
           setTimeout(() => {
             document.getElementById('pasteModal').classList.add('active');
@@ -838,7 +866,23 @@ export function getSettingsHtml(data: SettingsPageData): string {
         clearInterval(loginPollInterval);
       }
       
+      const POLL_INTERVAL_MS = 1500;
+      const MAX_POLLS = Math.ceil(90000 / POLL_INTERVAL_MS);
+      let pollCount = 0;
+      
       loginPollInterval = setInterval(async () => {
+        pollCount++;
+        
+        if (pollCount >= MAX_POLLS) {
+          clearInterval(loginPollInterval);
+          loginPollInterval = null;
+          
+          const modalHint = document.getElementById('pasteModalHint');
+          modalHint.textContent = 'אם החלון לא הסתיים, הדביקו כאן את כתובת ה-callback.';
+          modalHint.style.display = 'block';
+          return;
+        }
+        
         try {
           const res = await fetch(\`/api/auth/login/\${providerId}/status\`);
           const { data } = await res.json();
@@ -846,26 +890,30 @@ export function getSettingsHtml(data: SettingsPageData): string {
           if (data.status === 'success') {
             clearInterval(loginPollInterval);
             loginPollInterval = null;
+            
+            try {
+              await fetch('/api/auth/apply', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ provider: providerId })
+              });
+            } catch (applyErr) {}
+            
             closeModal();
             showToast('התחברות הצליחה!');
             loadProviders();
           } else if (data.status === 'failed') {
             clearInterval(loginPollInterval);
             loginPollInterval = null;
-            closeModal();
-            showToast(data.error || 'ההתחברות נכשלה', 'error');
+            
+            const modalHint = document.getElementById('pasteModalHint');
+            modalHint.textContent = 'אם החלון לא הסתיים, הדביקו כאן את כתובת ה-callback.';
+            modalHint.style.display = 'block';
           }
         } catch (err) {
           // Continue polling
         }
-      }, 2000);
-      
-      setTimeout(() => {
-        if (loginPollInterval) {
-          clearInterval(loginPollInterval);
-          loginPollInterval = null;
-        }
-      }, 120000);
+      }, POLL_INTERVAL_MS);
     }
 
     async function submitCallback() {
@@ -889,10 +937,10 @@ export function getSettingsHtml(data: SettingsPageData): string {
           showToast('התחברות הצליחה!');
           loadProviders();
         } else {
-          showToast(json.error || 'שגיאה באישור', 'error');
+          showToast(json.error || 'שגיאה בהשלמת ההתחברות', 'error');
         }
       } catch (err) {
-        showToast('שגיאה באישור', 'error');
+        showToast('שגיאה בהשלמת ההתחברות', 'error');
       }
     }
 

@@ -35,6 +35,7 @@ import {
   logout,
   listRuntimeCredentials,
   resolveActiveModel,
+  applySuccessfulProviderLogin,
 } from './auth.ts';
 import { writeIdentityFiles } from '../core/identity-files.ts';
 import { getSettingsHtml, type SettingsPageData } from './settings-page.ts';
@@ -271,14 +272,16 @@ addRoute('POST', '/api/auth/login', async (req, res) => {
 
   try {
     const result = await startLogin(body.provider);
-    if (result.error) {
+    if (result.alreadyConnected) {
+      sendJson(res, { success: true, alreadyConnected: true });
+    } else if (result.error) {
       sendError(res, result.error);
     } else {
       sendJson(res, { success: true, authorizeUrl: result.authorizeUrl });
     }
   } catch (err) {
     log.error({ err }, 'Login error');
-    sendError(res, 'Login failed', 500);
+    sendError(res, 'שגיאה בהתחלת ההתחברות', 500);
   }
 });
 
@@ -318,13 +321,24 @@ addRoute('POST', '/api/auth/complete', async (req, res) => {
   try {
     const result = await completeLogin(body.provider, body.codeOrRedirectUrl);
     if (result.success) {
-      sendJson(res, { success: true });
+      const settings = loadSettings();
+      try {
+        const applied = await applySuccessfulProviderLogin(
+          body.provider,
+          updateSettings,
+          settings.activeProject,
+        );
+        sendJson(res, { success: true, model: applied.model });
+      } catch (applyErr) {
+        log.warn({ err: applyErr, provider: body.provider }, 'Failed to apply provider settings (login succeeded)');
+        sendJson(res, { success: true });
+      }
     } else {
-      sendError(res, result.error || 'Failed to complete login');
+      sendError(res, result.error || 'שגיאה בהשלמת ההתחברות');
     }
   } catch (err) {
     log.error({ err }, 'Complete login error');
-    sendError(res, 'Failed to complete login', 500);
+    sendError(res, 'שגיאה בהשלמת ההתחברות', 500);
   }
 });
 
@@ -345,11 +359,37 @@ addRoute('POST', '/api/auth/logout', async (req, res) => {
     if (result.success) {
       sendJson(res, { success: true });
     } else {
-      sendError(res, result.error || 'Failed to logout');
+      sendError(res, result.error || 'שגיאה בניתוק');
     }
   } catch (err) {
     log.error({ err }, 'Logout error');
-    sendError(res, 'Failed to logout', 500);
+    sendError(res, 'שגיאה בניתוק', 500);
+  }
+});
+
+addRoute('POST', '/api/auth/apply', async (req, res) => {
+  if (!isAuthenticated(req)) {
+    sendError(res, 'Unauthorized', 401);
+    return;
+  }
+
+  const body = await parseBody<{ provider: string }>(req);
+  if (!body.provider) {
+    sendError(res, 'Provider is required');
+    return;
+  }
+
+  try {
+    const settings = loadSettings();
+    const applied = await applySuccessfulProviderLogin(
+      body.provider,
+      updateSettings,
+      settings.activeProject,
+    );
+    sendJson(res, { success: true, model: applied.model });
+  } catch (err) {
+    log.error({ err }, 'Apply provider error');
+    sendError(res, err instanceof Error ? err.message : 'שגיאה בשמירת הגדרות הספק', 500);
   }
 });
 
@@ -1546,8 +1586,10 @@ export function getWizardHtml(settings: ReturnType<typeof loadSettings>, pairing
       </div>
       
       <div id="pasteModal" style="display: none; margin-top: 24px; padding: 16px; background: var(--bg-tertiary); border-radius: 8px;">
-        <p style="margin-bottom: 12px; color: var(--text-secondary);">אם החלון לא נפתח, הדבק את הקוד או URL שחזר:</p>
-        <input type="text" id="callbackUrl" placeholder="הדבק כאן..." style="margin-bottom: 12px;">
+        <p id="pasteModalTitle" style="margin-bottom: 8px; font-weight: 600;">השלמת ההתחברות</p>
+        <p id="pasteModalDescription" style="margin-bottom: 12px; color: var(--text-secondary);"></p>
+        <p id="pasteModalHint" style="display: none; margin-bottom: 12px; color: var(--warning);"></p>
+        <input type="text" id="callbackUrl" placeholder="הדבק כאן את כתובת ה-callback..." style="margin-bottom: 12px;">
         <div class="btn-group">
           <button onclick="submitCallback()">אשר</button>
           <button class="secondary" onclick="closePasteModal()">ביטול</button>
@@ -1600,12 +1642,32 @@ export function getWizardHtml(settings: ReturnType<typeof loadSettings>, pairing
           
           const json = await res.json();
           
+          if (json.alreadyConnected) {
+            if (popup && !popup.closed) popup.close();
+            location.reload();
+            return;
+          }
+          
           if (json.authorizeUrl) {
             if (popup && !popup.closed) {
               popup.location = json.authorizeUrl;
             } else {
               window.open(json.authorizeUrl, '_blank');
             }
+            
+            const isChatGPT = providerId === 'openai-codex';
+            const modalTitle = document.getElementById('pasteModalTitle');
+            const modalDesc = document.getElementById('pasteModalDescription');
+            const modalHint = document.getElementById('pasteModalHint');
+            
+            if (isChatGPT) {
+              modalTitle.textContent = 'השלמת ההתחברות';
+              modalDesc.textContent = 'אחרי ההתחברות ב-ChatGPT הדפדפן עלול להגיע לכתובת localhost. העתיקו את הכתובת המלאה (כתובת ה-callback) והדביקו אותה כאן.';
+            } else {
+              modalTitle.textContent = 'הדבק קוד אישור';
+              modalDesc.textContent = 'אם החלון לא נפתח, או אחרי ההתחברות, הדביקו את כתובת ה-callback';
+            }
+            modalHint.style.display = 'none';
             
             startLoginPoll(providerId);
             setTimeout(() => {
@@ -1624,26 +1686,51 @@ export function getWizardHtml(settings: ReturnType<typeof loadSettings>, pairing
       function startLoginPoll(providerId) {
         if (loginPollInterval) clearInterval(loginPollInterval);
         
+        const POLL_INTERVAL_MS = 1500;
+        const MAX_POLLS = Math.ceil(90000 / POLL_INTERVAL_MS);
+        let pollCount = 0;
+        
         loginPollInterval = setInterval(async () => {
+          pollCount++;
+          
+          if (pollCount >= MAX_POLLS) {
+            clearInterval(loginPollInterval);
+            loginPollInterval = null;
+            
+            const modalHint = document.getElementById('pasteModalHint');
+            modalHint.textContent = 'אם החלון לא הסתיים, הדביקו כאן את כתובת ה-callback.';
+            modalHint.style.display = 'block';
+            return;
+          }
+          
           try {
             const res = await fetch('/api/auth/login/' + providerId + '/status');
             const { data } = await res.json();
             
             if (data.status === 'success') {
               clearInterval(loginPollInterval);
+              loginPollInterval = null;
+              
+              try {
+                await fetch('/api/auth/apply', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ provider: providerId })
+                });
+              } catch (applyErr) {}
+              
               closePasteModal();
               location.reload();
             } else if (data.status === 'failed') {
               clearInterval(loginPollInterval);
-              closePasteModal();
-              alert(data.error || 'ההתחברות נכשלה');
+              loginPollInterval = null;
+              
+              const modalHint = document.getElementById('pasteModalHint');
+              modalHint.textContent = 'אם החלון לא הסתיים, הדביקו כאן את כתובת ה-callback.';
+              modalHint.style.display = 'block';
             }
           } catch (err) {}
-        }, 2000);
-        
-        setTimeout(() => {
-          if (loginPollInterval) clearInterval(loginPollInterval);
-        }, 120000);
+        }, POLL_INTERVAL_MS);
       }
 
       async function submitCallback() {
@@ -1663,17 +1750,22 @@ export function getWizardHtml(settings: ReturnType<typeof loadSettings>, pairing
             closePasteModal();
             location.reload();
           } else {
-            alert(json.error || 'שגיאה באישור');
+            alert(json.error || 'שגיאה בהשלמת ההתחברות');
           }
         } catch (err) {
-          alert('שגיאה באישור');
+          alert('שגיאה בהשלמת ההתחברות');
         }
       }
 
       function closePasteModal() {
         document.getElementById('pasteModal').style.display = 'none';
+        document.getElementById('pasteModalHint').style.display = 'none';
         document.getElementById('callbackUrl').value = '';
         currentProvider = null;
+        if (loginPollInterval) {
+          clearInterval(loginPollInterval);
+          loginPollInterval = null;
+        }
       }
 
       loadProviders();

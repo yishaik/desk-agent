@@ -175,7 +175,7 @@ const PREFERRED_DEFAULT_MODELS: Record<string, string[]> = {
   'anthropic': ['claude-fable-5', 'claude-opus-5', 'claude-sonnet-5'],
 };
 
-function pickDefaultModel<T extends { id: string }>(providerId: string, models: T[]): T | undefined {
+function pickDefaultModel<T extends { id: string }>(providerId: string, models: readonly T[]): T | undefined {
   for (const preferred of PREFERRED_DEFAULT_MODELS[providerId] ?? []) {
     const match = models.find((m) => m.id === preferred);
     if (match) return match;
@@ -200,6 +200,7 @@ export interface LoginResult {
   authorizeUrl?: string;
   instructions?: string;
   error?: string;
+  alreadyConnected?: boolean;
 }
 
 export interface LoginStatus {
@@ -243,6 +244,13 @@ export async function listProviders(): Promise<ProviderInfo[]> {
 }
 
 export async function startLogin(provider: string): Promise<LoginResult> {
+  // Check if already connected via live credential - skip new login
+  const alreadyConnected = await providerHasLiveCredential(provider);
+  if (alreadyConnected) {
+    log.info({ provider }, 'Provider already connected, skipping new login');
+    return { alreadyConnected: true };
+  }
+
   // A repeat click while a login is already pending must return the same URL —
   // starting a second runtime.login() while one is in flight fails. If the URL
   // hasn't arrived yet (pre-URL window), wait for the in-flight attempt rather
@@ -257,7 +265,9 @@ export async function startLogin(provider: string): Promise<LoginResult> {
       log.info({ provider }, 'Reusing pending authorize URL');
       return {
         authorizeUrl: existing.authorizeUrl,
-        instructions: 'השלם את ההתחברות בחלון שנפתח. אם החלון לא נפתח, הדבק את הקוד שקיבלת.',
+        instructions: provider === 'openai-codex'
+          ? 'פתח התחברות ב-ChatGPT. אחרי ההתחברות הדפדפן עלול להגיע לכתובת localhost.'
+          : 'השלם את ההתחברות בחלון שנפתח. אם החלון לא נפתח, הדבק את הקוד שקיבלת.',
       };
     }
     pendingLogins.delete(provider);
@@ -340,7 +350,9 @@ export async function startLogin(provider: string): Promise<LoginResult> {
     
     return {
       authorizeUrl,
-      instructions: 'השלם את ההתחברות בחלון שנפתח. אם החלון לא נפתח, הדבק את הקוד שקיבלת.',
+      instructions: provider === 'openai-codex'
+        ? 'פתח התחברות ב-ChatGPT. אחרי ההתחברות הדפדפן עלול להגיע לכתובת localhost.'
+        : 'השלם את ההתחברות בחלון שנפתח. אם החלון לא נפתח, הדבק את הקוד שקיבלת.',
     };
   }
   
@@ -415,4 +427,28 @@ export async function logout(provider: string): Promise<{ success: boolean; erro
     log.error({ err, provider }, 'Logout error');
     return { success: false, error: err instanceof Error ? err.message : String(err) };
   }
+}
+
+export async function applySuccessfulProviderLogin(
+  provider: string,
+  updateSettingsFn: (updates: { model: string }) => void,
+  activeProject: string,
+): Promise<{ model: string }> {
+  const defaultModel = await getProviderDefaultModel(provider);
+  if (!defaultModel) {
+    throw new Error(`לא נמצא מודל ברירת מחדל עבור ${provider}`);
+  }
+
+  log.info({ provider, model: defaultModel }, 'Applying successful provider login');
+  updateSettingsFn({ model: defaultModel });
+
+  try {
+    const { recreateSessionAfterCredentialChange } = await import('../agent/session.ts');
+    await recreateSessionAfterCredentialChange(activeProject);
+    log.info({ provider, model: defaultModel }, 'Pi session recreated after login');
+  } catch (err) {
+    log.warn({ err, provider }, 'Failed to recreate Pi session after login (non-fatal)');
+  }
+
+  return { model: defaultModel };
 }
