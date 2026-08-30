@@ -315,7 +315,7 @@ async function handleCommand(text: string, settings: Settings): Promise<CommandR
 
 /help - הצג עזרה
 /status - סטטוס חיבור
-/project [name] - החלף/צור פרויקט (מחליף Pi session)
+/project [name] - החלף/צור פרויקט (שיחה נפרדת לכל פרויקט)
 /projects - רשימת פרויקטים
 /services - רשימת שירותים מחוברים
 /settings - הצג הגדרות
@@ -333,25 +333,35 @@ _שלח הודעה לעצמך כדי לדבר עם הסוכן_`,
       const token = getActiveConnectorToken(settings);
       const connectorHealth = await checkConnectorHealth();
       
+      const claudeCode = isClaudeCodeConnected();
       const credentials = await listRuntimeCredentials();
-      const modelResolution = await resolveActiveModel(settings.model);
-      
-      const aiProviders = credentials.length > 0 
-        ? credentials.map(c => `${c.providerId} (${c.type})`).join(', ')
-        : 'לא מחובר';
-      
-      const modelStatus = modelResolution.valid 
-        ? `✅ ${modelResolution.modelId}` 
-        : modelResolution.model
-          ? `⚠️ ${modelResolution.modelId} (התאמה אוטומטית)`
-          : `❌ ${settings.model} (חסר ספק)`;
-      
+
+      const providerList = [
+        claudeCode ? 'Claude Code (מנוי)' : null,
+        ...credentials.map((c) => `${c.providerId} (${c.type})`),
+      ].filter(Boolean).join(', ');
+      const hasAnyProvider = claudeCode || credentials.length > 0;
+
+      // Claude Code is the active engine whenever it's connected; the pi
+      // model resolution is only relevant otherwise.
+      let modelStatus: string;
+      if (claudeCode) {
+        modelStatus = '✅ Claude Code — מנוע פעיל (מכסת המנוי)';
+      } else {
+        const modelResolution = await resolveActiveModel(settings.model);
+        modelStatus = modelResolution.valid
+          ? `✅ ${modelResolution.modelId}`
+          : modelResolution.model
+            ? `⚠️ ${modelResolution.modelId} (התאמה אוטומטית)`
+            : `❌ ${settings.model} (חסר ספק)`;
+      }
+
       return {
         handled: true,
         response: `*סטטוס מערכת*
 
 📱 WhatsApp: ${wa.isConnected() ? '✅ מחובר' : '❌ מנותק'}
-🤖 ספקי AI: ${credentials.length > 0 ? '✅ ' + aiProviders : '❌ לא מחובר'}
+🤖 ספקי AI: ${hasAnyProvider ? '✅ ' + providerList : '❌ לא מחובר'}
 🧠 מודל: ${modelStatus}
 🔌 Open Connector: ${connectorHealth ? '✅ תקין' : '❌ לא זמין'}
 📁 פרויקט פעיל: ${settings.activeProject}
@@ -440,7 +450,7 @@ _שלח הודעה לעצמך כדי לדבר עם הסוכן_`,
 🤖 שם הבוט: ${settings.botName}
 👤 שם הבעלים: ${settings.ownerName || '(לא הוגדר)'}
 🌍 אזור זמן: ${settings.timezone}
-🧠 מודל: ${settings.model}
+🧠 מנוע: ${isClaudeCodeConnected() ? 'Claude Code — מכסת המנוי' : settings.model}
 🔑 מצב מפתחות: ${settings.apiKeyMode}
 📁 פרויקט פעיל: ${settings.activeProject}
 
@@ -450,9 +460,15 @@ _היכנס לממשק הניהול לשינוי הגדרות_`,
 
     case 'model': {
       if (args.length === 0) {
+        if (isClaudeCodeConnected()) {
+          return {
+            handled: true,
+            response: `המנוע הפעיל: *Claude Code* (מודל ברירת המחדל של המנוי)\n\nלהחלפת מודל בתוך Claude Code: /model claude-code/<שם>\nלמשל: /model claude-code/opus`,
+          };
+        }
         return {
           handled: true,
-          response: `מודל נוכחי: *${settings.model}*\n\nלהחלפה: /model <שם-מודל>\n\nדוגמאות:\n- /model claude-3-5-sonnet-20241022\n- /model claude-sonnet-4-5\n- /model gpt-4o`,
+          response: `מודל נוכחי: *${settings.model}*\n\nלהחלפה: /model <שם-מודל>\n\nדוגמאות:\n- /model claude-code/opus\n- /model gpt-5.3-codex`,
         };
       }
       
