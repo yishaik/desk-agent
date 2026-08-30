@@ -78,13 +78,17 @@ if command -v iptables >/dev/null 2>&1 && sudo -n true 2>/dev/null; then
   sudo netfilter-persistent save >/dev/null 2>&1 || true
 fi
 
-# --- 4. Port conflict → bind Caddy to the primary private IP ---------------
-BIND_IP=""
-for PORT in 80 443; do
-  if ss -tln "( sport = :${PORT} )" 2>/dev/null | grep -q LISTEN; then
-    BIND_IP="$(hostname -I | awk '{print $1}')"
-  fi
-done
+# --- 4. Port conflict → bind Caddy to a specific IP -------------------------
+# On a shared server set DESK_BIND_IP to the (secondary) private IP dedicated
+# to this stack; otherwise a conflict falls back to the primary private IP.
+BIND_IP="${DESK_BIND_IP:-}"
+if [ -z "$BIND_IP" ]; then
+  for PORT in 80 443; do
+    if ss -tln "( sport = :${PORT} )" 2>/dev/null | grep -q LISTEN; then
+      BIND_IP="$(hostname -I | awk '{print $1}')"
+    fi
+  done
+fi
 if [ -n "$BIND_IP" ]; then
   say "Port 80/443 already has a listener — binding Caddy to ${BIND_IP} only"
   cat > docker-compose.override.yml <<EOF
