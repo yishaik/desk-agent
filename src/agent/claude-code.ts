@@ -104,8 +104,9 @@ export async function startClaudeCodeLogin(): Promise<{ authorizeUrl?: string; e
 
   ensureDirs();
   // `script` allocates the TTY setup-token insists on.
-  const child = spawn('script', ['-qec', `${CLAUDE_BIN} setup-token`, '/dev/null'], {
-    env: { ...process.env, CLAUDE_CONFIG_DIR: CONFIG_DIR, HOME: BASE_DIR, TERM: 'xterm' },
+  // Wide pseudo-terminal — at 80 columns the printed token wraps mid-string.
+  const child = spawn('script', ['-qec', `stty cols 500 2>/dev/null; ${CLAUDE_BIN} setup-token`, '/dev/null'], {
+    env: { ...process.env, CLAUDE_CONFIG_DIR: CONFIG_DIR, HOME: BASE_DIR, TERM: 'xterm', COLUMNS: '500' },
     cwd: BASE_DIR,
   });
 
@@ -157,7 +158,9 @@ export async function completeClaudeCodeLogin(code: string): Promise<{ success: 
     await new Promise((r) => setTimeout(r, 500));
   }
 
-  const tokenMatch = state.output.match(/sk-ant-[a-zA-Z0-9_-]{20,}/);
+  // Join wrapped lines before matching — a PTY may still split the token.
+  const flat = stripAnsi(state.output).replace(/[\r\n]/g, '');
+  const tokenMatch = flat.match(/sk-ant-[a-zA-Z0-9_-]{40,}/);
   if (tokenMatch) {
     ensureDirs();
     writeFileSync(TOKEN_PATH, tokenMatch[0], { mode: 0o600 });
