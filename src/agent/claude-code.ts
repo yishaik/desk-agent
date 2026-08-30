@@ -146,7 +146,11 @@ export async function completeClaudeCodeLogin(code: string): Promise<{ success: 
     return { success: false, error: 'לא נמצאה התחברות פעילה. התחל מחדש.' };
   }
 
-  state.child.stdin?.write(code.trim() + '\n');
+  // The setup-token prompt is a raw-mode TUI: Enter must be '\r', and a short
+  // gap between the pasted code and the Enter keypress makes Ink register both.
+  state.child.stdin?.write(code.trim());
+  await new Promise((r) => setTimeout(r, 400));
+  state.child.stdin?.write('\r');
 
   const start = Date.now();
   while (Date.now() - start < 45_000 && !state.done) {
