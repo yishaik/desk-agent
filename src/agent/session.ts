@@ -676,11 +676,16 @@ export async function runPromptWithCallbacks(
     const messages = session.state.messages;
     const result = extractTextFromMessages(messages);
     if (!result) {
-      const last = messages[messages.length - 1];
+      const last = messages[messages.length - 1] as { errorMessage?: string } | undefined;
       log.error(
         { lastMessage: JSON.stringify(last)?.slice(0, 2000), count: messages.length },
         'Pi turn produced no assistant text'
       );
+      // Surface the provider's actual error to the user instead of a generic
+      // "no answer" — quota/auth problems are actionable, silence is not.
+      if (last?.errorMessage) {
+        throw new Error(`המודל החזיר שגיאה: ${last.errorMessage.slice(0, 300)}`);
+      }
     }
     return result;
   } finally {
