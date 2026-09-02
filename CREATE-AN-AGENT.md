@@ -168,15 +168,7 @@ docker compose logs -f
 
 המערכת כותבת את הנתונים ל-SOUL.md ו-AGENTS.md.
 
-### 5.4 בדיקת Open Connector
-
-המערכת בודקת חיבור ל-Open Connector.
-
-### 5.5 טוקן מנהל
-
-- הטוקן מוצג **פעם אחת בלבד**
-- הלקוח חייב לשמור אותו במקום בטוח
-- לחיצה על "שמרתי" לסיום
+לאחר מילוי הזהות, האשף מסתיים והסוכן מוכן לשימוש.
 
 ## שלב 6: חיבור שירותים
 
@@ -212,7 +204,7 @@ docker compose logs -f
 ### שירותים אחרים (אופציונלי)
 
 לכלים נוספים מעבר ל-Gmail/Calendar, המפעיל יכול להשתמש בקונסולת Open Connector:
-`https://console.your-domain.com` (מתחברים עם הטוקן שהאשף מציג פעם אחת).
+`https://console.your-domain.com` (מתחברים עם `CONNECTOR_ADMIN_TOKEN` שמוגדר ב-`.env`).
 
 ראה תיעוד Open Connector: https://github.com/oomol-lab/open-connector
 
@@ -260,7 +252,7 @@ Caddy מטפל ב-TLS וב-routing:
 
 **DNS:** שני A records לאותו שרת — `your-domain.com` ו-`console.your-domain.com` (`deploy.sh <domain> [console-domain]`).
 
-**כתובת הקונסול:** `https://console.your-domain.com` — מתחברים עם ה-admin token שהאשף מציג פעם אחת. אפשר לשנות עם `CONSOLE_DOMAIN` / `CONSOLE_URL`.
+**כתובת הקונסול:** `https://console.your-domain.com` — אופציונלי לכלים נוספים. מפעילים מגדירים `CONNECTOR_ADMIN_TOKEN` ב-`.env` כדי להתחבר. אפשר לשנות עם `CONSOLE_DOMAIN` / `CONSOLE_URL`.
 
 ודא ש-`CONNECTOR_ORIGIN` מכיל את ה-URL הציבורי של ה-agent.
 
@@ -355,9 +347,8 @@ docker compose up -d
 - [ ] QR נטען וWhatsApp מחובר
 - [ ] AI Provider מחובר (ChatGPT או Claude)
 - [ ] זהות הוגדרה (שם, עסק, timezone)
-- [ ] טוקן מנהל נשמר
-- [ ] לפחות שירות אחד מחובר ב-OC
 - [ ] `/help` מחזיר תגובה
+- [ ] (אופציונלי) Gmail/Calendar מחוברים מ-Settings
 
 ## תמיכה
 
