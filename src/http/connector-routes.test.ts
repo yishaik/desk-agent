@@ -691,14 +691,36 @@ describe('consoleUrl uses CONNECTOR_ORIGIN (#38)', () => {
     expect(config.connectorOrigin).not.toContain('connector:3000');
   });
 
-  it('console URL is CONNECTOR_ORIGIN + /connector/', async () => {
+  it('console URL is never a sub-path of the agent origin (#72)', async () => {
     vi.resetModules();
     process.env['CONNECTOR_ORIGIN'] = 'https://agent.example.com';
+    process.env['DOMAIN'] = 'agent.example.com';
+    delete process.env['CONSOLE_URL'];
     process.env['NODE_ENV'] = 'production';
-    
-    const { loadConfig } = await import('../core/config.ts');
-    const config = loadConfig();
-    
-    expect(config.connectorOrigin).toBe('https://agent.example.com');
+
+    const { getConsoleUrl } = await import('./server.ts');
+    expect(getConsoleUrl()).toBe('https://console.agent.example.com');
+    delete process.env['DOMAIN'];
+  });
+
+  it('CONSOLE_URL overrides the derived console host', async () => {
+    vi.resetModules();
+    process.env['DOMAIN'] = 'agent.example.com';
+    process.env['CONSOLE_URL'] = 'https://oc.example.net/';
+
+    const { getConsoleUrl } = await import('./server.ts');
+    expect(getConsoleUrl()).toBe('https://oc.example.net');
+    delete process.env['DOMAIN'];
+    delete process.env['CONSOLE_URL'];
+  });
+
+  it('production without DOMAIN or CONSOLE_URL fails loudly instead of linking to connector:3000', async () => {
+    vi.resetModules();
+    delete process.env['DOMAIN'];
+    delete process.env['CONSOLE_URL'];
+    process.env['NODE_ENV'] = 'production';
+
+    const { getConsoleUrl } = await import('./server.ts');
+    expect(() => getConsoleUrl()).toThrow(/CONSOLE_URL or DOMAIN/);
   });
 });

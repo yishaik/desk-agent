@@ -228,20 +228,20 @@ Caddy מטפל ב-TLS וב-routing:
 
 | דומיין | נתיב | אימות | יעד | הערות |
 |--------|------|-------|-----|-------|
-| `{$DOMAIN}` | `/oauth/*`, `/api/oauth/*` | ציבורי | `connector:3000` | OAuth flows |
-| `{$DOMAIN}` | `/connector/*` | Cookie | `connector:3000` | קונסול SPA |
-| `{$DOMAIN}` | `/assets/*`, `/api/connections*`, `/api/providers*`, `/api/actions/*` | Cookie | `connector:3000` | APIs לקונסול |
-| `{$DOMAIN}` | `/*` | Cookie | `agent:3001` | Agent UI/API |
+| `{$CONSOLE_DOMAIN}` | `/*` | login של OC (admin token) | `connector:3000` | קונסול Open Connector — כל ה-origin |
+| `{$DOMAIN}` | `/oauth/*` | ציבורי | `connector:3000` | יעד ה-redirect של OAuth |
+| `{$DOMAIN}` | `/*` | PAIR_TOKEN cookie | `agent:3001` | אשף / הגדרות / API |
 
 **אבטחה:**
-- הקונסול וה-APIs שלו מוגנים ב-PAIR_TOKEN cookie (כמו Settings)
-- `/mcp`, `/v1/*`, `/api/files/*`, `/api/runs*`, `/openapi.json` **לא** חשופים בכלל
+- ה-SPA של הקונסול משתמש בנתיבים אבסולוטיים וב-router בלי base path, ולכן חייב host משלו — אי אפשר להגיש אותו תחת `/connector/` (#72)
+- על `{$DOMAIN}` רק ה-OAuth callback מגיע לconnector; `/v1/*`, `/mcp`, `/api/files/*`, `/api/runs*`, `/openapi.json` נשארים פנימיים
 - תעבורת agent-to-connector משתמשת ברשת Docker הפנימית
-- OAuth routes ציבוריים (redirect flow)
 
-**כתובת הקונסול:** `https://your-domain.com/connector/` (דורש התחברות)
+**DNS:** שני A records לאותו שרת — `your-domain.com` ו-`console.your-domain.com` (`deploy.sh <domain> [console-domain]`).
 
-ודא ש-`CONNECTOR_ORIGIN` מכיל את ה-URL הציבורי.
+**כתובת הקונסול:** `https://console.your-domain.com` — מתחברים עם ה-admin token שהאשף מציג פעם אחת. אפשר לשנות עם `CONSOLE_DOMAIN` / `CONSOLE_URL`.
+
+ודא ש-`CONNECTOR_ORIGIN` מכיל את ה-URL הציבורי של ה-agent.
 
 ## טיפים לייצור
 

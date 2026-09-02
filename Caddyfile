@@ -1,85 +1,33 @@
-# Caddy configuration for Desk Agent
-# Uses DOMAIN environment variable (passed from docker-compose)
-# Defaults to localhost for local development
+# Desk Agent — public routing.
+#
+# Two hosts:
+#   {$CONSOLE_DOMAIN}  the Open Connector console (whole origin -> connector). The SPA
+#                      uses absolute paths (/assets, /api/runs, /api/auth/session, ...)
+#                      and a BrowserRouter without basename, so it must own its host.
+#                      OC's own admin-token login gates it (token shown once in the wizard).
+#   {$DOMAIN}          the agent UI/API. Only the OAuth callback is proxied to the
+#                      connector; every other connector endpoint stays internal.
+{$CONSOLE_DOMAIN:console.localhost} {
+    reverse_proxy connector:3000
+    header {
+        X-Content-Type-Options nosniff
+        X-Frame-Options DENY
+        Referrer-Policy strict-origin-when-cross-origin
+        Strict-Transport-Security "max-age=31536000"
+    }
+}
 
 {$DOMAIN:localhost} {
-    # =========================================================================
-    # PUBLIC (no auth): OAuth callback and OAuth API — browser redirects here
-    # =========================================================================
-    handle /oauth/callback {
-        reverse_proxy connector:3000
-    }
+    # OAuth redirect target (CONNECTOR_ORIGIN/oauth/callback) — must be public.
     handle /oauth/* {
         reverse_proxy connector:3000
     }
-    handle /api/oauth/* {
-        reverse_proxy connector:3000
-    }
 
-    # =========================================================================
-    # COOKIE-GATED: Open Connector console SPA and APIs it needs
-    # Customer must have PAIR_TOKEN cookie (same as Settings page)
-    # =========================================================================
-
-    # Console SPA at /connector/ — strip prefix and proxy to connector root
-    handle_path /connector/* {
-        forward_auth agent:3001 {
-            uri /api/auth/session
-        }
-        reverse_proxy connector:3000
-    }
-
-    # SPA static assets (absolute paths from the SPA) — gated
-    handle /assets/* {
-        forward_auth agent:3001 {
-            uri /api/auth/session
-        }
-        reverse_proxy connector:3000
-    }
-
-    # OC APIs the browser console needs — gated (before agent /api/*)
-    handle /api/connections* {
-        forward_auth agent:3001 {
-            uri /api/auth/session
-        }
-        reverse_proxy connector:3000
-    }
-    handle /api/providers* {
-        forward_auth agent:3001 {
-            uri /api/auth/session
-        }
-        reverse_proxy connector:3000
-    }
-    handle /api/actions/* {
-        forward_auth agent:3001 {
-            uri /api/auth/session
-        }
-        reverse_proxy connector:3000
-    }
-
-    # =========================================================================
-    # DOCKER-NETWORK ONLY: These are NOT exposed on public Caddy.
-    # Agent-to-connector traffic uses http://connector:3000 internally.
-    # /mcp, /v1/*, /api/files/*, /api/runs*, /openapi.json, /docs — no handles.
-    # =========================================================================
-
-    # =========================================================================
-    # AGENT: All other /api/* and pages go to the agent
-    # =========================================================================
-    handle /api/* {
-        reverse_proxy agent:3001
-    }
-    handle /auth {
-        reverse_proxy agent:3001
-    }
-    handle /health {
-        reverse_proxy agent:3001
-    }
+    # Everything else is the agent (wizard, settings, /api/*, /auth, /health).
     handle {
         reverse_proxy agent:3001
     }
 
-    # Security headers
     header {
         X-Content-Type-Options nosniff
         X-Frame-Options DENY

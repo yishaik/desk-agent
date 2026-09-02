@@ -832,15 +832,19 @@ addRoute('POST', '/api/setup/complete', async (req, res) => {
   sendJson(res, { success: true });
 });
 
-function getConsoleUrl(): string {
-  // The console lives on the public origin at /connector/ (cookie-gated).
-  // Use CONNECTOR_ORIGIN, never http://connector:3000 or localhost:3000 on live.
-  const origin = config.connectorOrigin;
-  if (config.isProduction && (origin.includes('localhost') || origin.includes('connector:3000'))) {
-    throw new Error('CONNECTOR_ORIGIN must be set to a public URL in production');
+export function getConsoleUrl(): string {
+  // The Open Connector console owns its own host (CONSOLE_DOMAIN in the Caddyfile):
+  // its SPA uses absolute paths and a router without basename, so a sub-path
+  // on the agent's origin cannot serve it (#72). Never hand out the docker-internal
+  // http://connector:3000 — the customer's browser cannot reach it.
+  const explicit = process.env['CONSOLE_URL']?.trim();
+  if (explicit) return explicit.replace(/\/+$/, '');
+  const domain = process.env['DOMAIN']?.trim();
+  if (domain && domain !== 'localhost') return `https://console.${domain}`;
+  if (config.isProduction) {
+    throw new Error('CONSOLE_URL or DOMAIN must be set in production');
   }
-  // Return the console path on the public origin
-  return origin.endsWith('/') ? `${origin}connector/` : `${origin}/connector/`;
+  return 'http://console.localhost';
 }
 
 addRoute('GET', '/api/connector/status', async (req, res) => {
