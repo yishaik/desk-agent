@@ -161,6 +161,16 @@ addRoute('GET', '/health', async (req, res) => {
   });
 });
 
+addRoute('GET', '/api/auth/check', async (req, res) => {
+  if (isAuthenticated(req)) {
+    res.writeHead(200);
+    res.end();
+  } else {
+    res.writeHead(401);
+    res.end();
+  }
+});
+
 addRoute('GET', '/', async (req, res) => {
   if (!isAuthenticated(req)) {
     const loginHtml = getLoginHtml();
@@ -655,16 +665,14 @@ addRoute('POST', '/api/setup/complete', async (req, res) => {
 });
 
 function getConsoleUrl(): string {
-  // The console lives on its own subdomain (CONSOLE_URL); the connector
-  // origin is the main domain, where / is the agent dashboard.
-  if (config.connectorConsoleUrl) {
-    return config.connectorConsoleUrl;
-  }
+  // The console lives on the public origin at /connector/ (cookie-gated).
+  // Use CONNECTOR_ORIGIN, never http://connector:3000 or localhost:3000 on live.
   const origin = config.connectorOrigin;
-  if (config.isProduction && origin.includes('localhost')) {
+  if (config.isProduction && (origin.includes('localhost') || origin.includes('connector:3000'))) {
     throw new Error('CONNECTOR_ORIGIN must be set to a public URL in production');
   }
-  return origin;
+  // Return the console path on the public origin
+  return origin.endsWith('/') ? `${origin}connector/` : `${origin}/connector/`;
 }
 
 addRoute('GET', '/api/connector/status', async (req, res) => {

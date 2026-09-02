@@ -233,18 +233,22 @@ docker compose logs -f
 
 Caddy מטפל ב-TLS וב-routing:
 
-| דומיין | נתיב | יעד | הערות |
-|--------|------|-----|-------|
-| `{$DOMAIN}` | `/oauth/*`, `/api/oauth/*` | `connector:3000` | רק OAuth |
-| `{$DOMAIN}` | `/*` | `agent:3001` | כל השאר |
-| `{$CONSOLE_DOMAIN}` | `/*` | `connector:3000` | קונסול OC (סאבדומיין נפרד) |
+| דומיין | נתיב | אימות | יעד | הערות |
+|--------|------|-------|-----|-------|
+| `{$DOMAIN}` | `/oauth/*`, `/api/oauth/*` | ציבורי | `connector:3000` | OAuth flows |
+| `{$DOMAIN}` | `/connector/*` | Cookie | `connector:3000` | קונסול SPA |
+| `{$DOMAIN}` | `/assets/*`, `/api/connections*`, `/api/providers*`, `/api/actions/*` | Cookie | `connector:3000` | APIs לקונסול |
+| `{$DOMAIN}` | `/*` | Cookie | `agent:3001` | Agent UI/API |
 
-**אבטחה:** הדומיין הציבורי (`{$DOMAIN}`) **לא** חושף APIs של Open Connector
-(`/v1/*`, `/mcp`, `/api/connections` וכו׳). תעבורת agent-to-connector
-משתמשת ברשת Docker הפנימית (`http://connector:3000`). קונסולת Open Connector
-נמצאת ב-`{$CONSOLE_DOMAIN}` (reverse_proxy מלא — זה למפעילים בלבד).
+**אבטחה:**
+- הקונסול וה-APIs שלו מוגנים ב-PAIR_TOKEN cookie (כמו Settings)
+- `/mcp`, `/v1/*`, `/api/files/*`, `/api/runs*`, `/openapi.json` **לא** חשופים בכלל
+- תעבורת agent-to-connector משתמשת ברשת Docker הפנימית
+- OAuth routes ציבוריים (redirect flow)
 
-ודא ש-`CONNECTOR_ORIGIN` מכיל את ה-URL הציבורי כדי ש-OAuth callbacks יגיעו לקונקטור.
+**כתובת הקונסול:** `https://your-domain.com/connector/` (דורש התחברות)
+
+ודא ש-`CONNECTOR_ORIGIN` מכיל את ה-URL הציבורי.
 
 ## טיפים לייצור
 

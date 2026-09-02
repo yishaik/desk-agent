@@ -174,18 +174,22 @@ All configuration is via environment variables. See `.env.example` for the full 
 
 Caddy handles TLS and routing:
 
-| Domain | Path | Target | Notes |
-|--------|------|--------|-------|
-| `{$DOMAIN}` | `/oauth/*`, `/api/oauth/*` | `connector:3000` | OAuth flows only |
-| `{$DOMAIN}` | `/*` | `agent:3001` | Everything else |
-| `{$CONSOLE_DOMAIN}` | `/*` | `connector:3000` | Console SPA (separate subdomain) |
+| Domain | Path | Auth | Target | Notes |
+|--------|------|------|--------|-------|
+| `{$DOMAIN}` | `/oauth/*`, `/api/oauth/*` | Public | `connector:3000` | OAuth flows |
+| `{$DOMAIN}` | `/connector/*` | Cookie | `connector:3000` | Console SPA |
+| `{$DOMAIN}` | `/assets/*`, `/api/connections*`, `/api/providers*`, `/api/actions/*` | Cookie | `connector:3000` | Console APIs |
+| `{$DOMAIN}` | `/*` | Cookie | `agent:3001` | Agent UI/API |
 
-**Security:** The public domain (`{$DOMAIN}`) does NOT expose connector runtime/admin APIs
-(`/v1/*`, `/mcp`, `/api/connections`, etc.). Agent-to-connector traffic uses the internal
-Docker network (`http://connector:3000`). The Open Connector console SPA lives on
-`{$CONSOLE_DOMAIN}` (full reverse proxy is OK there — it's operator-only).
+**Security:**
+- Console and OC APIs are gated with PAIR_TOKEN cookie (same as Settings)
+- `/mcp`, `/v1/*`, `/api/files/*`, `/api/runs*`, `/openapi.json` are NOT exposed on public Caddy
+- Agent-to-connector traffic uses internal Docker network (`http://connector:3000`)
+- OAuth routes are public (browser redirect flow)
 
-Set `CONNECTOR_ORIGIN=https://your-domain.com` so OAuth callbacks route correctly.
+**Console URL:** `https://your-domain.com/connector/` (requires login)
+
+Set `CONNECTOR_ORIGIN=https://your-domain.com` so OAuth callbacks and console URL work correctly.
 
 ### Production Tips
 

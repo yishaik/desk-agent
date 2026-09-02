@@ -649,40 +649,38 @@ describe('Skills Pack Service IDs', () => {
   });
 });
 
-describe('consoleUrl never returns docker-internal URL (#38)', () => {
-  it('uses CONSOLE_URL when set', async () => {
+describe('consoleUrl uses CONNECTOR_ORIGIN (#38)', () => {
+  it('connectorOrigin is used for console URL, not CONSOLE_URL', async () => {
     vi.resetModules();
-    process.env['CONSOLE_URL'] = 'https://console.example.com';
     process.env['CONNECTOR_ORIGIN'] = 'https://agent.example.com';
     
     const { loadConfig } = await import('../core/config.ts');
     const config = loadConfig();
     
-    expect(config.connectorConsoleUrl).toBe('https://console.example.com');
-  });
-
-  it('falls back to CONNECTOR_ORIGIN when CONSOLE_URL not set', async () => {
-    vi.resetModules();
-    delete process.env['CONSOLE_URL'];
-    process.env['CONNECTOR_ORIGIN'] = 'https://agent.example.com';
-    
-    const { loadConfig } = await import('../core/config.ts');
-    const config = loadConfig();
-    
-    expect(config.connectorConsoleUrl).toBeUndefined();
     expect(config.connectorOrigin).toBe('https://agent.example.com');
   });
 
-  it('config never exposes connector:3000 as consoleUrl', async () => {
+  it('openConnectorUrl is docker-internal, connectorOrigin is public', async () => {
     vi.resetModules();
-    process.env['CONSOLE_URL'] = 'https://oc.example.com';
     process.env['OPEN_CONNECTOR_URL'] = 'http://connector:3000';
+    process.env['CONNECTOR_ORIGIN'] = 'https://agent.example.com';
     
     const { loadConfig } = await import('../core/config.ts');
     const config = loadConfig();
     
     expect(config.openConnectorUrl).toBe('http://connector:3000');
-    expect(config.connectorConsoleUrl).toBe('https://oc.example.com');
-    expect(config.connectorConsoleUrl).not.toContain('connector:3000');
+    expect(config.connectorOrigin).toBe('https://agent.example.com');
+    expect(config.connectorOrigin).not.toContain('connector:3000');
+  });
+
+  it('console URL is CONNECTOR_ORIGIN + /connector/', async () => {
+    vi.resetModules();
+    process.env['CONNECTOR_ORIGIN'] = 'https://agent.example.com';
+    process.env['NODE_ENV'] = 'production';
+    
+    const { loadConfig } = await import('../core/config.ts');
+    const config = loadConfig();
+    
+    expect(config.connectorOrigin).toBe('https://agent.example.com');
   });
 });

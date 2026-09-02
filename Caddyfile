@@ -2,40 +2,101 @@
 # Uses DOMAIN environment variable (passed from docker-compose)
 # Defaults to localhost for local development
 
-# Open Connector console on its own subdomain. The console SPA loads assets
-# from absolute paths (/assets/...) and shares /api/auth/* paths with the
-# agent, so it cannot be served under a sub-path of the main domain.
-# Full reverse_proxy is OK here — the console subdomain is NOT public-facing.
+# ---------------------------------------------------------------------------
+# CONSOLE_DOMAIN: If set, this subdomain also serves the OC console, but
+# GATED with the same PAIR_TOKEN cookie as the main domain. Anonymous admin
+# is never allowed. If you don't need a separate subdomain, leave it unset.
+# ---------------------------------------------------------------------------
 {$CONSOLE_DOMAIN:console.localhost} {
+    # Gate with PAIR_TOKEN cookie — same auth as Settings
+    forward_auth agent:3001 {
+        uri /api/auth/check
+        copy_headers {
+            Cookie
+        }
+    }
     reverse_proxy connector:3000
 }
 
 {$DOMAIN:localhost} {
-    # OAuth callback from Google and other providers — must reach connector
-    # Google redirect_uri is https://{DOMAIN}/oauth/callback
+    # =========================================================================
+    # PUBLIC (no auth): OAuth callback and OAuth API — browser redirects here
+    # =========================================================================
     handle /oauth/callback {
         reverse_proxy connector:3000
     }
-
-    # Catch any leftover OAuth paths that shouldn't hit the agent
     handle /oauth/* {
         reverse_proxy connector:3000
     }
-
-    # Open Connector OAuth API routes — must reach connector BEFORE agent /api/*
     handle /api/oauth/* {
         reverse_proxy connector:3000
     }
 
-    # -------------------------------------------------------------------------
-    # SECURITY: All other Open Connector routes are NOT exposed on the public
-    # domain. Agent-to-connector traffic uses docker-internal http://connector:3000.
-    # The console SPA lives on {$CONSOLE_DOMAIN}. Do not add /v1/*, /mcp,
-    # /api/connections, /api/providers, /api/actions, /api/runs, /api/files,
-    # /openapi.json, or /docs here.
-    # -------------------------------------------------------------------------
+    # =========================================================================
+    # COOKIE-GATED: Open Connector console SPA and APIs it needs
+    # Customer must have PAIR_TOKEN cookie (same as Settings page)
+    # =========================================================================
 
-    # Agent Web UI and API — all other requests go to the agent
+    # Console SPA at /connector/ — strip prefix and proxy to connector root
+    handle_path /connector/* {
+        forward_auth agent:3001 {
+            uri /api/auth/check
+            copy_headers {
+                Cookie
+            }
+        }
+        reverse_proxy connector:3000
+    }
+
+    # SPA static assets (absolute paths from the SPA) — gated
+    handle /assets/* {
+        forward_auth agent:3001 {
+            uri /api/auth/check
+            copy_headers {
+                Cookie
+            }
+        }
+        reverse_proxy connector:3000
+    }
+
+    # OC APIs the browser console needs — gated (before agent /api/*)
+    handle /api/connections* {
+        forward_auth agent:3001 {
+            uri /api/auth/check
+            copy_headers {
+                Cookie
+            }
+        }
+        reverse_proxy connector:3000
+    }
+    handle /api/providers* {
+        forward_auth agent:3001 {
+            uri /api/auth/check
+            copy_headers {
+                Cookie
+            }
+        }
+        reverse_proxy connector:3000
+    }
+    handle /api/actions/* {
+        forward_auth agent:3001 {
+            uri /api/auth/check
+            copy_headers {
+                Cookie
+            }
+        }
+        reverse_proxy connector:3000
+    }
+
+    # =========================================================================
+    # DOCKER-NETWORK ONLY: These are NOT exposed on public Caddy.
+    # Agent-to-connector traffic uses http://connector:3000 internally.
+    # /mcp, /v1/*, /api/files/*, /api/runs*, /openapi.json, /docs — no handles.
+    # =========================================================================
+
+    # =========================================================================
+    # AGENT: All other /api/* and pages go to the agent
+    # =========================================================================
     handle /api/* {
         reverse_proxy agent:3001
     }
