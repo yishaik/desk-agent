@@ -87,6 +87,8 @@ export interface PairingState {
   error?: string;
   /** How replies are addressed: the account's LID (preferred), the phone JID (fallback), or nothing yet. */
   selfChat?: 'lid' | 'phone' | 'none';
+  /** LID availability for Message-yourself (#73). */
+  lid?: 'present' | 'missing';
 }
 
 export const DEFAULT_SETTINGS: Settings = {
