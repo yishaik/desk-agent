@@ -14,7 +14,7 @@
  * WhatsApp handler.
  */
 import { spawn, type ChildProcess } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync, rmSync, chmodSync } from 'node:fs';
 import { join } from 'node:path';
 import { config } from '../core/config.ts';
 import { createChildLogger } from '../core/logger.ts';
@@ -28,6 +28,36 @@ const TOKEN_PATH = join(BASE_DIR, 'token'); // legacy setup-token artifact, no l
 const SESSIONS_PATH = join(BASE_DIR, 'sessions.json');
 const CONFIG_DIR = join(BASE_DIR, 'config');
 const CREDENTIALS_PATH = join(CONFIG_DIR, '.credentials.json');
+const MCP_CONFIG_PATH = join(BASE_DIR, 'mcp.json');
+
+/**
+ * Build a minimal, safe environment for Claude Code child processes.
+ * Does NOT inherit process.env to avoid leaking secrets like ANTHROPIC_API_KEY,
+ * MODEL_API_KEY, PAIR_TOKEN, etc.
+ */
+function buildClaudeCodeEnv(): Record<string, string> {
+  return {
+    PATH: process.env['PATH'] ?? '/usr/local/bin:/usr/bin:/bin',
+    HOME: BASE_DIR,
+    CLAUDE_CONFIG_DIR: CONFIG_DIR,
+    TERM: 'xterm',
+    LANG: process.env['LANG'] ?? 'en_US.UTF-8',
+    DISABLE_AUTOUPDATER: '1',
+    COLUMNS: '500',
+  };
+}
+
+/**
+ * List of error patterns that indicate a stale/invalid session.
+ * Only these errors should trigger session clear + retry.
+ */
+const SESSION_INVALID_PATTERNS = [
+  /no conversation found/i,
+  /session not found/i,
+  /invalid session/i,
+  /session.*expired/i,
+  /could not find session/i,
+];
 
 const PROMPT_TIMEOUT_MS = 240_000;
 const CLAUDE_BIN = process.env['CLAUDE_CODE_BIN'] || 'claude';
@@ -124,7 +154,7 @@ export async function startClaudeCodeLogin(): Promise<{ authorizeUrl?: string; e
   rmSync(CREDENTIALS_PATH, { force: true });
 
   const child = spawn('script', ['-qec', `stty cols 500 2>/dev/null; ${CLAUDE_BIN}`, '/dev/null'], {
-    env: { ...process.env, CLAUDE_CONFIG_DIR: CONFIG_DIR, HOME: BASE_DIR, TERM: 'xterm', COLUMNS: '500' },
+    env: buildClaudeCodeEnv(),
     cwd: BASE_DIR,
   });
 
@@ -207,8 +237,16 @@ export interface ClaudeCodeCallbacks {
   onThinking?: () => void;
 }
 
+/**
+ * Build MCP config and write to a secure file.
+ * The MCP server only needs DATA_DIR, OPEN_CONNECTOR_URL, OPEN_CONNECTOR_TOKEN,
+ * and DESK_PROJECT_ID. PAIR_TOKEN and CONNECTOR_ADMIN_TOKEN are NOT passed
+ * (they're not needed by the MCP server).
+ * 
+ * Returns the path to the config file.
+ */
 function buildMcpConfig(projectId: string): string {
-  return JSON.stringify({
+  const mcpConfig = {
     mcpServers: {
       connector: {
         type: 'stdio',
@@ -218,13 +256,17 @@ function buildMcpConfig(projectId: string): string {
           DATA_DIR: config.dataDir,
           OPEN_CONNECTOR_URL: config.openConnectorUrl,
           OPEN_CONNECTOR_TOKEN: process.env['OPEN_CONNECTOR_TOKEN'] ?? '',
-          CONNECTOR_ADMIN_TOKEN: process.env['CONNECTOR_ADMIN_TOKEN'] ?? '',
-          PAIR_TOKEN: process.env['PAIR_TOKEN'] ?? '',
           DESK_PROJECT_ID: projectId,
+          DESK_MCP_SERVER: '1',
         },
       },
     },
-  });
+  };
+  
+  ensureDirs();
+  writeFileSync(MCP_CONFIG_PATH, JSON.stringify(mcpConfig, null, 2), { mode: 0o600 });
+  chmodSync(MCP_CONFIG_PATH, 0o600);
+  return MCP_CONFIG_PATH;
 }
 
 function buildSystemPrompt(): string {
@@ -264,11 +306,12 @@ export async function runClaudeCodePrompt(
 
   const attempt = (resumeId?: string): Promise<{ text: string | null; sessionId?: string; errorMessage?: string; exitCode: number | null; stderr: string }> =>
     new Promise((resolve) => {
+      const mcpConfigPath = buildMcpConfig(projectId);
       const args = [
-        '-p', text,
+        '-p', '-',
         '--output-format', 'stream-json',
         '--verbose',
-        '--mcp-config', buildMcpConfig(projectId),
+        '--mcp-config', mcpConfigPath,
         '--strict-mcp-config',
         '--allowed-tools', 'mcp__connector__*',
         '--disallowed-tools', 'Bash,Edit,Write,NotebookEdit,Read,Glob,Grep,Task,WebFetch,WebSearch',
@@ -279,12 +322,12 @@ export async function runClaudeCodePrompt(
 
       const child = spawn(CLAUDE_BIN, args, {
         cwd: projectCwd,
-        env: {
-          ...process.env,
-          CLAUDE_CONFIG_DIR: CONFIG_DIR,
-          HOME: BASE_DIR,
-        },
+        env: buildClaudeCodeEnv(),
+        stdio: ['pipe', 'pipe', 'pipe'],
       });
+
+      child.stdin?.write(text);
+      child.stdin?.end();
 
       let resultText: string | null = null;
       let sessionId: string | undefined;
@@ -341,11 +384,19 @@ export async function runClaudeCodePrompt(
   const previousSession = loadSessions()[projectId];
   let run = await attempt(previousSession);
 
-  // A stale/invalid session must not kill the conversation — retry fresh once.
+  // Only clear session and retry if the error indicates an invalid/stale session.
+  // Transient failures (rate limits, network errors, etc.) must NOT wipe conversation history.
   if (!run.text && previousSession) {
-    log.warn({ projectId, exitCode: run.exitCode, errorMessage: run.errorMessage }, 'Claude Code resume failed, retrying without session');
-    clearClaudeCodeSession(projectId);
-    run = await attempt(undefined);
+    const errorText = `${run.errorMessage ?? ''} ${run.stderr}`;
+    const isSessionInvalid = SESSION_INVALID_PATTERNS.some((p) => p.test(errorText));
+    
+    if (isSessionInvalid) {
+      log.warn({ projectId, exitCode: run.exitCode, errorMessage: run.errorMessage }, 'Claude Code session invalid, retrying without session');
+      clearClaudeCodeSession(projectId);
+      run = await attempt(undefined);
+    } else {
+      log.warn({ projectId, exitCode: run.exitCode, errorMessage: run.errorMessage }, 'Claude Code failed (transient), keeping session intact');
+    }
   }
 
   if (run.sessionId) saveSession(projectId, run.sessionId);

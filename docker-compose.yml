@@ -27,7 +27,9 @@ services:
       - DOMAIN=${DOMAIN}
       - MODEL_API_KEY=${MODEL_API_KEY:-}
       - MODEL_API_URL=${MODEL_API_URL:-https://api.anthropic.com/v1/messages}
-      - ANTHROPIC_API_KEY=${MODEL_API_KEY:-}
+      # ANTHROPIC_API_KEY intentionally NOT passed to container.
+      # Claude Code must use subscription OAuth login, not API keys.
+      # This prevents MODEL_API_KEY from silently replacing the customer's plan.
       - LOG_LEVEL=${LOG_LEVEL:-info}
     volumes:
       - agent-data:/app/data

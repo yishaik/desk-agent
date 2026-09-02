@@ -30,8 +30,8 @@ export function loadConfig(): Config {
   let pairToken = process.env['PAIR_TOKEN'] ?? '';
   if (!pairToken) {
     pairToken = generatePairToken();
-    console.log(`[config] Generated PAIR_TOKEN: ${pairToken}`);
-    console.log('[config] Save this token for future use or set PAIR_TOKEN env var');
+    console.error(`[config] Generated PAIR_TOKEN: ${pairToken}`);
+    console.error('[config] Save this token for future use or set PAIR_TOKEN env var');
   }
 
   const openConnectorUrl = getEnvOrDefault('OPEN_CONNECTOR_URL', 'http://localhost:3000');

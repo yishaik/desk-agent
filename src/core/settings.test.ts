@@ -301,3 +301,70 @@ describe('setActionEnabled', () => {
     expect(service?.disabledActions).toContain('newservice.action');
   });
 });
+
+describe('Issue #36: Settings cache', () => {
+  it('loadSettings uses cached settings on repeated calls without file change', async () => {
+    vi.resetModules();
+    const { loadSettings, updateSettings, clearSettingsCache } = await import('./settings.ts');
+    
+    clearSettingsCache();
+    updateSettings({ botName: 'Cached Bot' });
+    
+    const settings1 = loadSettings();
+    const settings2 = loadSettings();
+    const settings3 = loadSettings();
+    
+    expect(settings1).toBe(settings2);
+    expect(settings2).toBe(settings3);
+    
+    expect(settings1.botName).toBe('Cached Bot');
+  });
+
+  it('loadSettings invalidates cache when file mtime changes', async () => {
+    vi.resetModules();
+    const { loadSettings, clearSettingsCache } = await import('./settings.ts');
+    const fs = await import('node:fs');
+    
+    clearSettingsCache();
+    const settings1 = loadSettings();
+    
+    await new Promise((r) => setTimeout(r, 10));
+    
+    const path = join(TEST_DATA_DIR, 'settings.json');
+    const data = JSON.parse(fs.readFileSync(path, 'utf8'));
+    data.botName = 'Modified Bot';
+    fs.writeFileSync(path, JSON.stringify(data));
+    
+    const settings2 = loadSettings();
+    expect(settings2.botName).toBe('Modified Bot');
+  });
+
+  it('saveSettings clears the cache', async () => {
+    vi.resetModules();
+    const { loadSettings, saveSettings, clearSettingsCache } = await import('./settings.ts');
+    
+    clearSettingsCache();
+    const settings1 = loadSettings();
+    settings1.botName = 'New Bot Name';
+    
+    saveSettings(settings1);
+    
+    const settings2 = loadSettings();
+    expect(settings2.botName).toBe('New Bot Name');
+  });
+
+  it('clearSettingsCache is exported', async () => {
+    const { clearSettingsCache } = await import('./settings.ts');
+    expect(typeof clearSettingsCache).toBe('function');
+    expect(() => clearSettingsCache()).not.toThrow();
+  });
+
+  it('settings.ts uses debug level for repeated loads', async () => {
+    const fs = await import('node:fs');
+    const code = fs.readFileSync('./src/core/settings.ts', 'utf8');
+    
+    expect(code).toContain('log.debug');
+    expect(code).toContain('settingsCache');
+    expect(code).toContain('mtimeMs');
+  });
+});

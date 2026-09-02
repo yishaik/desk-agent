@@ -1,4 +1,4 @@
-import { readFileSync, writeFileSync, existsSync, mkdirSync, renameSync, copyFileSync, chmodSync } from 'node:fs';
+import { readFileSync, writeFileSync, existsSync, mkdirSync, renameSync, copyFileSync, chmodSync, statSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import type { Settings, Project, ServiceConfig } from './types.ts';
 import { DEFAULT_SETTINGS } from './types.ts';
@@ -17,6 +17,7 @@ export class SettingsParseError extends Error {
 }
 
 let lastSuccessfulLoad: Settings | null = null;
+let settingsCache: { settings: Settings; mtimeMs: number } | null = null;
 
 function getSettingsPath(): string {
   return join(config.dataDir, 'settings.json');
@@ -35,7 +36,7 @@ export function loadSettings(): Settings {
   ensureDataDir();
 
   if (!existsSync(path)) {
-    log.info('No settings file found, using defaults');
+    log.debug('No settings file found, using defaults');
     const settings = { ...DEFAULT_SETTINGS };
     if (config.openConnectorToken) {
       settings.sharedConnectorToken = config.openConnectorToken;
@@ -43,6 +44,13 @@ export function loadSettings(): Settings {
     saveSettings(settings);
     lastSuccessfulLoad = settings;
     return settings;
+  }
+
+  const stat = statSync(path);
+  const currentMtime = stat.mtimeMs;
+
+  if (settingsCache && settingsCache.mtimeMs === currentMtime) {
+    return settingsCache.settings;
   }
 
   try {
@@ -56,8 +64,9 @@ export function loadSettings(): Settings {
       projectTokens: parsed.projectTokens ?? DEFAULT_SETTINGS.projectTokens,
     };
     
-    log.info({ setupComplete: settings.setupComplete }, 'Loaded settings');
+    log.debug({ setupComplete: settings.setupComplete }, 'Loaded settings');
     lastSuccessfulLoad = settings;
+    settingsCache = { settings, mtimeMs: currentMtime };
     return settings;
   } catch (err) {
     const timestamp = Date.now();
@@ -105,7 +114,12 @@ export function saveSettings(settings: Settings): void {
   }
   
   lastSuccessfulLoad = settings;
+  settingsCache = null;
   log.debug('Settings saved atomically');
+}
+
+export function clearSettingsCache(): void {
+  settingsCache = null;
 }
 
 export function updateSettings(updates: Partial<Settings>): Settings {
