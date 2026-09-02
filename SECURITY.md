@@ -87,7 +87,13 @@ Open Connector adds the authentication and executes the action.
 1. Generate a new token: `openssl rand -hex 32`
 2. Update `.env` with new `PAIR_TOKEN`
 3. Restart the agent: `docker compose restart agent`
-4. Old sessions are invalidated (cookie-based auth)
+4. Old sessions are invalidated (session tokens are HMAC-signed with PAIR_TOKEN)
+
+**Session Security:**
+- Browser sessions use derived HMAC-signed session identifiers, not the raw PAIR_TOKEN
+- Session tokens are stored in `data/sessions.json` with server-side expiry tracking
+- Logout invalidates the session server-side, not just the cookie
+- Sessions expire after 30 days or when the server revokes them
 
 ### OPEN_CONNECTOR_TOKEN
 
@@ -113,7 +119,9 @@ Open Connector adds the authentication and executes the action.
 
 `CONNECTOR_ADMIN_TOKEN` is an optional credential for accessing the Open Connector console at `https://console.{DOMAIN}`. Operators set it in `.env` before deployment if they need the console for additional integrations beyond Gmail/Calendar.
 
-This token is **not** part of the customer first-run wizard. Gmail and Calendar connect directly from Settings without the console. The admin token is for operators who need to configure extra tools or manage OAuth apps.
+**Security boundary:** The admin token is never exposed to PAIR_TOKEN holders. Even an authenticated customer cannot see, retrieve, or acknowledge the admin token through the Web UI or API. This ensures that a leaked PAIR_TOKEN does not grant Open Connector admin access.
+
+The admin token is for operators who need to configure extra tools or manage OAuth apps. Gmail and Calendar connect directly from Settings without the console.
 
 ### CONNECTOR_ENCRYPTION_KEY
 

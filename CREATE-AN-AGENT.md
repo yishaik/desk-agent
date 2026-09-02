@@ -128,7 +128,9 @@ docker compose up -d
 docker compose logs -f
 ```
 
-פתח בדפדפן: `https://agent.example.com/?token=YOUR_PAIR_TOKEN`
+פתח בדפדפן: `https://agent.example.com/`
+
+הזן את ה-PAIR_TOKEN בדף ההתחברות (טוקן גישה).
 
 ## שלב 5: אשף ההגדרה (WebUI)
 

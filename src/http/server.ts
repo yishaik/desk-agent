@@ -19,6 +19,14 @@ import {
   setActionConfirmation,
   getActionConfirmationOverride,
 } from '../core/settings.ts';
+import {
+  createSession,
+  validateSession,
+  revokeSession,
+  startSessionCleanup,
+  SESSION_COOKIE_NAME,
+  SESSION_MAX_AGE_SECONDS,
+} from './session.ts';
 import { requiresConfirmation } from '../core/confirmations.ts';
 import { listSkillPacks, isKnownSkillPack, DEFAULT_SKILL_PACKS } from '../core/skills.ts';
 import { listProjects, createProject, getProject } from '../core/memory.ts';
@@ -108,22 +116,33 @@ function timingSafeTokenCompare(provided: string | undefined, expected: string):
   return timingSafeEqual(providedBuf, expectedBuf);
 }
 
-function isAuthenticated(req: IncomingMessage): boolean {
-  const url = parseUrl(req.url ?? '', true);
-  const queryToken = url.query['token'] as string | undefined;
-  
+function getSessionCookie(req: IncomingMessage): string | undefined {
   const cookies = req.headers.cookie ?? '';
-  const cookieToken = cookies
+  return cookies
     .split(';')
     .map((c) => c.trim().split('='))
-    .find(([key]) => key === 'PAIR_TOKEN')?.[1];
+    .find(([key]) => key === SESSION_COOKIE_NAME)?.[1];
+}
+
+function isAuthenticated(req: IncomingMessage): boolean {
+  const sessionToken = getSessionCookie(req);
+  if (sessionToken && validateSession(sessionToken)) {
+    return true;
+  }
 
   const authHeader = req.headers.authorization;
   const bearerToken = authHeader?.startsWith('Bearer ')
     ? authHeader.slice(7)
     : undefined;
 
-  const token = queryToken ?? cookieToken ?? bearerToken;
+  if (bearerToken && timingSafeTokenCompare(bearerToken, config.pairToken)) {
+    return true;
+  }
+
+  return false;
+}
+
+function validatePairToken(token: string | undefined): boolean {
   return timingSafeTokenCompare(token, config.pairToken);
 }
 
@@ -194,28 +213,10 @@ addRoute('GET', '/health', async (req, res) => {
   });
 });
 
-const COOKIE_MAX_AGE = 30 * 24 * 60 * 60;
-
 addRoute('GET', '/', async (req, res) => {
   if (!isAuthenticated(req)) {
     const loginHtml = getLoginHtml();
     sendHtml(res, loginHtml);
-    return;
-  }
-
-  const url = parseUrl(req.url ?? '', true);
-  const queryToken = url.query['token'] as string | undefined;
-  
-  if (queryToken && timingSafeTokenCompare(queryToken, config.pairToken)) {
-    const isHttps = req.headers['x-forwarded-proto'] === 'https' ||
-                    req.headers.host?.startsWith('https') ||
-                    config.isProduction;
-    const securePart = isHttps ? '; Secure' : '';
-    res.setHeader(
-      'Set-Cookie',
-      `PAIR_TOKEN=${config.pairToken}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${COOKIE_MAX_AGE}${securePart}`
-    );
-    redirect(res, '/');
     return;
   }
 
@@ -290,13 +291,9 @@ addRoute('GET', '/settings', async (req, res) => {
 });
 
 addRoute('GET', '/api/auth/session', async (req, res) => {
-  const cookies = req.headers.cookie ?? '';
-  const cookieToken = cookies
-    .split(';')
-    .map((c) => c.trim().split('='))
-    .find(([key]) => key === 'PAIR_TOKEN')?.[1];
+  const sessionToken = getSessionCookie(req);
 
-  if (timingSafeTokenCompare(cookieToken, config.pairToken)) {
+  if (sessionToken && validateSession(sessionToken)) {
     res.writeHead(200);
     res.end();
   } else {
@@ -532,14 +529,15 @@ addRoute('POST', '/auth', async (req, res) => {
   
   const token = body.token;
 
-  if (timingSafeTokenCompare(token, config.pairToken)) {
+  if (validatePairToken(token)) {
+    const sessionToken = createSession();
     const isHttps = req.headers['x-forwarded-proto'] === 'https' || 
                     req.headers.host?.startsWith('https') ||
                     config.isProduction;
     const securePart = isHttps ? '; Secure' : '';
     res.setHeader(
       'Set-Cookie',
-      `PAIR_TOKEN=${config.pairToken}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${COOKIE_MAX_AGE}${securePart}`
+      `${SESSION_COOKIE_NAME}=${sessionToken}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${SESSION_MAX_AGE_SECONDS}${securePart}`
     );
     sendJson(res, { success: true });
   } else {
@@ -548,13 +546,18 @@ addRoute('POST', '/auth', async (req, res) => {
 });
 
 addRoute('POST', '/logout', async (req, res) => {
+  const sessionToken = getSessionCookie(req);
+  if (sessionToken) {
+    revokeSession(sessionToken);
+  }
+
   const isHttps = req.headers['x-forwarded-proto'] === 'https' || 
                   req.headers.host?.startsWith('https') ||
                   config.isProduction;
   const securePart = isHttps ? '; Secure' : '';
   res.setHeader(
     'Set-Cookie',
-    `PAIR_TOKEN=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0${securePart}`
+    `${SESSION_COOKIE_NAME}=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0${securePart}`
   );
   sendJson(res, { success: true });
 });
@@ -969,15 +972,6 @@ addRoute('GET', '/api/connector/onboarding', async (req, res) => {
   sendJson(res, { success: true, data });
 });
 
-addRoute('POST', '/api/connector/ack-admin-token', async (req, res) => {
-  if (!isAuthenticated(req)) {
-    sendError(res, 'Unauthorized', 401);
-    return;
-  }
-
-  updateSettings({ connectorAdminTokenAcknowledged: true });
-  sendJson(res, { success: true });
-});
 
 interface ServiceInfo {
   id: string;
@@ -2278,6 +2272,8 @@ export function getDashboardHtml(settings: ReturnType<typeof loadSettings>, pair
 }
 
 export function startServer(): void {
+  startSessionCleanup();
+  
   const server = createServer(async (req, res) => {
     const url = parseUrl(req.url ?? '', true);
     const path = url.pathname ?? '/';
@@ -2301,11 +2297,7 @@ export function startServer(): void {
   server.listen(config.port, config.host, () => {
     log.info({ host: config.host, port: config.port }, 'HTTP server started');
     
-    if (config.isProduction) {
-      console.log(`\n🌐 Web UI: http://${config.host}:${config.port}/`);
-      console.log(`   Enter your PAIR_TOKEN to authenticate`);
-    } else {
-      console.log(`\n🌐 Web UI: http://${config.host}:${config.port}/?token=${config.pairToken}`);
-    }
+    console.log(`\n🌐 Web UI: http://${config.host}:${config.port}/`);
+    console.log(`   Enter your PAIR_TOKEN (טוקן גישה) to authenticate`);
   });
 }

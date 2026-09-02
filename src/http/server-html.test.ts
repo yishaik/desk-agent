@@ -269,6 +269,18 @@ describe('Server HTML Source Code Requirements', () => {
     it('dashboard does NOT have alert נשמר', () => {
       expect(serverCode).not.toContain("alert('נשמר!')");
     });
+
+    it('SECURITY: dashboard does NOT show admin token card (S-01)', () => {
+      expect(serverCode).not.toContain('id="connectorAdminToken"');
+      expect(serverCode).not.toContain('id="dashboardAdminToken"');
+      expect(serverCode).not.toContain('copyDashboardToken');
+      expect(serverCode).not.toContain('ackDashboardToken');
+      expect(serverCode).not.toContain('טוקן ניהול (חד-פעמי)');
+    });
+
+    it('SECURITY: dashboard JavaScript does not fetch or display admin token (S-01)', () => {
+      expect(serverCode).not.toContain('data.adminToken');
+    });
   });
 
   describe('getLoginHtml requirements', () => {

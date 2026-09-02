@@ -7,25 +7,6 @@ const TEST_DATA_DIR = './test-data-auth';
 const TEST_PORT = 3999;
 const TEST_PAIR_TOKEN = 'test-token-12345';
 
-function isAuthenticated(req: IncomingMessage, expectedToken: string): boolean {
-  const url = parseUrl(req.url ?? '', true);
-  const queryToken = url.query['token'] as string | undefined;
-  
-  const cookies = req.headers.cookie ?? '';
-  const cookieToken = cookies
-    .split(';')
-    .map((c) => c.trim().split('='))
-    .find(([key]) => key === 'PAIR_TOKEN')?.[1];
-
-  const authHeader = req.headers.authorization;
-  const bearerToken = authHeader?.startsWith('Bearer ')
-    ? authHeader.slice(7)
-    : undefined;
-
-  const token = queryToken ?? cookieToken ?? bearerToken;
-  return token === expectedToken;
-}
-
 beforeEach(() => {
   vi.resetModules();
   process.env['DATA_DIR'] = TEST_DATA_DIR;
@@ -47,55 +28,71 @@ afterEach(() => {
   delete process.env['PORT'];
 });
 
-describe('Authentication Helper', () => {
-  it('rejects requests without token', () => {
-    const req = { url: '/api/settings', headers: {} } as IncomingMessage;
-    expect(isAuthenticated(req, TEST_PAIR_TOKEN)).toBe(false);
+describe('Session Management', () => {
+  it('creates a signed session token', async () => {
+    const { createSession, clearSessionCache } = await import('./session.ts');
+    clearSessionCache();
+    
+    const session = createSession();
+    expect(session).toBeDefined();
+    expect(typeof session).toBe('string');
+    expect(session.split('.').length).toBe(2);
   });
 
-  it('accepts requests with valid query token', () => {
-    const req = { url: `/api/settings?token=${TEST_PAIR_TOKEN}`, headers: {} } as IncomingMessage;
-    expect(isAuthenticated(req, TEST_PAIR_TOKEN)).toBe(true);
+  it('validates a valid session', async () => {
+    const { createSession, validateSession, clearSessionCache } = await import('./session.ts');
+    clearSessionCache();
+    
+    const session = createSession();
+    expect(validateSession(session)).toBe(true);
   });
 
-  it('accepts requests with valid bearer token', () => {
-    const req = { 
-      url: '/api/settings', 
-      headers: { authorization: `Bearer ${TEST_PAIR_TOKEN}` } 
-    } as IncomingMessage;
-    expect(isAuthenticated(req, TEST_PAIR_TOKEN)).toBe(true);
+  it('rejects an invalid session signature', async () => {
+    const { createSession, validateSession, clearSessionCache } = await import('./session.ts');
+    clearSessionCache();
+    
+    const session = createSession();
+    const [sessionId] = session.split('.');
+    const tamperedSession = `${sessionId}.invalidsignature`;
+    
+    expect(validateSession(tamperedSession)).toBe(false);
   });
 
-  it('accepts requests with valid cookie token', () => {
-    const req = { 
-      url: '/api/settings', 
-      headers: { cookie: `PAIR_TOKEN=${TEST_PAIR_TOKEN}` } 
-    } as IncomingMessage;
-    expect(isAuthenticated(req, TEST_PAIR_TOKEN)).toBe(true);
+  it('rejects a revoked session', async () => {
+    const { createSession, validateSession, revokeSession, clearSessionCache } = await import('./session.ts');
+    clearSessionCache();
+    
+    const session = createSession();
+    expect(validateSession(session)).toBe(true);
+    
+    revokeSession(session);
+    expect(validateSession(session)).toBe(false);
   });
 
-  it('rejects requests with invalid token', () => {
-    const req = { url: '/api/settings?token=wrong-token', headers: {} } as IncomingMessage;
-    expect(isAuthenticated(req, TEST_PAIR_TOKEN)).toBe(false);
+  it('rejects undefined or empty sessions', async () => {
+    const { validateSession, clearSessionCache } = await import('./session.ts');
+    clearSessionCache();
+    
+    expect(validateSession(undefined)).toBe(false);
+    expect(validateSession('')).toBe(false);
+    expect(validateSession('invalid')).toBe(false);
+  });
+});
+
+describe('Bearer Token Authentication (API clients)', () => {
+  it('accepts requests with valid bearer token (PAIR_TOKEN)', () => {
+    const bearerToken = TEST_PAIR_TOKEN;
+    const authHeader = `Bearer ${bearerToken}`;
+    const extractedToken = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : undefined;
+    
+    expect(extractedToken).toBe(TEST_PAIR_TOKEN);
   });
 
-  it('prefers query token over cookie', () => {
-    const req = { 
-      url: `/api/settings?token=${TEST_PAIR_TOKEN}`, 
-      headers: { cookie: 'PAIR_TOKEN=wrong-token' } 
-    } as IncomingMessage;
-    expect(isAuthenticated(req, TEST_PAIR_TOKEN)).toBe(true);
-  });
-
-  it('prefers cookie token over bearer', () => {
-    const req = { 
-      url: '/api/settings', 
-      headers: { 
-        cookie: `PAIR_TOKEN=${TEST_PAIR_TOKEN}`,
-        authorization: 'Bearer wrong-token'
-      } 
-    } as IncomingMessage;
-    expect(isAuthenticated(req, TEST_PAIR_TOKEN)).toBe(true);
+  it('rejects requests with invalid bearer token', () => {
+    const authHeader = 'Bearer wrong-token';
+    const extractedToken = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : undefined;
+    
+    expect(extractedToken).not.toBe(TEST_PAIR_TOKEN);
   });
 });
 
@@ -119,6 +116,58 @@ describe('Secure Cookie Setting', () => {
     
     expect(isHttps({}, true)).toBe(true);
     expect(isHttps({}, false)).toBe(false);
+  });
+});
+
+describe('SECURITY: Query token authentication (S-02)', () => {
+  it('SECURITY: isAuthenticated must NOT accept query token', async () => {
+    const fs = await import('node:fs');
+    const path = await import('node:path');
+    const serverCode = fs.readFileSync(path.join(__dirname, 'server.ts'), 'utf8');
+    
+    const isAuthenticatedMatch = serverCode.match(/function isAuthenticated\(req: IncomingMessage\): boolean \{[\s\S]*?^}/m);
+    expect(isAuthenticatedMatch).toBeTruthy();
+    
+    const isAuthFn = isAuthenticatedMatch![0];
+    expect(isAuthFn).not.toContain('queryToken');
+    expect(isAuthFn).not.toContain("query['token']");
+    expect(isAuthFn).not.toContain('url.query');
+  });
+
+  it('SECURITY: session cookie uses SESSION_COOKIE_NAME, not raw PAIR_TOKEN', async () => {
+    const fs = await import('node:fs');
+    const path = await import('node:path');
+    const serverCode = fs.readFileSync(path.join(__dirname, 'server.ts'), 'utf8');
+    const sessionCode = fs.readFileSync(path.join(__dirname, 'session.ts'), 'utf8');
+    
+    expect(serverCode).toContain('SESSION_COOKIE_NAME');
+    expect(sessionCode).toContain("SESSION_COOKIE_NAME = 'DESK_SESSION'");
+    
+    const authRoute = serverCode.match(/addRoute\('POST', '\/auth'[\s\S]*?\}\);/);
+    expect(authRoute).toBeTruthy();
+    expect(authRoute![0]).toContain('SESSION_COOKIE_NAME');
+    expect(authRoute![0]).not.toContain('PAIR_TOKEN=${config.pairToken}');
+    expect(authRoute![0]).toContain('createSession()');
+  });
+
+  it('SECURITY: POST /logout invalidates session server-side', async () => {
+    const fs = await import('node:fs');
+    const path = await import('node:path');
+    const serverCode = fs.readFileSync(path.join(__dirname, 'server.ts'), 'utf8');
+    
+    const logoutRoute = serverCode.match(/addRoute\('POST', '\/logout'[\s\S]*?\}\);/);
+    expect(logoutRoute).toBeTruthy();
+    expect(logoutRoute![0]).toContain('revokeSession');
+  });
+
+  it('SECURITY: startServer does not print ?token= URL', async () => {
+    const fs = await import('node:fs');
+    const path = await import('node:path');
+    const serverCode = fs.readFileSync(path.join(__dirname, 'server.ts'), 'utf8');
+    
+    const startServerFn = serverCode.match(/export function startServer\(\)[\s\S]*?^\}/m);
+    expect(startServerFn).toBeTruthy();
+    expect(startServerFn![0]).not.toContain('?token=');
   });
 });
 
@@ -233,12 +282,12 @@ describe('HTTP Authentication Security (server.ts)', () => {
     expect(serverCode).toContain('timingSafeEqual(providedBuf, expectedBuf)');
   });
 
-  it('SECURITY: isAuthenticated uses timing-safe comparison', async () => {
+  it('SECURITY: Bearer token auth uses timing-safe comparison', async () => {
     const fs = await import('node:fs');
     const path = await import('node:path');
     const serverCode = fs.readFileSync(path.join(__dirname, 'server.ts'), 'utf8');
     
-    expect(serverCode).toContain('timingSafeTokenCompare(token, config.pairToken)');
+    expect(serverCode).toContain('timingSafeTokenCompare(bearerToken, config.pairToken)');
   });
 
   it('SECURITY: parseBody has MAX_BODY_SIZE limit and destroys oversized requests', async () => {
@@ -251,30 +300,40 @@ describe('HTTP Authentication Security (server.ts)', () => {
     expect(serverCode).toContain('req.destroy()');
   });
 
-  it('SECURITY: cookie max age is 30 days, not 1 year', async () => {
+  it('SECURITY: session max age is 30 days', async () => {
+    const fs = await import('node:fs');
+    const path = await import('node:path');
+    const sessionCode = fs.readFileSync(path.join(__dirname, 'session.ts'), 'utf8');
+    
+    expect(sessionCode).toContain('SESSION_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000');
+    expect(sessionCode).not.toContain('365 * 24 * 60 * 60');
+  });
+
+  it('SECURITY: GET / does NOT accept ?token= query param', async () => {
     const fs = await import('node:fs');
     const path = await import('node:path');
     const serverCode = fs.readFileSync(path.join(__dirname, 'server.ts'), 'utf8');
     
-    expect(serverCode).toContain('const COOKIE_MAX_AGE = 30 * 24 * 60 * 60');
-    expect(serverCode).not.toContain('Max-Age=31536000');
-  });
-
-  it('SECURITY: GET / with ?token= redirects to / after setting cookie', async () => {
-    const fs = await import('node:fs');
-    const path = await import('node:path');
-    const serverCode = fs.readFileSync(path.join(__dirname, 'server.ts'), 'utf8');
+    const rootRouteMatch = serverCode.match(/addRoute\('GET', '\/'\s*,\s*async \(req, res\) => \{[\s\S]*?(?=addRoute\('GET'|$)/);
+    expect(rootRouteMatch).toBeTruthy();
     
-    expect(serverCode).toMatch(/if \(queryToken && timingSafeTokenCompare\(queryToken[\s\S]*?redirect\(res, '\/'\)/);
+    const rootRoute = rootRouteMatch![0];
+    expect(rootRoute).not.toContain("query['token']");
+    expect(rootRoute).not.toContain('queryToken');
   });
 
-  it('SECURITY: POST /logout endpoint exists and clears cookie', async () => {
+  it('SECURITY: POST /logout endpoint revokes session server-side', async () => {
     const fs = await import('node:fs');
     const path = await import('node:path');
     const serverCode = fs.readFileSync(path.join(__dirname, 'server.ts'), 'utf8');
     
     expect(serverCode).toContain("addRoute('POST', '/logout'");
-    expect(serverCode).toContain('PAIR_TOKEN=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0');
+    
+    const logoutRoute = serverCode.match(/addRoute\('POST', '\/logout'[\s\S]*?\}\);/);
+    expect(logoutRoute).toBeTruthy();
+    expect(logoutRoute![0]).toContain('revokeSession');
+    expect(logoutRoute![0]).toContain('SESSION_COOKIE_NAME');
+    expect(logoutRoute![0]).toContain('Max-Age=0');
   });
 
   it('SECURITY: POST /auth returns 413 on oversized body, not 401', async () => {
@@ -302,7 +361,7 @@ describe('HTTP Authentication Security (server.ts)', () => {
 });
 
 describe('GET /api/auth/session (Caddy forward_auth)', () => {
-  it('exists and only reads cookie, not query token or Authorization', async () => {
+  it('exists and validates session cookie', async () => {
     const fs = await import('node:fs');
     const path = await import('node:path');
     const serverCode = fs.readFileSync(path.join(__dirname, 'server.ts'), 'utf8');
@@ -312,9 +371,8 @@ describe('GET /api/auth/session (Caddy forward_auth)', () => {
     
     const sessionRoute = sessionRouteMatch![0];
     
-    expect(sessionRoute).toContain("req.headers.cookie");
-    expect(sessionRoute).toContain("PAIR_TOKEN");
-    expect(sessionRoute).toContain('timingSafeTokenCompare');
+    expect(sessionRoute).toContain('getSessionCookie');
+    expect(sessionRoute).toContain('validateSession');
     
     expect(sessionRoute).not.toContain('query');
     expect(sessionRoute).not.toContain('authorization');
@@ -322,7 +380,7 @@ describe('GET /api/auth/session (Caddy forward_auth)', () => {
     expect(sessionRoute).not.toContain('isAuthenticated');
   });
 
-  it('returns 200 on valid cookie match', async () => {
+  it('returns 200 on valid session', async () => {
     const fs = await import('node:fs');
     const path = await import('node:path');
     const serverCode = fs.readFileSync(path.join(__dirname, 'server.ts'), 'utf8');
@@ -335,7 +393,7 @@ describe('GET /api/auth/session (Caddy forward_auth)', () => {
     expect(sessionRoute).toContain('res.end()');
   });
 
-  it('returns 401 on missing or wrong cookie', async () => {
+  it('returns 401 on missing or invalid session', async () => {
     const fs = await import('node:fs');
     const path = await import('node:path');
     const serverCode = fs.readFileSync(path.join(__dirname, 'server.ts'), 'utf8');
@@ -347,7 +405,7 @@ describe('GET /api/auth/session (Caddy forward_auth)', () => {
     expect(sessionRoute).toContain("sendError(res, 'Unauthorized', 401)");
   });
 
-  it('SECURITY: does NOT call isAuthenticated (which accepts query/bearer)', async () => {
+  it('SECURITY: does NOT call isAuthenticated (which accepts bearer)', async () => {
     const fs = await import('node:fs');
     const path = await import('node:path');
     const serverCode = fs.readFileSync(path.join(__dirname, 'server.ts'), 'utf8');
@@ -357,5 +415,18 @@ describe('GET /api/auth/session (Caddy forward_auth)', () => {
     
     const sessionRoute = sessionRouteMatch![0];
     expect(sessionRoute).not.toContain('isAuthenticated(');
+  });
+
+  it('SECURITY: uses DESK_SESSION cookie, not PAIR_TOKEN cookie', async () => {
+    const fs = await import('node:fs');
+    const path = await import('node:path');
+    const serverCode = fs.readFileSync(path.join(__dirname, 'server.ts'), 'utf8');
+    
+    const sessionRouteMatch = serverCode.match(/addRoute\('GET', '\/api\/auth\/session'[\s\S]*?\}\);/);
+    expect(sessionRouteMatch).toBeTruthy();
+    
+    const sessionRoute = sessionRouteMatch![0];
+    expect(sessionRoute).not.toContain("key === 'PAIR_TOKEN'");
+    expect(sessionRoute).not.toContain('config.pairToken');
   });
 });

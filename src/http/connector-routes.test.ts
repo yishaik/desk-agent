@@ -29,38 +29,64 @@ afterEach(() => {
   delete process.env['CONNECTOR_ORIGIN'];
 });
 
-describe('Admin Token Acknowledgment Flow', () => {
-  it('acknowledges admin token and hides it on subsequent calls', async () => {
-    vi.resetModules();
+describe('SECURITY: Admin Token Never Exposed (S-01)', () => {
+  it('SECURITY: /api/connector/onboarding does NOT return adminToken', async () => {
+    const fs = await import('node:fs');
+    const path = await import('node:path');
+    const serverCode = fs.readFileSync(path.join(__dirname, 'server.ts'), 'utf8');
     
-    const { 
-      loadSettings, 
-      acknowledgeAdminToken, 
-      isAdminTokenAcknowledged 
-    } = await import('../core/settings.ts');
+    const onboardingRouteMatch = serverCode.match(/addRoute\('GET', '\/api\/connector\/onboarding'[\s\S]*?sendJson\(res, \{ success: true, data \}\);[\s\S]*?\}\);/);
+    expect(onboardingRouteMatch).toBeTruthy();
     
-    let settings = loadSettings();
-    expect(settings.connectorAdminTokenAcknowledged).toBe(false);
-    expect(isAdminTokenAcknowledged()).toBe(false);
-    
-    acknowledgeAdminToken();
-    
-    settings = loadSettings();
-    expect(settings.connectorAdminTokenAcknowledged).toBe(true);
-    expect(isAdminTokenAcknowledged()).toBe(true);
+    const onboardingRoute = onboardingRouteMatch![0];
+    expect(onboardingRoute).not.toContain('adminToken');
+    expect(onboardingRoute).not.toContain('config.connectorAdminToken');
+    expect(onboardingRoute).not.toContain('requiresAck');
   });
 
-  it('persists acknowledgment across settings reloads', async () => {
-    vi.resetModules();
+  it('SECURITY: /api/connector/ack-admin-token endpoint does not exist', async () => {
+    const fs = await import('node:fs');
+    const path = await import('node:path');
+    const serverCode = fs.readFileSync(path.join(__dirname, 'server.ts'), 'utf8');
     
-    const { acknowledgeAdminToken } = await import('../core/settings.ts');
-    acknowledgeAdminToken();
+    expect(serverCode).not.toContain("addRoute('POST', '/api/connector/ack-admin-token'");
+  });
+
+  it('SECURITY: dashboard HTML does not render admin token card', async () => {
+    const fs = await import('node:fs');
+    const path = await import('node:path');
+    const serverCode = fs.readFileSync(path.join(__dirname, 'server.ts'), 'utf8');
     
-    vi.resetModules();
-    process.env['DATA_DIR'] = TEST_DATA_DIR;
+    const dashboardFnMatch = serverCode.match(/export function getDashboardHtml[\s\S]*?^}/m);
+    expect(dashboardFnMatch).toBeTruthy();
     
-    const { isAdminTokenAcknowledged } = await import('../core/settings.ts');
-    expect(isAdminTokenAcknowledged()).toBe(true);
+    const dashboardFn = dashboardFnMatch![0];
+    expect(dashboardFn).not.toContain('connectorAdminToken');
+    expect(dashboardFn).not.toContain('dashboardAdminToken');
+    expect(dashboardFn).not.toContain('ackDashboardToken');
+    expect(dashboardFn).not.toContain('copyDashboardToken');
+    expect(dashboardFn).not.toContain('טוקן ניהול');
+  });
+
+  it('SECURITY: no customer-facing API returns CONNECTOR_ADMIN_TOKEN', async () => {
+    const fs = await import('node:fs');
+    const path = await import('node:path');
+    const serverCode = fs.readFileSync(path.join(__dirname, 'server.ts'), 'utf8');
+    
+    const adminTokenReferences = serverCode.match(/config\.connectorAdminToken/g) || [];
+    
+    const safeContexts = [
+      'import', 'type', 'interface', 'hasAdminToken', '!!'
+    ];
+    
+    for (const match of adminTokenReferences) {
+      const context = serverCode.substring(
+        Math.max(0, serverCode.indexOf(match) - 50),
+        serverCode.indexOf(match) + match.length + 50
+      );
+      expect(context).not.toContain('sendJson');
+      expect(context).not.toContain('data.');
+    }
   });
 });
 
