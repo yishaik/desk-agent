@@ -82,7 +82,7 @@ The Web UI provides:
 4. **Settings** - Identity, AI login, Open Connector, WhatsApp
 5. **Tools** - Shows CONNECTED Open Connector services only (logo cards + human-readable actions). Empty state links to Settings for Gmail/Calendar Connect, or the OC console (`https://console.{DOMAIN}`) for other integrations.
 
-Access the UI at `https://your-domain.com/?token=YOUR_PAIR_TOKEN`
+Open `https://your-domain.com/` and enter your `PAIR_TOKEN` in the login form (טוקן גישה).
 
 ## WhatsApp Commands
 

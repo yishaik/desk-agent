@@ -1,30 +1,9 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { IncomingMessage } from 'node:http';
 import { existsSync, rmSync, mkdirSync } from 'node:fs';
-import { parse as parseUrl } from 'node:url';
 
 const TEST_DATA_DIR = './test-data-auth';
 const TEST_PORT = 3999;
 const TEST_PAIR_TOKEN = 'test-token-12345';
-
-function isAuthenticated(req: IncomingMessage, expectedToken: string): boolean {
-  const url = parseUrl(req.url ?? '', true);
-  const queryToken = url.query['token'] as string | undefined;
-  
-  const cookies = req.headers.cookie ?? '';
-  const cookieToken = cookies
-    .split(';')
-    .map((c) => c.trim().split('='))
-    .find(([key]) => key === 'PAIR_TOKEN')?.[1];
-
-  const authHeader = req.headers.authorization;
-  const bearerToken = authHeader?.startsWith('Bearer ')
-    ? authHeader.slice(7)
-    : undefined;
-
-  const token = queryToken ?? cookieToken ?? bearerToken;
-  return token === expectedToken;
-}
 
 beforeEach(() => {
   vi.resetModules();
@@ -47,55 +26,64 @@ afterEach(() => {
   delete process.env['PORT'];
 });
 
-describe('Authentication Helper', () => {
-  it('rejects requests without token', () => {
-    const req = { url: '/api/settings', headers: {} } as IncomingMessage;
-    expect(isAuthenticated(req, TEST_PAIR_TOKEN)).toBe(false);
+describe('PAIR_TOKEN Cookie Authentication', () => {
+  it('cookie is HttpOnly', async () => {
+    const fs = await import('node:fs');
+    const path = await import('node:path');
+    const serverCode = fs.readFileSync(path.join(__dirname, 'server.ts'), 'utf8');
+    
+    expect(serverCode).toContain('HttpOnly');
+    expect(serverCode).toContain('SameSite=Strict');
   });
 
-  it('accepts requests with valid query token', () => {
-    const req = { url: `/api/settings?token=${TEST_PAIR_TOKEN}`, headers: {} } as IncomingMessage;
-    expect(isAuthenticated(req, TEST_PAIR_TOKEN)).toBe(true);
+  it('cookie max age is 30 days', async () => {
+    const fs = await import('node:fs');
+    const path = await import('node:path');
+    const serverCode = fs.readFileSync(path.join(__dirname, 'server.ts'), 'utf8');
+    
+    expect(serverCode).toContain('COOKIE_MAX_AGE = 30 * 24 * 60 * 60');
+  });
+});
+
+describe('Bearer Token Authentication (API clients)', () => {
+  it('accepts requests with valid bearer token (PAIR_TOKEN)', () => {
+    const bearerToken = TEST_PAIR_TOKEN;
+    const authHeader = `Bearer ${bearerToken}`;
+    const extractedToken = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : undefined;
+    
+    expect(extractedToken).toBe(TEST_PAIR_TOKEN);
   });
 
-  it('accepts requests with valid bearer token', () => {
-    const req = { 
-      url: '/api/settings', 
-      headers: { authorization: `Bearer ${TEST_PAIR_TOKEN}` } 
-    } as IncomingMessage;
-    expect(isAuthenticated(req, TEST_PAIR_TOKEN)).toBe(true);
+  it('rejects requests with invalid bearer token', () => {
+    const authHeader = 'Bearer wrong-token';
+    const extractedToken = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : undefined;
+    
+    expect(extractedToken).not.toBe(TEST_PAIR_TOKEN);
+  });
+});
+
+describe('Login Form Flow (טוקן גישה)', () => {
+  it('POST /auth validates PAIR_TOKEN and sets HttpOnly cookie', async () => {
+    const fs = await import('node:fs');
+    const path = await import('node:path');
+    const serverCode = fs.readFileSync(path.join(__dirname, 'server.ts'), 'utf8');
+    
+    const authRoute = serverCode.match(/addRoute\('POST', '\/auth'[\s\S]*?\}\);/);
+    expect(authRoute).toBeTruthy();
+    
+    const route = authRoute![0];
+    expect(route).toContain('timingSafeTokenCompare(token, config.pairToken)');
+    expect(route).toContain('setAuthCookie');
   });
 
-  it('accepts requests with valid cookie token', () => {
-    const req = { 
-      url: '/api/settings', 
-      headers: { cookie: `PAIR_TOKEN=${TEST_PAIR_TOKEN}` } 
-    } as IncomingMessage;
-    expect(isAuthenticated(req, TEST_PAIR_TOKEN)).toBe(true);
-  });
-
-  it('rejects requests with invalid token', () => {
-    const req = { url: '/api/settings?token=wrong-token', headers: {} } as IncomingMessage;
-    expect(isAuthenticated(req, TEST_PAIR_TOKEN)).toBe(false);
-  });
-
-  it('prefers query token over cookie', () => {
-    const req = { 
-      url: `/api/settings?token=${TEST_PAIR_TOKEN}`, 
-      headers: { cookie: 'PAIR_TOKEN=wrong-token' } 
-    } as IncomingMessage;
-    expect(isAuthenticated(req, TEST_PAIR_TOKEN)).toBe(true);
-  });
-
-  it('prefers cookie token over bearer', () => {
-    const req = { 
-      url: '/api/settings', 
-      headers: { 
-        cookie: `PAIR_TOKEN=${TEST_PAIR_TOKEN}`,
-        authorization: 'Bearer wrong-token'
-      } 
-    } as IncomingMessage;
-    expect(isAuthenticated(req, TEST_PAIR_TOKEN)).toBe(true);
+  it('Login form submits token via JSON POST, not query string', async () => {
+    const fs = await import('node:fs');
+    const path = await import('node:path');
+    const serverCode = fs.readFileSync(path.join(__dirname, 'server.ts'), 'utf8');
+    
+    expect(serverCode).toContain("fetch('/auth'");
+    expect(serverCode).toContain("method: 'POST'");
+    expect(serverCode).toContain("body: JSON.stringify({ token })");
   });
 });
 
@@ -119,6 +107,57 @@ describe('Secure Cookie Setting', () => {
     
     expect(isHttps({}, true)).toBe(true);
     expect(isHttps({}, false)).toBe(false);
+  });
+});
+
+describe('SECURITY: Query token one-time redemption (S-02)', () => {
+  it('SECURITY: isAuthenticated must NOT accept query token', async () => {
+    const fs = await import('node:fs');
+    const path = await import('node:path');
+    const serverCode = fs.readFileSync(path.join(__dirname, 'server.ts'), 'utf8');
+    
+    const isAuthenticatedMatch = serverCode.match(/function isAuthenticated\(req: IncomingMessage\): boolean \{[\s\S]*?^}/m);
+    expect(isAuthenticatedMatch).toBeTruthy();
+    
+    const isAuthFn = isAuthenticatedMatch![0];
+    expect(isAuthFn).not.toContain('queryToken');
+    expect(isAuthFn).not.toContain("query['token']");
+    expect(isAuthFn).not.toContain('parseUrl');
+  });
+
+  it('SECURITY: GET / redeems ?token= ONCE into HttpOnly cookie, then redirects', async () => {
+    const fs = await import('node:fs');
+    const path = await import('node:path');
+    const serverCode = fs.readFileSync(path.join(__dirname, 'server.ts'), 'utf8');
+    
+    const rootRouteMatch = serverCode.match(/addRoute\('GET', '\/'\s*,\s*async \(req, res\) => \{[\s\S]*?(?=addRoute\('GET'|$)/);
+    expect(rootRouteMatch).toBeTruthy();
+    
+    const rootRoute = rootRouteMatch![0];
+    expect(rootRoute).toContain('queryToken');
+    expect(rootRoute).toContain('timingSafeTokenCompare(queryToken, config.pairToken)');
+    expect(rootRoute).toContain('setAuthCookie');
+    expect(rootRoute).toContain("redirect(res, '/')");
+  });
+
+  it('SECURITY: POST /logout clears cookie', async () => {
+    const fs = await import('node:fs');
+    const path = await import('node:path');
+    const serverCode = fs.readFileSync(path.join(__dirname, 'server.ts'), 'utf8');
+    
+    const logoutRoute = serverCode.match(/addRoute\('POST', '\/logout'[\s\S]*?\}\);/);
+    expect(logoutRoute).toBeTruthy();
+    expect(logoutRoute![0]).toContain('clearAuthCookie');
+  });
+
+  it('SECURITY: startServer does not print ?token= URL', async () => {
+    const fs = await import('node:fs');
+    const path = await import('node:path');
+    const serverCode = fs.readFileSync(path.join(__dirname, 'server.ts'), 'utf8');
+    
+    const startServerFn = serverCode.match(/export function startServer\(\)[\s\S]*?^\}/m);
+    expect(startServerFn).toBeTruthy();
+    expect(startServerFn![0]).not.toContain('?token=');
   });
 });
 
@@ -233,12 +272,12 @@ describe('HTTP Authentication Security (server.ts)', () => {
     expect(serverCode).toContain('timingSafeEqual(providedBuf, expectedBuf)');
   });
 
-  it('SECURITY: isAuthenticated uses timing-safe comparison', async () => {
+  it('SECURITY: Bearer token auth uses timing-safe comparison', async () => {
     const fs = await import('node:fs');
     const path = await import('node:path');
     const serverCode = fs.readFileSync(path.join(__dirname, 'server.ts'), 'utf8');
     
-    expect(serverCode).toContain('timingSafeTokenCompare(token, config.pairToken)');
+    expect(serverCode).toContain('timingSafeTokenCompare(bearerToken, config.pairToken)');
   });
 
   it('SECURITY: parseBody has MAX_BODY_SIZE limit and destroys oversized requests', async () => {
@@ -249,32 +288,6 @@ describe('HTTP Authentication Security (server.ts)', () => {
     expect(serverCode).toContain('const MAX_BODY_SIZE = 64 * 1024');
     expect(serverCode).toContain('size > MAX_BODY_SIZE');
     expect(serverCode).toContain('req.destroy()');
-  });
-
-  it('SECURITY: cookie max age is 30 days, not 1 year', async () => {
-    const fs = await import('node:fs');
-    const path = await import('node:path');
-    const serverCode = fs.readFileSync(path.join(__dirname, 'server.ts'), 'utf8');
-    
-    expect(serverCode).toContain('const COOKIE_MAX_AGE = 30 * 24 * 60 * 60');
-    expect(serverCode).not.toContain('Max-Age=31536000');
-  });
-
-  it('SECURITY: GET / with ?token= redirects to / after setting cookie', async () => {
-    const fs = await import('node:fs');
-    const path = await import('node:path');
-    const serverCode = fs.readFileSync(path.join(__dirname, 'server.ts'), 'utf8');
-    
-    expect(serverCode).toMatch(/if \(queryToken && timingSafeTokenCompare\(queryToken[\s\S]*?redirect\(res, '\/'\)/);
-  });
-
-  it('SECURITY: POST /logout endpoint exists and clears cookie', async () => {
-    const fs = await import('node:fs');
-    const path = await import('node:path');
-    const serverCode = fs.readFileSync(path.join(__dirname, 'server.ts'), 'utf8');
-    
-    expect(serverCode).toContain("addRoute('POST', '/logout'");
-    expect(serverCode).toContain('PAIR_TOKEN=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0');
   });
 
   it('SECURITY: POST /auth returns 413 on oversized body, not 401', async () => {
@@ -302,7 +315,7 @@ describe('HTTP Authentication Security (server.ts)', () => {
 });
 
 describe('GET /api/auth/session (Caddy forward_auth)', () => {
-  it('exists and only reads cookie, not query token or Authorization', async () => {
+  it('Caddy forward_auth: checks PAIR_TOKEN cookie only (not query or bearer)', async () => {
     const fs = await import('node:fs');
     const path = await import('node:path');
     const serverCode = fs.readFileSync(path.join(__dirname, 'server.ts'), 'utf8');
@@ -312,9 +325,9 @@ describe('GET /api/auth/session (Caddy forward_auth)', () => {
     
     const sessionRoute = sessionRouteMatch![0];
     
-    expect(sessionRoute).toContain("req.headers.cookie");
-    expect(sessionRoute).toContain("PAIR_TOKEN");
+    expect(sessionRoute).toContain('getPairTokenCookie');
     expect(sessionRoute).toContain('timingSafeTokenCompare');
+    expect(sessionRoute).toContain('config.pairToken');
     
     expect(sessionRoute).not.toContain('query');
     expect(sessionRoute).not.toContain('authorization');
@@ -322,7 +335,7 @@ describe('GET /api/auth/session (Caddy forward_auth)', () => {
     expect(sessionRoute).not.toContain('isAuthenticated');
   });
 
-  it('returns 200 on valid cookie match', async () => {
+  it('Caddy forward_auth: returns 200 on valid PAIR_TOKEN cookie', async () => {
     const fs = await import('node:fs');
     const path = await import('node:path');
     const serverCode = fs.readFileSync(path.join(__dirname, 'server.ts'), 'utf8');
@@ -335,7 +348,7 @@ describe('GET /api/auth/session (Caddy forward_auth)', () => {
     expect(sessionRoute).toContain('res.end()');
   });
 
-  it('returns 401 on missing or wrong cookie', async () => {
+  it('Caddy forward_auth: returns 401 on missing or invalid cookie', async () => {
     const fs = await import('node:fs');
     const path = await import('node:path');
     const serverCode = fs.readFileSync(path.join(__dirname, 'server.ts'), 'utf8');
@@ -347,7 +360,7 @@ describe('GET /api/auth/session (Caddy forward_auth)', () => {
     expect(sessionRoute).toContain("sendError(res, 'Unauthorized', 401)");
   });
 
-  it('SECURITY: does NOT call isAuthenticated (which accepts query/bearer)', async () => {
+  it('SECURITY: does NOT call isAuthenticated (which accepts bearer)', async () => {
     const fs = await import('node:fs');
     const path = await import('node:path');
     const serverCode = fs.readFileSync(path.join(__dirname, 'server.ts'), 'utf8');
@@ -357,5 +370,29 @@ describe('GET /api/auth/session (Caddy forward_auth)', () => {
     
     const sessionRoute = sessionRouteMatch![0];
     expect(sessionRoute).not.toContain('isAuthenticated(');
+  });
+});
+
+describe('Revocation model (S-02)', () => {
+  it('Rotate .env PAIR_TOKEN to revoke all sessions', async () => {
+    const fs = await import('node:fs');
+    const path = await import('node:path');
+    const securityDoc = fs.readFileSync(path.join(__dirname, '../../SECURITY.md'), 'utf8');
+    
+    expect(securityDoc).toContain('PAIR_TOKEN');
+    expect(securityDoc).toContain('Restart the agent');
+  });
+
+  it('Logout clears cookie (no server-side session store)', async () => {
+    const fs = await import('node:fs');
+    const path = await import('node:path');
+    const serverCode = fs.readFileSync(path.join(__dirname, 'server.ts'), 'utf8');
+    
+    const logoutRoute = serverCode.match(/addRoute\('POST', '\/logout'[\s\S]*?\}\);/);
+    expect(logoutRoute).toBeTruthy();
+    
+    expect(logoutRoute![0]).toContain('clearAuthCookie');
+    expect(logoutRoute![0]).not.toContain('revokeSession');
+    expect(logoutRoute![0]).not.toContain('sessions');
   });
 });

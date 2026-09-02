@@ -108,23 +108,54 @@ function timingSafeTokenCompare(provided: string | undefined, expected: string):
   return timingSafeEqual(providedBuf, expectedBuf);
 }
 
-function isAuthenticated(req: IncomingMessage): boolean {
-  const url = parseUrl(req.url ?? '', true);
-  const queryToken = url.query['token'] as string | undefined;
-  
+const COOKIE_MAX_AGE = 30 * 24 * 60 * 60;
+
+function getPairTokenCookie(req: IncomingMessage): string | undefined {
   const cookies = req.headers.cookie ?? '';
-  const cookieToken = cookies
+  return cookies
     .split(';')
     .map((c) => c.trim().split('='))
     .find(([key]) => key === 'PAIR_TOKEN')?.[1];
+}
+
+function isAuthenticated(req: IncomingMessage): boolean {
+  const cookieToken = getPairTokenCookie(req);
+  if (cookieToken && timingSafeTokenCompare(cookieToken, config.pairToken)) {
+    return true;
+  }
 
   const authHeader = req.headers.authorization;
   const bearerToken = authHeader?.startsWith('Bearer ')
     ? authHeader.slice(7)
     : undefined;
 
-  const token = queryToken ?? cookieToken ?? bearerToken;
-  return timingSafeTokenCompare(token, config.pairToken);
+  if (bearerToken && timingSafeTokenCompare(bearerToken, config.pairToken)) {
+    return true;
+  }
+
+  return false;
+}
+
+function setAuthCookie(res: ServerResponse, req: IncomingMessage): void {
+  const isHttps = req.headers['x-forwarded-proto'] === 'https' ||
+                  req.headers.host?.startsWith('https') ||
+                  config.isProduction;
+  const securePart = isHttps ? '; Secure' : '';
+  res.setHeader(
+    'Set-Cookie',
+    `PAIR_TOKEN=${config.pairToken}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${COOKIE_MAX_AGE}${securePart}`
+  );
+}
+
+function clearAuthCookie(res: ServerResponse, req: IncomingMessage): void {
+  const isHttps = req.headers['x-forwarded-proto'] === 'https' ||
+                  req.headers.host?.startsWith('https') ||
+                  config.isProduction;
+  const securePart = isHttps ? '; Secure' : '';
+  res.setHeader(
+    'Set-Cookie',
+    `PAIR_TOKEN=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0${securePart}`
+  );
 }
 
 function sendJson(res: ServerResponse, data: unknown, status = 200): void {
@@ -194,28 +225,19 @@ addRoute('GET', '/health', async (req, res) => {
   });
 });
 
-const COOKIE_MAX_AGE = 30 * 24 * 60 * 60;
-
 addRoute('GET', '/', async (req, res) => {
-  if (!isAuthenticated(req)) {
-    const loginHtml = getLoginHtml();
-    sendHtml(res, loginHtml);
+  const url = parseUrl(req.url ?? '', true);
+  const queryToken = url.query['token'] as string | undefined;
+
+  if (queryToken && timingSafeTokenCompare(queryToken, config.pairToken)) {
+    setAuthCookie(res, req);
+    redirect(res, '/');
     return;
   }
 
-  const url = parseUrl(req.url ?? '', true);
-  const queryToken = url.query['token'] as string | undefined;
-  
-  if (queryToken && timingSafeTokenCompare(queryToken, config.pairToken)) {
-    const isHttps = req.headers['x-forwarded-proto'] === 'https' ||
-                    req.headers.host?.startsWith('https') ||
-                    config.isProduction;
-    const securePart = isHttps ? '; Secure' : '';
-    res.setHeader(
-      'Set-Cookie',
-      `PAIR_TOKEN=${config.pairToken}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${COOKIE_MAX_AGE}${securePart}`
-    );
-    redirect(res, '/');
+  if (!isAuthenticated(req)) {
+    const loginHtml = getLoginHtml();
+    sendHtml(res, loginHtml);
     return;
   }
 
@@ -290,13 +312,9 @@ addRoute('GET', '/settings', async (req, res) => {
 });
 
 addRoute('GET', '/api/auth/session', async (req, res) => {
-  const cookies = req.headers.cookie ?? '';
-  const cookieToken = cookies
-    .split(';')
-    .map((c) => c.trim().split('='))
-    .find(([key]) => key === 'PAIR_TOKEN')?.[1];
+  const cookieToken = getPairTokenCookie(req);
 
-  if (timingSafeTokenCompare(cookieToken, config.pairToken)) {
+  if (cookieToken && timingSafeTokenCompare(cookieToken, config.pairToken)) {
     res.writeHead(200);
     res.end();
   } else {
@@ -533,14 +551,7 @@ addRoute('POST', '/auth', async (req, res) => {
   const token = body.token;
 
   if (timingSafeTokenCompare(token, config.pairToken)) {
-    const isHttps = req.headers['x-forwarded-proto'] === 'https' || 
-                    req.headers.host?.startsWith('https') ||
-                    config.isProduction;
-    const securePart = isHttps ? '; Secure' : '';
-    res.setHeader(
-      'Set-Cookie',
-      `PAIR_TOKEN=${config.pairToken}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${COOKIE_MAX_AGE}${securePart}`
-    );
+    setAuthCookie(res, req);
     sendJson(res, { success: true });
   } else {
     sendError(res, 'Invalid token', 401);
@@ -548,14 +559,7 @@ addRoute('POST', '/auth', async (req, res) => {
 });
 
 addRoute('POST', '/logout', async (req, res) => {
-  const isHttps = req.headers['x-forwarded-proto'] === 'https' || 
-                  req.headers.host?.startsWith('https') ||
-                  config.isProduction;
-  const securePart = isHttps ? '; Secure' : '';
-  res.setHeader(
-    'Set-Cookie',
-    `PAIR_TOKEN=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0${securePart}`
-  );
+  clearAuthCookie(res, req);
   sendJson(res, { success: true });
 });
 
@@ -969,15 +973,6 @@ addRoute('GET', '/api/connector/onboarding', async (req, res) => {
   sendJson(res, { success: true, data });
 });
 
-addRoute('POST', '/api/connector/ack-admin-token', async (req, res) => {
-  if (!isAuthenticated(req)) {
-    sendError(res, 'Unauthorized', 401);
-    return;
-  }
-
-  updateSettings({ connectorAdminTokenAcknowledged: true });
-  sendJson(res, { success: true });
-});
 
 interface ServiceInfo {
   id: string;
@@ -2301,11 +2296,7 @@ export function startServer(): void {
   server.listen(config.port, config.host, () => {
     log.info({ host: config.host, port: config.port }, 'HTTP server started');
     
-    if (config.isProduction) {
-      console.log(`\n🌐 Web UI: http://${config.host}:${config.port}/`);
-      console.log(`   Enter your PAIR_TOKEN to authenticate`);
-    } else {
-      console.log(`\n🌐 Web UI: http://${config.host}:${config.port}/?token=${config.pairToken}`);
-    }
+    console.log(`\n🌐 Web UI: http://${config.host}:${config.port}/`);
+    console.log(`   Enter your PAIR_TOKEN (טוקן גישה) to authenticate`);
   });
 }
