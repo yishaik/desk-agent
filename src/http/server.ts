@@ -23,6 +23,7 @@ import { requiresConfirmation } from '../core/confirmations.ts';
 import { listSkillPacks, isKnownSkillPack, DEFAULT_SKILL_PACKS } from '../core/skills.ts';
 import { listProjects, createProject, getProject } from '../core/memory.ts';
 import { slugifyProjectName, validateProjectId, ProjectIdValidationError } from '../core/projects.ts';
+import { validateServiceId, ServiceIdValidationError } from '../open-connector/client.ts';
 import { getWhatsAppClient } from '../whatsapp/client.ts';
 import { createClient, isRealConnection } from '../open-connector/client.ts';
 import { 
@@ -841,11 +842,6 @@ addRoute('POST', '/api/setup/complete', async (req, res) => {
     return;
   }
 
-  if (config.connectorAdminToken && !settings.connectorAdminTokenAcknowledged) {
-    sendError(res, 'יש לאשר את שמירת טוקן הניהול של Open Connector לפני סיום ההגדרה.', 400);
-    return;
-  }
-
   markSetupComplete();
   sendJson(res, { success: true });
 });
@@ -966,6 +962,8 @@ interface ServiceInfo {
   identity?: string;
 }
 
+const DEFAULT_CONNECT_SERVICES = new Set(['gmail', 'googlecalendar']);
+
 addRoute('GET', '/api/connector/services', async (req, res) => {
   if (!isAuthenticated(req)) {
     sendError(res, 'Unauthorized', 401);
@@ -984,7 +982,9 @@ addRoute('GET', '/api/connector/services', async (req, res) => {
     const realConnections = connections.filter(isRealConnection);
     const connectionMap = new Map(realConnections.map((c) => [c.service, c]));
 
-    const data: ServiceInfo[] = providers.map((p) => {
+    const filteredProviders = providers.filter((p) => DEFAULT_CONNECT_SERVICES.has(p.id));
+
+    const data: ServiceInfo[] = filteredProviders.map((p) => {
       const conn = connectionMap.get(p.id);
       return {
         id: p.id,
@@ -1329,10 +1329,31 @@ addRoute('POST', '/api/connector/services/:service/connect', async (req, res) =>
 
   const url = parseUrl(req.url ?? '', true);
   const pathParts = (url.pathname ?? '').split('/');
-  const service = pathParts[4];
+  const rawService = pathParts[4];
 
-  if (!service) {
+  if (!rawService) {
     sendError(res, 'Service ID required', 400);
+    return;
+  }
+
+  let service: string;
+  try {
+    service = validateServiceId(decodeURIComponent(rawService));
+  } catch (err) {
+    if (err instanceof ServiceIdValidationError) {
+      sendError(res, err.message, 400);
+      return;
+    }
+    throw err;
+  }
+
+  if (!DEFAULT_CONNECT_SERVICES.has(service)) {
+    const consoleUrl = getConsoleUrl();
+    sendJson(res, {
+      success: false,
+      error: `Service '${service}' is not available for direct connect. Use the Open Connector console for additional services.`,
+      consoleUrl,
+    }, 400);
     return;
   }
 

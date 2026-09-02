@@ -7,10 +7,28 @@ const log = createChildLogger('open-connector');
 const ID_PATTERN = /^[a-z0-9][a-z0-9_.-]{0,127}$/i;
 const DEFAULT_TIMEOUT_MS = 15_000;
 
+export class ServiceIdValidationError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'ServiceIdValidationError';
+  }
+}
+
 function validateId(id: string, label: string): void {
   if (!ID_PATTERN.test(id)) {
     throw new Error(`invalid ${label}`);
   }
+}
+
+export function validateServiceId(serviceId: string): string {
+  if (!serviceId || typeof serviceId !== 'string') {
+    throw new ServiceIdValidationError('Service ID is required');
+  }
+  const trimmed = serviceId.trim();
+  if (!ID_PATTERN.test(trimmed)) {
+    throw new ServiceIdValidationError(`Service ID '${trimmed}' contains invalid characters`);
+  }
+  return trimmed;
 }
 
 export interface ActionInput {
