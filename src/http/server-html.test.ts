@@ -78,6 +78,25 @@ describe('HTML Escape Security', () => {
   });
 });
 
+describe('S-03: Pairing API returns boundOwnerPhone', () => {
+  let serverCode: string;
+
+  beforeAll(() => {
+    serverCode = fs.readFileSync(path.join(__dirname, 'server.ts'), 'utf8');
+  });
+
+  it('pairing API response includes boundOwnerPhone when owner is set', () => {
+    expect(serverCode).toContain('boundOwnerPhone: settings.ownerPhone');
+  });
+
+  it('pairing API loads settings to check ownerPhone', () => {
+    const pairingRouteMatch = serverCode.match(/addRoute\('GET',\s*'\/api\/pairing'[\s\S]*?^\}\);/m);
+    const pairingRoute = pairingRouteMatch?.[0] || '';
+    expect(pairingRoute).toContain('loadSettings()');
+    expect(pairingRoute).toContain('boundOwnerPhone');
+  });
+});
+
 describe('Server HTML Source Code Requirements', () => {
   let serverCode: string;
 

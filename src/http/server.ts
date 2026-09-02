@@ -579,11 +579,19 @@ addRoute('GET', '/api/pairing', async (req, res) => {
 
   const wa = getWhatsAppClient();
   const state = wa.getPairingState();
+  const settings = loadSettings();
   let qrDataUrl: string | undefined;
   if (!state.isPaired && state.qrCode) {
     qrDataUrl = await QRCode.toDataURL(state.qrCode, { width: 280, margin: 1 });
   }
-  sendJson(res, { success: true, data: { ...state, qrDataUrl } });
+  sendJson(res, {
+    success: true,
+    data: {
+      ...state,
+      qrDataUrl,
+      boundOwnerPhone: settings.ownerPhone || undefined,
+    },
+  });
 });
 
 function redactSettings(settings: ReturnType<typeof loadSettings>): ReturnType<typeof loadSettings> {

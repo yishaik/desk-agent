@@ -115,7 +115,7 @@ export class WhatsAppClient {
         creds: state.creds,
         keys: makeCacheableSignalKeyStore(state.keys, baileysLogger),
       },
-      generateHighQualityLinkPreview: true,
+      generateHighQualityLinkPreview: false,
     });
 
     this.setupEventHandlers(saveCreds);
@@ -206,18 +206,38 @@ export class WhatsAppClient {
       }
 
       if (connection === 'open') {
+        const newPhoneNumber = this.socket?.user?.id?.split(':')[0]?.split('@')[0];
+        const newName = this.socket?.user?.name;
+        const settings = loadSettings();
+
+        if (settings.ownerPhone && newPhoneNumber && newPhoneNumber !== settings.ownerPhone) {
+          log.error(
+            { attemptedPhone: newPhoneNumber, ownerPhone: settings.ownerPhone },
+            'ניסיון צימוד לא מורשה: מספר טלפון שונה מהבעלים הרשום'
+          );
+          this.pairingState = {
+            isPaired: false,
+            error: `צימוד נדחה: מספר ${newPhoneNumber} אינו הבעלים הרשום (${settings.ownerPhone}). יש לבצע איפוס מפורש של הבעלים או לסרוק עם הטלפון המקורי.`,
+          };
+          this.ownerJid = null;
+          this.ownerLid = null;
+          if (this.socket) {
+            this.socket.end(undefined);
+            this.socket = null;
+          }
+          return;
+        }
+
         this.pairingState = {
           isPaired: true,
-          phoneNumber: this.socket?.user?.id?.split(':')[0]?.split('@')[0],
-          name: this.socket?.user?.name,
+          phoneNumber: newPhoneNumber,
+          name: newName,
         };
         this.ownerJid = this.socket?.user?.id ?? null;
-        // "Message yourself" chats use the account's LID, not the phone JID.
         this.ownerLid = (this.socket?.user as { lid?: string } | undefined)?.lid ?? null;
         this.pairingState.selfChat = this.selfChatMode();
         this.reconnectAttempts = 0;
 
-        const settings = loadSettings();
         if (!settings.ownerPhone && this.pairingState.phoneNumber) {
           updateSettings({ ownerPhone: this.pairingState.phoneNumber });
         }
