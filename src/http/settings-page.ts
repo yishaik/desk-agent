@@ -666,8 +666,8 @@ export function getSettingsHtml(data: SettingsPageData): string {
         <span class="info-label">חיבורים פעילים</span>
         <span class="info-value">${connectorStatus.connectionCount}</span>
       </div>
-      <div class="btn-group">
-        <a href="${escapeHtml(connectorStatus.consoleUrl || '#')}" target="_blank">
+      <div class="btn-group" id="consoleLinkContainer" style="display: none;">
+        <a id="consoleLinkHref" href="#" target="_blank">
           <button type="button" class="secondary">פתח את הקונסול</button>
         </a>
       </div>
@@ -1048,17 +1048,19 @@ export function getSettingsHtml(data: SettingsPageData): string {
         const tools = json.data || [];
         
         if (tools.length === 0) {
-          const connectorRes = await fetch('/api/connector/onboarding');
+          const connectorRes = await fetch('/api/connector/status');
           const connectorData = connectorRes.ok ? (await connectorRes.json()).data : {};
-          const consoleUrl = connectorData.consoleUrl || '#';
+          const consoleUrl = connectorData.consoleUrl || '';
+          
+          const consoleLinkHtml = isPublicConsoleUrl(consoleUrl)
+            ? \`<p style="font-size: 13px; margin-top: 8px;"><a href="\${escapeHtml(consoleUrl)}" target="_blank" class="external-link">פתח את הקונסול</a> כדי לחבר כלים חדשים</p>\`
+            : '';
           
           container.innerHTML = \`
             <div class="empty-state">
               <div class="empty-state-icon">🧰</div>
               <p>אין כלים מחוברים</p>
-              <p style="font-size: 13px; margin-top: 8px;">
-                <a href="\${escapeHtml(consoleUrl)}" target="_blank" class="external-link">פתח את הקונסול</a> כדי לחבר כלים חדשים
-              </p>
+              \${consoleLinkHtml}
             </div>
           \`;
           return;
@@ -1221,8 +1223,43 @@ export function getSettingsHtml(data: SettingsPageData): string {
       }
     }
 
+    function isPublicConsoleUrl(url) {
+      if (!url) return false;
+      try {
+        const parsed = new URL(url);
+        const host = parsed.hostname.toLowerCase();
+        if (host === 'connector' || host === 'localhost' || host === '127.0.0.1' || host === '::1') {
+          return false;
+        }
+        if (host.endsWith('.local') || host.endsWith('.internal')) {
+          return false;
+        }
+        return true;
+      } catch {
+        return false;
+      }
+    }
+
+    async function loadConnectorConsoleLink() {
+      try {
+        const res = await fetch('/api/connector/status');
+        const { data } = await res.json();
+        
+        const linkContainer = document.getElementById('consoleLinkContainer');
+        const linkHref = document.getElementById('consoleLinkHref');
+        
+        if (linkContainer && linkHref && data.consoleUrl && isPublicConsoleUrl(data.consoleUrl)) {
+          linkHref.href = data.consoleUrl;
+          linkContainer.style.display = 'block';
+        }
+      } catch (err) {
+        // Console link stays hidden on error
+      }
+    }
+
     loadProviders();
     loadTools();
+    loadConnectorConsoleLink();
   </script>
 </body>
 </html>`;

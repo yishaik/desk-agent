@@ -580,6 +580,16 @@ addRoute('GET', '/api/pairing', async (req, res) => {
   sendJson(res, { success: true, data: { ...state, qrDataUrl } });
 });
 
+function redactSettings(settings: ReturnType<typeof loadSettings>): ReturnType<typeof loadSettings> {
+  return {
+    ...settings,
+    sharedConnectorToken: settings.sharedConnectorToken ? '***' : undefined,
+    projectTokens: Object.fromEntries(
+      Object.entries(settings.projectTokens).map(([k, v]) => [k, v ? '***' : ''])
+    ),
+  };
+}
+
 addRoute('GET', '/api/settings', async (req, res) => {
   if (!isAuthenticated(req)) {
     sendError(res, 'Unauthorized', 401);
@@ -587,14 +597,7 @@ addRoute('GET', '/api/settings', async (req, res) => {
   }
 
   const settings = loadSettings();
-  const safeSettings = {
-    ...settings,
-    sharedConnectorToken: settings.sharedConnectorToken ? '***' : undefined,
-    projectTokens: Object.fromEntries(
-      Object.entries(settings.projectTokens).map(([k, v]) => [k, v ? '***' : ''])
-    ),
-  };
-  sendJson(res, { success: true, data: safeSettings });
+  sendJson(res, { success: true, data: redactSettings(settings) });
 });
 
 addRoute('PUT', '/api/settings', async (req, res) => {
@@ -613,8 +616,42 @@ addRoute('PUT', '/api/settings', async (req, res) => {
     timezone: string;
     model: string;
     apiKeyMode: 'shared' | 'per-project';
-    sharedConnectorToken: string;
   }>>(req);
+
+  const stringFields: Array<keyof typeof body> = [
+    'botName', 'ownerName', 'businessName', 'businessDescription',
+    'agentVoice', 'agentBoundaries', 'timezone', 'model',
+  ];
+  for (const field of stringFields) {
+    const value = body[field];
+    if (value !== undefined && typeof value === 'string' && value.length > 2000) {
+      sendError(res, `השדה ${field} ארוך מדי (מקסימום 2000 תווים)`, 400);
+      return;
+    }
+  }
+
+  if (body.timezone !== undefined) {
+    try {
+      const validTimezones = Intl.supportedValuesOf('timeZone');
+      if (!validTimezones.includes(body.timezone)) {
+        sendError(res, `אזור זמן לא תקין: ${body.timezone}`, 400);
+        return;
+      }
+    } catch {
+      sendError(res, `אזור זמן לא תקין: ${body.timezone}`, 400);
+      return;
+    }
+  }
+
+  if (body.apiKeyMode !== undefined && body.apiKeyMode !== 'shared' && body.apiKeyMode !== 'per-project') {
+    sendError(res, `ערך apiKeyMode לא תקין`, 400);
+    return;
+  }
+
+  if (body.model !== undefined && !/^[a-z0-9.\/_-]+$/i.test(body.model)) {
+    sendError(res, `שם מודל לא תקין`, 400);
+    return;
+  }
 
   const previousSettings = loadSettings();
 
@@ -628,7 +665,6 @@ addRoute('PUT', '/api/settings', async (req, res) => {
   if (body.timezone !== undefined) updates.timezone = body.timezone;
   if (body.model !== undefined) updates.model = body.model;
   if (body.apiKeyMode !== undefined) updates.apiKeyMode = body.apiKeyMode;
-  if (body.sharedConnectorToken !== undefined) updates.sharedConnectorToken = body.sharedConnectorToken;
 
   const settings = updateSettings(updates);
   
@@ -656,7 +692,7 @@ addRoute('PUT', '/api/settings', async (req, res) => {
 
   sendJson(res, { 
     success: true, 
-    data: { ...settings, sharedConnectorToken: '***' },
+    data: redactSettings(settings),
     applied: sessionRecreated,
   });
 });

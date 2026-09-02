@@ -121,17 +121,37 @@ describe('getSettingsHtml', () => {
     expect(html).toContain('לא זמין');
   });
 
-  it('includes console URL link', () => {
+  it('does not hardcode console URL in href - loads from API', () => {
     const html = getSettingsHtml(createTestData({
       connectorStatus: {
         healthy: true,
         connectionCount: 1,
-        consoleUrl: 'http://custom-connector:3000',
+        consoleUrl: 'http://connector:3000',
       },
     }));
     
-    expect(html).toContain('href="http://custom-connector:3000"');
+    expect(html).not.toContain('href="http://connector:3000"');
+    expect(html).not.toContain('href="http://localhost:3000"');
     expect(html).toContain('פתח את הקונסול');
+    expect(html).toContain('id="consoleLinkContainer"');
+    expect(html).toContain('style="display: none;"');
+  });
+
+  it('validates console URL is public via isPublicConsoleUrl', () => {
+    const html = getSettingsHtml(createTestData());
+    
+    expect(html).toContain('isPublicConsoleUrl');
+    expect(html).toContain("host === 'connector'");
+    expect(html).toContain("host === 'localhost'");
+    expect(html).toContain("host === '127.0.0.1'");
+  });
+
+  it('loads console URL from /api/connector/status via JavaScript', () => {
+    const html = getSettingsHtml(createTestData());
+    
+    expect(html).toContain("fetch('/api/connector/status')");
+    expect(html).toContain('loadConnectorConsoleLink');
+    expect(html).toContain('data.consoleUrl');
   });
 
   it('escapes HTML in user-provided content', () => {
