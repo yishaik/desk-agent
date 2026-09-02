@@ -648,3 +648,41 @@ describe('Skills Pack Service IDs', () => {
     expect(skill.actions).not.toContain('google-calendar.list_events');
   });
 });
+
+describe('consoleUrl never returns docker-internal URL (#38)', () => {
+  it('uses CONSOLE_URL when set', async () => {
+    vi.resetModules();
+    process.env['CONSOLE_URL'] = 'https://console.example.com';
+    process.env['CONNECTOR_ORIGIN'] = 'https://agent.example.com';
+    
+    const { loadConfig } = await import('../core/config.ts');
+    const config = loadConfig();
+    
+    expect(config.connectorConsoleUrl).toBe('https://console.example.com');
+  });
+
+  it('falls back to CONNECTOR_ORIGIN when CONSOLE_URL not set', async () => {
+    vi.resetModules();
+    delete process.env['CONSOLE_URL'];
+    process.env['CONNECTOR_ORIGIN'] = 'https://agent.example.com';
+    
+    const { loadConfig } = await import('../core/config.ts');
+    const config = loadConfig();
+    
+    expect(config.connectorConsoleUrl).toBeUndefined();
+    expect(config.connectorOrigin).toBe('https://agent.example.com');
+  });
+
+  it('config never exposes connector:3000 as consoleUrl', async () => {
+    vi.resetModules();
+    process.env['CONSOLE_URL'] = 'https://oc.example.com';
+    process.env['OPEN_CONNECTOR_URL'] = 'http://connector:3000';
+    
+    const { loadConfig } = await import('../core/config.ts');
+    const config = loadConfig();
+    
+    expect(config.openConnectorUrl).toBe('http://connector:3000');
+    expect(config.connectorConsoleUrl).toBe('https://oc.example.com');
+    expect(config.connectorConsoleUrl).not.toContain('connector:3000');
+  });
+});
