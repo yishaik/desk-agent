@@ -143,7 +143,7 @@ All configuration is via environment variables. See `.env.example` for the full 
 
 **Setup:**
 1. Create CX23 with Ubuntu 22.04, add SSH key
-2. Point DNS A record to the VM's IPv4
+2. Point two DNS A records to the VM's IPv4: `your-domain.com` and `console.your-domain.com`
 3. SSH in, install Docker, clone repo, configure `.env`, run `docker compose up -d`
 
 ### Fallback Options (if CX23 sold out)
@@ -176,20 +176,18 @@ Caddy handles TLS and routing:
 
 | Domain | Path | Auth | Target | Notes |
 |--------|------|------|--------|-------|
-| `{$DOMAIN}` | `/oauth/*`, `/api/oauth/*` | Public | `connector:3000` | OAuth flows |
-| `{$DOMAIN}` | `/connector/*` | Cookie | `connector:3000` | Console SPA |
-| `{$DOMAIN}` | `/assets/*`, `/api/connections*`, `/api/providers*`, `/api/actions/*` | Cookie | `connector:3000` | Console APIs |
-| `{$DOMAIN}` | `/*` | Cookie | `agent:3001` | Agent UI/API |
+| `{$CONSOLE_DOMAIN}` | `/*` | OC admin-token login | `connector:3000` | Open Connector console (whole origin) |
+| `{$DOMAIN}` | `/oauth/*` | Public | `connector:3000` | OAuth redirect target |
+| `{$DOMAIN}` | `/*` | PAIR_TOKEN cookie | `agent:3001` | Agent wizard / settings / API |
 
 **Security:**
-- Console and OC APIs are gated with PAIR_TOKEN cookie (same as Settings)
-- `/mcp`, `/v1/*`, `/api/files/*`, `/api/runs*`, `/openapi.json` are NOT exposed on public Caddy
-- Agent-to-connector traffic uses internal Docker network (`http://connector:3000`)
-- OAuth routes are public (browser redirect flow)
+- The console SPA uses absolute paths and a router without a base path, so it must own its host — it cannot be served under `/connector/` on the agent's origin (#72)
+- On `{$DOMAIN}` nothing but the OAuth callback reaches the connector: `/v1/*`, `/mcp`, `/api/files/*`, `/api/runs*`, `/openapi.json` stay internal
+- Agent-to-connector traffic uses the internal Docker network (`http://connector:3000`)
 
-**Console URL:** `https://your-domain.com/connector/` (requires login)
+**Console URL:** `https://console.your-domain.com` (log in with the admin token the wizard shows once). Override the host with `CONSOLE_DOMAIN` / the link with `CONSOLE_URL`.
 
-Set `CONNECTOR_ORIGIN=https://your-domain.com` so OAuth callbacks and console URL work correctly.
+Set `CONNECTOR_ORIGIN=https://your-domain.com` so OAuth callbacks land on the agent's domain.
 
 ### Production Tips
 
