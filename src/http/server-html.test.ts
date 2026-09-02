@@ -121,11 +121,25 @@ describe('Server HTML Source Code Requirements', () => {
       expect(serverCode).not.toMatch(/connectProvider\('openai'\)/);
     });
 
-    it('provider element IDs match API provider IDs', () => {
-      // anthropic is hidden from the wizard (Settings: hide Pi anthropic)
+    it('Claude card uses claude-code provider ID', () => {
+      expect(serverCode).toContain("connectProvider('claude-code')");
+      expect(serverCode).not.toMatch(/onclick="connectProvider\('anthropic'\)"/);
+    });
+
+    it('anthropic extra-usage card is hidden from wizard', () => {
+      expect(serverCode).not.toContain('id="anthropic-card"');
       expect(serverCode).not.toContain('id="anthropic-status"');
       expect(serverCode).not.toContain('id="anthropic-btn"');
-      // ChatGPT (openai-codex) and Claude Code should be present
+      expect(serverCode).not.toContain('Claude (Anthropic · extra usage)');
+    });
+
+    it('claude-code provider elements exist in wizard', () => {
+      expect(serverCode).toContain('id="claude-code-status"');
+      expect(serverCode).toContain('id="claude-code-btn"');
+      expect(serverCode).toContain('id="claude-code-card"');
+    });
+
+    it('provider element IDs match API provider IDs', () => {
       expect(serverCode).toContain('id="openai-codex-status"');
       expect(serverCode).toContain('id="openai-codex-btn"');
       expect(serverCode).toContain('id="claude-code-status"');
@@ -136,6 +150,33 @@ describe('Server HTML Source Code Requirements', () => {
       // Pi extra-usage anthropic path is hidden per issue #52
       expect(serverCode).not.toContain("connectProvider('anthropic')");
       expect(serverCode).not.toContain('extra usage');
+    });
+
+    it('claude-code uses popup-first pattern with about:blank', () => {
+      expect(serverCode).toContain("window.open('about:blank'");
+      expect(serverCode).toContain("providerId === 'claude-code'");
+      expect(serverCode).toContain('currentPopup.location = json.authorizeUrl');
+    });
+
+    it('claude-code paste fallback shows קוד not callback URL', () => {
+      expect(serverCode).toContain('הדבק את הקוד שקיבלת מ-Claude');
+      expect(serverCode).toContain("callbackUrl.placeholder = 'הדבק קוד כאן...'");
+    });
+
+    it('poll checks for both success and connected status', () => {
+      expect(serverCode).toContain("data.status === 'success' || data.status === 'connected'");
+    });
+
+    it('openai-codex shows device code modal with userCode and verificationUri', () => {
+      expect(serverCode).toContain('id="deviceCodeModal"');
+      expect(serverCode).toContain('id="userCodeDisplay"');
+      expect(serverCode).toContain('id="verificationLink"');
+      expect(serverCode).toContain('json.userCode');
+      expect(serverCode).toContain('json.verificationUri');
+    });
+
+    it('loadProviders skips anthropic provider when updating UI', () => {
+      expect(serverCode).toContain("if (p.id === 'anthropic') continue");
     });
 
     it('step 2 uses hasAiProvider from listProviders, not settings.model', () => {
@@ -157,9 +198,14 @@ describe('Server HTML Source Code Requirements', () => {
       expect(serverCode).not.toContain('poll-timeout-error');
     });
 
-    it('wizard shows paste modal for openai-codex only after authorize URL opens', () => {
+    it('wizard openai-codex timeout shows paste hint not failure', () => {
+      expect(serverCode).toContain("hint.textContent = 'הזמן עבר. נסה להזין את הקוד שוב או הדבק callback URL למטה.'");
+      expect(serverCode).not.toContain("alert('timeout')");
+    });
+
+    it('wizard shows device code modal for openai-codex', () => {
       expect(serverCode).toContain("providerId === 'openai-codex'");
-      expect(serverCode).toContain("document.getElementById('pasteModal').style.display = 'block'");
+      expect(serverCode).toContain("document.getElementById('deviceCodeModal').style.display = 'block'");
     });
 
     it('wizard allows reconnect for already-connected providers', () => {
