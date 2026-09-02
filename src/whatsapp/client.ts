@@ -287,16 +287,6 @@ export class WhatsAppClient {
   }
 
   resolveSelfChatJid(): string | null {
-    if (!this.ownerJid) return null;
-
-    if (this.ownerJid.includes(':') && this.ownerJid.endsWith('@s.whatsapp.net')) {
-      return this.ownerJid;
-    }
-
-    if (this.ownerJid.endsWith('@lid')) {
-      return this.ownerJid;
-    }
-
     return this.ownerJid;
   }
 

@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { IncomingMessage, ServerResponse } from 'node:http';
+import { IncomingMessage } from 'node:http';
 import { existsSync, rmSync, mkdirSync } from 'node:fs';
 import { parse as parseUrl } from 'node:url';
 

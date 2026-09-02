@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import { existsSync, mkdirSync } from 'node:fs';
 import { config } from './config.ts';
 import { createChildLogger } from './logger.ts';
-import type { Message, ConversationContext, Project } from './types.ts';
+import type { Message, Project } from './types.ts';
 
 const log = createChildLogger('memory');
 
@@ -152,76 +152,6 @@ export function saveMessage(message: Message): void {
       message.timestamp,
       message.isFromMe ? 1 : 0
     );
-}
-
-export function getRecentMessages(projectId: string, limit = 50): Message[] {
-  const database = getDb();
-  const rows = database
-    .prepare(
-      `SELECT * FROM messages WHERE project_id = ? ORDER BY timestamp DESC LIMIT ?`
-    )
-    .all(projectId, limit) as {
-    id: string;
-    project_id: string;
-    from_jid: string;
-    to_jid: string;
-    body: string;
-    timestamp: number;
-    is_from_me: number;
-  }[];
-
-  return rows.reverse().map((row) => ({
-    id: row.id,
-    from: row.from_jid,
-    to: row.to_jid,
-    body: row.body,
-    timestamp: row.timestamp,
-    isFromMe: row.is_from_me === 1,
-    projectId: row.project_id,
-  }));
-}
-
-export function getConversationContext(projectId: string): ConversationContext {
-  const messages = getRecentMessages(projectId);
-  const database = getDb();
-
-  const summaryRow = database
-    .prepare(
-      `SELECT summary FROM summaries WHERE project_id = ? ORDER BY created_at DESC LIMIT 1`
-    )
-    .get(projectId) as { summary: string } | undefined;
-
-  return {
-    projectId,
-    messages,
-    summary: summaryRow?.summary,
-  };
-}
-
-export function saveSummary(projectId: string, summary: string, messageCount: number): void {
-  const database = getDb();
-  database
-    .prepare(
-      `INSERT INTO summaries (project_id, summary, message_count) VALUES (?, ?, ?)`
-    )
-    .run(projectId, summary, messageCount);
-  log.debug({ projectId, messageCount }, 'Saved summary');
-}
-
-export function clearOldMessages(projectId: string, keepCount = 100): number {
-  const database = getDb();
-  const result = database
-    .prepare(
-      `DELETE FROM messages WHERE project_id = ? AND id NOT IN (
-        SELECT id FROM messages WHERE project_id = ? ORDER BY timestamp DESC LIMIT ?
-      )`
-    )
-    .run(projectId, projectId, keepCount);
-  
-  if (result.changes > 0) {
-    log.info({ projectId, deleted: result.changes }, 'Cleared old messages');
-  }
-  return result.changes;
 }
 
 export function closeDatabase(): void {
