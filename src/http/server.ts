@@ -1348,11 +1348,9 @@ addRoute('POST', '/api/connector/services/:service/connect', async (req, res) =>
   }
 
   if (!DEFAULT_CONNECT_SERVICES.has(service)) {
-    const consoleUrl = getConsoleUrl();
     sendJson(res, {
       success: false,
-      error: `Service '${service}' is not available for direct connect. Use the Open Connector console for additional services.`,
-      consoleUrl,
+      error: `שירות '${service}' אינו זמין להתחברות ישירה. ניתן לחבר כלים נוספים בהתאם לצרכים.`,
     }, 400);
     return;
   }
@@ -1375,14 +1373,9 @@ addRoute('POST', '/api/connector/services/:service/connect', async (req, res) =>
     }
 
     if (!provider.authTypes.includes('oauth2')) {
-      const authTypesDisplay = provider.authTypes.length > 0 
-        ? provider.authTypes.join(', ') 
-        : 'none';
       sendJson(res, {
         success: false,
-        error: `Service '${service}' does not support OAuth2 (supports: ${authTypesDisplay}). Configure it in Open Connector console.`,
-        consoleUrl,
-        authTypes: provider.authTypes,
+        error: `שגיאת תצורה בשירות '${service}'. אנא נסה שוב מאוחר יותר.`,
       }, 400);
       return;
     }
@@ -1401,8 +1394,7 @@ addRoute('POST', '/api/connector/services/:service/connect', async (req, res) =>
     if (errorMessage.includes('OAuth') || errorMessage.includes('client') || errorMessage.includes('config')) {
       sendJson(res, {
         success: false,
-        error: `OAuth not configured for '${service}'. Configure OAuth credentials in Open Connector console.`,
-        consoleUrl,
+        error: `שגיאת תצורה בחיבור '${service}'. אנא נסה שוב מאוחר יותר.`,
       }, 400);
       return;
     }
