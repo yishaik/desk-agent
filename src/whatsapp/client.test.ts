@@ -82,45 +82,36 @@ describe('Disconnect reason handling', () => {
   });
 });
 
-describe('getSelfChatJid LID-only policy', () => {
+describe('getSelfChatJid — LID preferred, phone JID fallback (#73)', () => {
   it('returns ownerLid when it ends with @lid', async () => {
     const { WhatsAppClient } = await import('./client.ts');
     const client = new WhatsAppClient();
-    
-    (client as unknown as { ownerLid: string | null }).ownerLid = '123456789@lid';
-    
-    const result = client.getSelfChatJid();
-    expect(result).toBe('123456789@lid');
-  });
-
-  it('returns null when ownerLid is null', async () => {
-    const { WhatsAppClient } = await import('./client.ts');
-    const client = new WhatsAppClient();
-    
-    (client as unknown as { ownerLid: string | null }).ownerLid = null;
-    
-    const result = client.getSelfChatJid();
-    expect(result).toBeNull();
-  });
-
-  it('returns null when ownerLid does not end with @lid', async () => {
-    const { WhatsAppClient } = await import('./client.ts');
-    const client = new WhatsAppClient();
-    
-    (client as unknown as { ownerLid: string | null }).ownerLid = '123456789@s.whatsapp.net';
-    
-    const result = client.getSelfChatJid();
-    expect(result).toBeNull();
-  });
-
-  it('CRITICAL: does not fall back to ownerJid or phone JID', async () => {
-    const { WhatsAppClient } = await import('./client.ts');
-    const client = new WhatsAppClient();
-    
     (client as unknown as { ownerJid: string | null }).ownerJid = '123456789:0@s.whatsapp.net';
+    (client as unknown as { ownerLid: string | null }).ownerLid = '987654321@lid';
+    expect(client.getSelfChatJid()).toBe('987654321@lid');
+  });
+
+  it("falls back to the owner's own phone JID (device suffix stripped) when there is no LID", async () => {
+    const { WhatsAppClient } = await import('./client.ts');
+    const client = new WhatsAppClient();
+    (client as unknown as { ownerJid: string | null }).ownerJid = '123456789:12@s.whatsapp.net';
     (client as unknown as { ownerLid: string | null }).ownerLid = null;
-    
-    const result = client.getSelfChatJid();
-    expect(result).toBeNull();
+    expect(client.getSelfChatJid()).toBe('123456789@s.whatsapp.net');
+  });
+
+  it('ignores a non-@lid value in ownerLid and still falls back to the phone JID', async () => {
+    const { WhatsAppClient } = await import('./client.ts');
+    const client = new WhatsAppClient();
+    (client as unknown as { ownerJid: string | null }).ownerJid = '123456789:0@s.whatsapp.net';
+    (client as unknown as { ownerLid: string | null }).ownerLid = '123456789@s.whatsapp.net';
+    expect(client.getSelfChatJid()).toBe('123456789@s.whatsapp.net');
+  });
+
+  it('returns null only when not connected (no LID and no owner JID)', async () => {
+    const { WhatsAppClient } = await import('./client.ts');
+    const client = new WhatsAppClient();
+    (client as unknown as { ownerJid: string | null }).ownerJid = null;
+    (client as unknown as { ownerLid: string | null }).ownerLid = null;
+    expect(client.getSelfChatJid()).toBeNull();
   });
 });

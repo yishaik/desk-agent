@@ -22,6 +22,7 @@ vi.mock('./client.ts', () => ({
     getOwnerPhone: mockGetOwnerPhone,
     getOwnerLid: mockGetOwnerLid,
     getSelfChatJid: mockGetSelfChatJid,
+    getPairingState: () => ({ isPaired: true, selfChat: 'lid' }),
     isConnected: mockIsConnected,
     isSelfJid: (jid: string | null | undefined) => {
       const ownerPhone = mockGetOwnerPhone();
@@ -595,5 +596,33 @@ describe('Confirmation Patterns (handler)', () => {
 
   it('CONFIRM_PATTERNS includes confirm', () => {
     expect(CONFIRM_PATTERNS.some((p) => p.test('confirm'))).toBe(true);
+  });
+});
+
+describe('resolveReplyJid — replies stay inside the owner\'s own chat (#73)', () => {
+  const ownerPhone = '123456789';
+  const ownerLid = 'ABC123XYZ@lid';
+  const isSelf = (jid: string) => isSelfChatJid(jid, ownerPhone, ownerLid);
+
+  it('uses the inbound LID self-chat when the message came from it', async () => {
+    const { resolveReplyJid } = await import('./self-chat.ts');
+    expect(resolveReplyJid('ABC123XYZ@lid', isSelf, '123456789@s.whatsapp.net')).toBe('ABC123XYZ@lid');
+  });
+
+  it('uses the inbound phone-JID self-chat when the account has no LID', async () => {
+    const { resolveReplyJid } = await import('./self-chat.ts');
+    const noLid = (jid: string) => isSelfChatJid(jid, ownerPhone, null);
+    expect(resolveReplyJid('123456789@s.whatsapp.net', noLid, '123456789@s.whatsapp.net')).toBe('123456789@s.whatsapp.net');
+  });
+
+  it('never replies into a foreign chat — falls back to the self-chat JID', async () => {
+    const { resolveReplyJid } = await import('./self-chat.ts');
+    expect(resolveReplyJid('555000111@s.whatsapp.net', isSelf, 'ABC123XYZ@lid')).toBe('ABC123XYZ@lid');
+    expect(resolveReplyJid('120363@g.us', isSelf, 'ABC123XYZ@lid')).toBe('ABC123XYZ@lid');
+  });
+
+  it('returns null when nothing is available', async () => {
+    const { resolveReplyJid } = await import('./self-chat.ts');
+    expect(resolveReplyJid(undefined, isSelf, null)).toBeNull();
   });
 });

@@ -56,3 +56,18 @@ export function isSelfChatJid(
 
   return false;
 }
+
+/**
+ * Where a reply/reaction goes. The inbound chat wins when it is the owner's
+ * own chat (LID or phone JID); otherwise the client's preferred self-chat JID.
+ * Never an arbitrary remoteJid — the self-chat gate is the only thing that
+ * lets a message in, and this keeps replies inside that same boundary (#73).
+ */
+export function resolveReplyJid(
+  inboundJid: string | null | undefined,
+  isSelfJid: (jid: string) => boolean,
+  selfChatJid: string | null
+): string | null {
+  if (inboundJid && isSelfJid(inboundJid)) return inboundJid;
+  return selfChatJid;
+}

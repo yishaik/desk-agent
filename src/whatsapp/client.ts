@@ -15,6 +15,7 @@ import { config } from '../core/config.ts';
 import { createChildLogger } from '../core/logger.ts';
 import { loadSettings, updateSettings } from '../core/settings.ts';
 import type { PairingState, Message, MessageKey } from '../core/types.ts';
+import { bareJid } from './self-chat.ts';
 
 const log = createChildLogger('whatsapp');
 
@@ -82,6 +83,7 @@ export class WhatsAppClient {
   private maxReconnectAttempts = 5;
   private ownerJid: string | null = null;
   private ownerLid: string | null = null;
+  private warnedNoLid = false;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 
   async connect(): Promise<void> {
@@ -212,6 +214,7 @@ export class WhatsAppClient {
         this.ownerJid = this.socket?.user?.id ?? null;
         // "Message yourself" chats use the account's LID, not the phone JID.
         this.ownerLid = (this.socket?.user as { lid?: string } | undefined)?.lid ?? null;
+        this.pairingState.selfChat = this.selfChatMode();
         this.reconnectAttempts = 0;
 
         const settings = loadSettings();
@@ -226,7 +229,17 @@ export class WhatsAppClient {
       }
     });
 
-    this.socket.ev.on('creds.update', saveCreds);
+    this.socket.ev.on('creds.update', async () => {
+      await saveCreds();
+      // The LID can arrive after 'open' (creds sync); pick it up as soon as it exists.
+      const me = this.socket?.authState?.creds?.me as { id?: string; lid?: string } | undefined;
+      if (me?.lid && me.lid !== this.ownerLid) {
+        this.ownerLid = me.lid;
+        this.pairingState.selfChat = this.selfChatMode();
+        log.info({ lid: me.lid }, 'Self-chat LID became available');
+      }
+      if (me?.id && !this.ownerJid) this.ownerJid = me.id;
+    });
 
     this.socket.ev.on('messages.upsert', async (m) => {
       if (m.type !== 'notify') return;
@@ -366,7 +379,7 @@ export class WhatsAppClient {
 
     const targetJid = this.getSelfChatJid();
     if (!targetJid) {
-      log.debug({ messageId: messageKey.id }, 'Skipping reaction: no LID self-chat available');
+      log.debug({ messageId: messageKey.id }, 'Skipping reaction: no self-chat available');
       return;
     }
 
@@ -383,12 +396,31 @@ export class WhatsAppClient {
     });
   }
 
+  /**
+   * The owner's own chat. Prefers the account LID ("message yourself"); when the
+   * account has no LID yet, falls back to the owner's phone JID — still the
+   * owner's own chat, never anyone else's. Without either there is no target (#73).
+   */
   getSelfChatJid(): string | null {
     if (this.ownerLid && this.ownerLid.endsWith('@lid')) {
       return this.ownerLid;
     }
-    log.debug({ ownerLid: this.ownerLid }, 'getSelfChatJid: no valid @lid available');
+    const phone = bareJid(this.ownerJid);
+    if (phone) {
+      if (!this.warnedNoLid) {
+        this.warnedNoLid = true;
+        log.warn({ ownerJid: this.ownerJid }, 'No LID available for this account — replying via the phone JID self-chat');
+      }
+      return `${phone}@s.whatsapp.net`;
+    }
+    log.debug('getSelfChatJid: not connected (no LID, no owner JID)');
     return null;
+  }
+
+  private selfChatMode(): 'lid' | 'phone' | 'none' {
+    if (this.ownerLid && this.ownerLid.endsWith('@lid')) return 'lid';
+    if (bareJid(this.ownerJid)) return 'phone';
+    return 'none';
   }
 
   async sendFile(
