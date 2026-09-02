@@ -47,10 +47,42 @@ const log = createChildLogger('handler');
 const COMMAND_PREFIX = '/';
 
 /**
- * Serial queue for non-bypass work. One chain so /project finishes before the
- * next prompt (#77) and so two prompts cannot share a Pi session (#33).
+ * Per-project processing queue — prevents concurrent messages from racing on
+ * the same Pi or Claude Code session (#33).
+ *
+ * Each entry is a promise that resolves when processing is complete. New
+ * messages chain onto the queue: `queue.set(id, queue.get(id).then(() => process()))`.
+ *
+ * `/project` is the exception: it waits for every project queue and then
+ * becomes the barrier the next prompt waits on, so the switch finishes before
+ * that prompt runs (#77).
  */
-let messageQueue: Promise<void> = Promise.resolve();
+const projectQueues = new Map<string, Promise<void>>();
+let projectSwitchBarrier: Promise<void> = Promise.resolve();
+
+function enqueueOnProject(projectId: string, work: () => Promise<void>): Promise<void> {
+  const previous = Promise.all([
+    projectQueues.get(projectId) ?? Promise.resolve(),
+    projectSwitchBarrier,
+  ]);
+  const current = previous.then(() => work());
+  projectQueues.set(projectId, current.catch(() => {}));
+  return current;
+}
+
+function enqueueProjectSwitch(work: () => Promise<void>): Promise<void> {
+  const previous = Promise.all([
+    ...projectQueues.values(),
+    projectSwitchBarrier,
+  ]);
+  const current = previous.then(() => work());
+  const swallowed = current.catch(() => {});
+  projectSwitchBarrier = swallowed;
+  for (const key of projectQueues.keys()) {
+    projectQueues.set(key, swallowed);
+  }
+  return current;
+}
 
 /**
  * Track which projects are currently processing — used to send ⏳ to messages
@@ -318,30 +350,34 @@ export async function handleMessage(message: Message): Promise<void> {
 
   const tracker = message.messageKey ? createReactionTracker(message.messageKey) : null;
 
+  const commandName = message.body.startsWith(COMMAND_PREFIX)
+    ? message.body.slice(COMMAND_PREFIX.length).split(' ')[0]?.toLowerCase()
+    : undefined;
+
   // Queue-bypass commands (/status, /help, etc.) can run immediately without
   // waiting for a queued model prompt to finish — they're read-only.
-  if (message.body.startsWith(COMMAND_PREFIX)) {
-    const commandName = message.body.slice(COMMAND_PREFIX.length).split(' ')[0]?.toLowerCase();
-    if (commandName && QUEUE_BYPASS_COMMANDS.has(commandName)) {
-      await handleCommandDirect(message, loadSettings(), wa, chatJid, tracker);
-      return;
-    }
+  if (commandName && QUEUE_BYPASS_COMMANDS.has(commandName)) {
+    await handleCommandDirect(message, loadSettings(), wa, chatJid, tracker);
+    return;
   }
 
-  // Everything else (model prompts, confirmations, /project) goes through the
-  // serial queue so a project switch finishes before the next prompt (#77).
-  const wasActive = activeProcessing.size > 0;
+  const isProjectSwitch = commandName === 'project';
+
+  // Prompts and confirmations stay per-project (#33). `/project` locks every
+  // queue so the switch completes before the next prompt (#77).
+  const wasActive = isProjectSwitch ? activeProcessing.size > 0 : activeProcessing.has(projectId);
 
   // If the model is already working on this project, send ⏳ immediately so
   // the user knows their message is queued, not lost.
   if (wasActive && tracker) {
     await safeReaction(tracker.messageKey!, 'queued');
-    log.debug({ projectId, messageId: message.id }, 'Message queued behind active processing');
+    log.debug({ projectId, messageId: message.id, isProjectSwitch }, 'Message queued behind active processing');
   }
 
-  const previousTask = messageQueue;
-  const currentTask = previousTask.then(() => processMessageQueued(message, wa, chatJid, tracker));
-  messageQueue = currentTask.catch(() => {});
+  const work = () => processMessageQueued(message, wa, chatJid, tracker);
+  const currentTask = isProjectSwitch
+    ? enqueueProjectSwitch(work)
+    : enqueueOnProject(projectId, work);
 
   await currentTask;
 }
