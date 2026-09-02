@@ -43,6 +43,9 @@ vi.mock('../agent/session.ts', () => ({
   confirmAction: vi.fn(() => false),
   cancelConfirmation: vi.fn(() => false),
   cleanupOldConfirmations: vi.fn(),
+  getAllPendingConfirmations: vi.fn(() => []),
+  cancelAllPendingConfirmations: vi.fn(() => 0),
+  formatPendingForUser: vi.fn(() => ''),
   checkCredentialsBeforePrompt: vi.fn(async () => ({ valid: true, model: true, modelId: 'test' })),
   recreateSessionAfterCredentialChange: vi.fn(async () => {}),
   CredentialError: class extends Error {},
@@ -478,6 +481,7 @@ describe('Per-Project Processing Lock - Issue #33', () => {
       isSelfJid: (jid: string) => jid.includes('1234567890'),
       getSelfChatJid: () => '1234567890@lid',
       isConnected: () => true,
+      getPairingState: () => ({ isPaired: true, selfChat: 'lid' }),
       sendMessage: sendMessageMock,
       sendReaction: sendReactionMock,
     };
@@ -536,6 +540,119 @@ describe('Per-Project Processing Lock - Issue #33', () => {
     await handleMessage(statusMessage);
 
     expect(sendMessageMock).toHaveBeenCalled();
+  });
+
+  it('prompts on different projects may overlap (#33)', async () => {
+    const promptCalls: { projectId: string; start: number; end: number }[] = [];
+    let resolveP1Started!: () => void;
+    const p1Started = new Promise<void>((resolve) => {
+      resolveP1Started = resolve;
+    });
+
+    const settingsState = {
+      botName: 'TestBot',
+      ownerName: 'Test Owner',
+      timezone: 'UTC',
+      model: 'test-model',
+      apiKeyMode: 'none',
+      activeProject: 'p1',
+      services: [],
+      projectTokens: {},
+      setupComplete: true,
+      connectorAdminTokenAcknowledged: true,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+
+    vi.doMock('../agent/session.ts', async (importOriginal) => {
+      const original = await importOriginal<typeof import('../agent/session.ts')>();
+      return {
+        ...original,
+        checkCredentialsBeforePrompt: vi.fn().mockResolvedValue({
+          model: { id: 'test' },
+          modelId: 'test-model',
+          valid: true,
+        }),
+        getAllPendingConfirmations: vi.fn(() => []),
+        runPromptWithCallbacks: vi.fn().mockImplementation(async (projectId: string) => {
+          const start = Date.now();
+          if (projectId === 'p1') resolveP1Started();
+          await new Promise((r) => setTimeout(r, 50));
+          promptCalls.push({ projectId, start, end: Date.now() });
+          return `ok:${projectId}`;
+        }),
+      };
+    });
+
+    vi.doMock('./client.ts', () => ({
+      getWhatsAppClient: vi.fn().mockReturnValue({
+        getOwnerJid: () => '1234567890:123@s.whatsapp.net',
+        getOwnerPhone: () => '1234567890',
+        getOwnerLid: () => null,
+        isSelfJid: (jid: string) => jid.includes('1234567890'),
+        getSelfChatJid: () => '1234567890@lid',
+        isConnected: () => true,
+        sendMessage: vi.fn().mockResolvedValue(undefined),
+        sendReaction: vi.fn().mockResolvedValue(undefined),
+      }),
+      WhatsAppClient: class {},
+    }));
+
+    vi.doMock('../core/settings.ts', async (importOriginal) => {
+      const original = await importOriginal<typeof import('../core/settings.ts')>();
+      return {
+        ...original,
+        loadSettings: vi.fn(() => ({ ...settingsState })),
+      };
+    });
+
+    vi.doMock('../core/memory.ts', () => ({
+      saveMessage: vi.fn().mockReturnValue(true),
+      getMessage: vi.fn().mockReturnValue(null),
+      listProjects: vi.fn().mockReturnValue([]),
+      createProject: vi.fn(),
+      getProject: vi.fn(),
+    }));
+
+    vi.doMock('../agent/claude-code.ts', () => ({
+      isClaudeCodeConnected: vi.fn().mockReturnValue(false),
+      runClaudeCodePrompt: vi.fn(),
+      clearClaudeCodeSession: vi.fn(),
+    }));
+
+    const { handleMessage } = await import('./handler.ts');
+
+    const ownerJid = '1234567890:123@s.whatsapp.net';
+    const selfChatLid = '1234567890@lid';
+
+    const msg1 = {
+      id: 'msg_p1',
+      from: ownerJid,
+      to: selfChatLid,
+      body: 'work on p1',
+      timestamp: Date.now(),
+      isFromMe: true,
+      messageKey: { remoteJid: selfChatLid, id: 'msg_p1', fromMe: true },
+    };
+    const msg2 = {
+      id: 'msg_p2',
+      from: ownerJid,
+      to: selfChatLid,
+      body: 'work on p2',
+      timestamp: Date.now(),
+      isFromMe: true,
+      messageKey: { remoteJid: selfChatLid, id: 'msg_p2', fromMe: true },
+    };
+
+    const p1 = handleMessage(msg1);
+    await p1Started;
+    settingsState.activeProject = 'p2';
+    await Promise.all([p1, handleMessage(msg2)]);
+
+    expect(promptCalls.map((c) => c.projectId).sort()).toEqual(['p1', 'p2']);
+    const first = promptCalls.find((c) => c.projectId === 'p1')!;
+    const second = promptCalls.find((c) => c.projectId === 'p2')!;
+    expect(second.start).toBeLessThan(first.end);
   });
 });
 
@@ -629,31 +746,111 @@ describe('resolveReplyJid — replies stay inside the owner\'s own chat (#73)', 
 
 describe('queued /project then prompt uses the new project (#77)', () => {
   it('runPromptWithCallbacks is called with project b after /project b', async () => {
-    const session = await import('../agent/session.ts');
+    const settingsState = {
+      botName: 'TestBot',
+      ownerName: 'Test Owner',
+      timezone: 'UTC',
+      model: 'test-model',
+      apiKeyMode: 'none',
+      activeProject: 'a',
+      services: [] as unknown[],
+      projectTokens: {} as Record<string, string>,
+      setupComplete: true,
+      connectorAdminTokenAcknowledged: true,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+
+    const runPrompt = vi.fn(async (projectId: string) => `ok:${projectId}`);
+
+    vi.doMock('../agent/session.ts', async (importOriginal) => {
+      const original = await importOriginal<typeof import('../agent/session.ts')>();
+      return {
+        ...original,
+        checkCredentialsBeforePrompt: vi.fn().mockResolvedValue({
+          model: { id: 'test' },
+          modelId: 'test-model',
+          valid: true,
+        }),
+        getAllPendingConfirmations: vi.fn(() => []),
+        getOrCreateSession: vi.fn(async () => ({})),
+        clearSession: vi.fn(),
+        runPromptWithCallbacks: runPrompt,
+      };
+    });
+
+    vi.doMock('./client.ts', () => ({
+      getWhatsAppClient: vi.fn().mockReturnValue({
+        getOwnerJid: () => '1234567890:123@s.whatsapp.net',
+        getOwnerPhone: () => '1234567890',
+        getOwnerLid: () => 'ABC123XYZ@lid',
+        isSelfJid: (jid: string) => jid.includes('1234567890') || jid.includes('ABC123XYZ'),
+        getSelfChatJid: () => 'ABC123XYZ@lid',
+        isConnected: () => true,
+        sendMessage: vi.fn().mockResolvedValue(undefined),
+        sendReaction: vi.fn().mockResolvedValue(undefined),
+        getPairingState: () => ({ isPaired: true, selfChat: 'lid' }),
+      }),
+      WhatsAppClient: class {},
+    }));
+
+    vi.doMock('../core/settings.ts', async (importOriginal) => {
+      const original = await importOriginal<typeof import('../core/settings.ts')>();
+      return {
+        ...original,
+        loadSettings: vi.fn(() => ({ ...settingsState })),
+        updateSettings: vi.fn((patch: Record<string, unknown>) => {
+          Object.assign(settingsState, patch);
+          return { ...settingsState };
+        }),
+      };
+    });
+
+    vi.doMock('../core/memory.ts', () => ({
+      saveMessage: vi.fn().mockReturnValue(true),
+      getMessage: vi.fn().mockReturnValue(null),
+      listProjects: vi.fn().mockReturnValue([]),
+      createProject: vi.fn(({ id, name }: { id: string; name: string }) => ({
+        id,
+        name,
+        createdAt: new Date().toISOString(),
+      })),
+      getProject: vi.fn().mockReturnValue(null),
+    }));
+
+    vi.doMock('../agent/claude-code.ts', () => ({
+      isClaudeCodeConnected: vi.fn().mockReturnValue(false),
+      runClaudeCodePrompt: vi.fn(),
+      clearClaudeCodeSession: vi.fn(),
+    }));
+
     const { handleMessage } = await import('./handler.ts');
 
-    const projectMsg = makeMessage({
-      id: 'msg_project_b',
-      body: '/project b',
-      isFromMe: true,
-      to: 'ABC123XYZ@lid',
-      messageKey: { remoteJid: 'ABC123XYZ@lid', id: 'msg_project_b', fromMe: true },
-    });
-    const promptMsg = makeMessage({
-      id: 'msg_after_project',
-      body: 'check mail',
-      isFromMe: true,
-      to: 'ABC123XYZ@lid',
-      messageKey: { remoteJid: 'ABC123XYZ@lid', id: 'msg_after_project', fromMe: true },
-    });
+    const ownerJid = '1234567890:123@s.whatsapp.net';
+    const selfChat = 'ABC123XYZ@lid';
 
     await Promise.all([
-      handleMessage(projectMsg),
-      handleMessage(promptMsg),
+      handleMessage({
+        id: 'msg_project_b',
+        from: ownerJid,
+        to: selfChat,
+        body: '/project b',
+        timestamp: Date.now(),
+        isFromMe: true,
+        messageKey: { remoteJid: selfChat, id: 'msg_project_b', fromMe: true },
+      }),
+      handleMessage({
+        id: 'msg_after_project',
+        from: ownerJid,
+        to: selfChat,
+        body: 'check mail',
+        timestamp: Date.now(),
+        isFromMe: true,
+        messageKey: { remoteJid: selfChat, id: 'msg_after_project', fromMe: true },
+      }),
     ]);
 
-    expect(session.runPromptWithCallbacks).toHaveBeenCalled();
-    const projectIds = vi.mocked(session.runPromptWithCallbacks).mock.calls.map((c) => c[0]);
-    expect(projectIds).toContain('b');
+    expect(runPrompt).toHaveBeenCalled();
+    expect(runPrompt.mock.calls.map((c) => c[0])).toEqual(['b']);
   });
 });
