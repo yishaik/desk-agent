@@ -636,12 +636,74 @@ addRoute('POST', '/api/pairing/unpair', async (req, res) => {
     await wa.unpair();
     sendJson(res, {
       success: true,
-      message: 'הצימוד אופס. סרוק את קוד ה-QR עם אותו מספר.',
+      message: 'הצימוד נותק. סרוק את קוד ה-QR החדש עם אותו מספר.',
       ownerPhone,
     });
   } catch (err) {
     log.error({ err }, 'Unpair failed');
-    sendError(res, 'שגיאה באיפוס הצימוד', 500);
+    sendError(res, 'שגיאה בניתוק הצימוד', 500);
+  }
+});
+
+function digitsOnlyPhone(value: string | undefined | null): string {
+  return (value ?? '').replace(/\D/g, '');
+}
+
+addRoute('POST', '/api/pairing/code', async (req, res) => {
+  if (!isAuthenticated(req)) {
+    sendError(res, 'Unauthorized', 401);
+    return;
+  }
+
+  let body: { phone?: string; phoneNumber?: string } = {};
+  try {
+    body = await parseBody<{ phone?: string; phoneNumber?: string }>(req);
+  } catch (err) {
+    if (err instanceof BodyTooLargeError) {
+      sendError(res, 'Request body too large', 413);
+      return;
+    }
+    body = {};
+  }
+
+  const requested = digitsOnlyPhone(body.phone ?? body.phoneNumber);
+  const ownerPhone = loadSettings().ownerPhone;
+  const ownerDigits = digitsOnlyPhone(ownerPhone);
+
+  if (ownerDigits && requested && requested !== ownerDigits) {
+    sendError(
+      res,
+      'המספר אינו תואם לבעלים הרשום. לשינוי בעלים השתמשו ב-POST /api/pairing/repair.',
+      403
+    );
+    return;
+  }
+
+  const phone = ownerDigits || requested;
+  if (!phone) {
+    sendError(res, 'יש לציין מספר טלפון לצימוד בקוד', 400);
+    return;
+  }
+
+  const wa = getWhatsAppClient();
+  try {
+    const code = await wa.requestPairingCode(phone);
+    sendJson(res, {
+      success: true,
+      data: { code, phone },
+    });
+  } catch (err) {
+    log.error({ err }, 'Pairing code request failed');
+    const message = err instanceof Error ? err.message : 'שגיאה בבקשת קוד צימוד';
+    if (message.includes('does not match bound owner')) {
+      sendError(
+        res,
+        'המספר אינו תואם לבעלים הרשום. לשינוי בעלים השתמשו ב-POST /api/pairing/repair.',
+        403
+      );
+      return;
+    }
+    sendError(res, 'שגיאה בבקשת קוד צימוד', 500);
   }
 });
 
