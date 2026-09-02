@@ -1,4 +1,5 @@
 import { createServer, IncomingMessage, ServerResponse } from 'node:http';
+import { timingSafeEqual } from 'node:crypto';
 import { parse as parseUrl } from 'node:url';
 import { parse as parseQuery } from 'node:querystring';
 import { readFileSync } from 'node:fs';
@@ -28,6 +29,7 @@ import {
 } from '../core/settings.ts';
 import { requiresConfirmation } from '../core/confirmations.ts';
 import { listProjects, createProject, getProject } from '../core/memory.ts';
+import { slugifyProjectName, validateProjectId, ProjectIdValidationError } from '../core/projects.ts';
 import { getWhatsAppClient } from '../whatsapp/client.ts';
 import { createClient, isRealConnection } from '../open-connector/client.ts';
 import { 
@@ -43,6 +45,7 @@ import { writeIdentityFiles } from '../core/identity-files.ts';
 import { recreateSessionAfterCredentialChange } from '../agent/session.ts';
 import { getSettingsHtml, type SettingsPageData } from './settings-page.ts';
 import { getThemeCss } from './theme.ts';
+import { escapeHtml } from './html.ts';
 
 const log = createChildLogger('http');
 
@@ -96,6 +99,21 @@ function matchRoute(
   return null;
 }
 
+function timingSafeTokenCompare(provided: string | undefined, expected: string): boolean {
+  if (!provided || typeof provided !== 'string') {
+    return false;
+  }
+  
+  const providedBuf = Buffer.from(provided, 'utf8');
+  const expectedBuf = Buffer.from(expected, 'utf8');
+  
+  if (providedBuf.length !== expectedBuf.length) {
+    return false;
+  }
+  
+  return timingSafeEqual(providedBuf, expectedBuf);
+}
+
 function isAuthenticated(req: IncomingMessage): boolean {
   const url = parseUrl(req.url ?? '', true);
   const queryToken = url.query['token'] as string | undefined;
@@ -112,7 +130,7 @@ function isAuthenticated(req: IncomingMessage): boolean {
     : undefined;
 
   const token = queryToken ?? cookieToken ?? bearerToken;
-  return token === config.pairToken;
+  return timingSafeTokenCompare(token, config.pairToken);
 }
 
 function sendJson(res: ServerResponse, data: unknown, status = 200): void {
@@ -134,10 +152,30 @@ function redirect(res: ServerResponse, url: string): void {
   res.end();
 }
 
+const MAX_BODY_SIZE = 64 * 1024;
+
+class BodyTooLargeError extends Error {
+  constructor() {
+    super('Request body too large');
+    this.name = 'BodyTooLargeError';
+  }
+}
+
 async function parseBody<T>(req: IncomingMessage): Promise<T> {
   return new Promise((resolve, reject) => {
     let body = '';
-    req.on('data', (chunk) => (body += chunk));
+    let size = 0;
+    
+    req.on('data', (chunk: Buffer | string) => {
+      size += chunk.length;
+      if (size > MAX_BODY_SIZE) {
+        req.destroy();
+        reject(new BodyTooLargeError());
+        return;
+      }
+      body += chunk;
+    });
+    
     req.on('end', () => {
       try {
         resolve(JSON.parse(body) as T);
@@ -162,6 +200,8 @@ addRoute('GET', '/health', async (req, res) => {
   });
 });
 
+const COOKIE_MAX_AGE = 30 * 24 * 60 * 60;
+
 addRoute('GET', '/', async (req, res) => {
   if (!isAuthenticated(req)) {
     const loginHtml = getLoginHtml();
@@ -169,18 +209,20 @@ addRoute('GET', '/', async (req, res) => {
     return;
   }
 
-  // Entering via /?token=... must also set the session cookie, otherwise the
-  // wizard's same-origin API fetches (no query token) all get 401.
-  const queryToken = parseUrl(req.url ?? '', true).query['token'];
-  if (queryToken === config.pairToken) {
+  const url = parseUrl(req.url ?? '', true);
+  const queryToken = url.query['token'] as string | undefined;
+  
+  if (queryToken && timingSafeTokenCompare(queryToken, config.pairToken)) {
     const isHttps = req.headers['x-forwarded-proto'] === 'https' ||
                     req.headers.host?.startsWith('https') ||
                     config.isProduction;
     const securePart = isHttps ? '; Secure' : '';
     res.setHeader(
       'Set-Cookie',
-      `PAIR_TOKEN=${queryToken}; Path=/; HttpOnly; SameSite=Strict; Max-Age=31536000${securePart}`
+      `PAIR_TOKEN=${config.pairToken}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${COOKIE_MAX_AGE}${securePart}`
     );
+    redirect(res, '/');
+    return;
   }
 
   const settings = loadSettings();
@@ -244,6 +286,21 @@ addRoute('GET', '/settings', async (req, res) => {
 
   const html = getSettingsHtml(pageData);
   sendHtml(res, html);
+});
+
+addRoute('GET', '/api/auth/session', async (req, res) => {
+  const cookies = req.headers.cookie ?? '';
+  const cookieToken = cookies
+    .split(';')
+    .map((c) => c.trim().split('='))
+    .find(([key]) => key === 'PAIR_TOKEN')?.[1];
+
+  if (timingSafeTokenCompare(cookieToken, config.pairToken)) {
+    res.writeHead(200);
+    res.end();
+  } else {
+    sendError(res, 'Unauthorized', 401);
+  }
 });
 
 addRoute('GET', '/api/auth/providers', async (req, res) => {
@@ -428,22 +485,44 @@ addRoute('POST', '/api/ai/sync-model', async (req, res) => {
 });
 
 addRoute('POST', '/auth', async (req, res) => {
-  const body = await parseBody<{ token?: string }>(req).catch(() => ({ token: undefined }));
+  let body: { token?: string };
+  try {
+    body = await parseBody<{ token?: string }>(req);
+  } catch (err) {
+    if (err instanceof BodyTooLargeError) {
+      sendError(res, 'Request body too large', 413);
+      return;
+    }
+    body = { token: undefined };
+  }
+  
   const token = body.token;
 
-  if (token === config.pairToken) {
+  if (timingSafeTokenCompare(token, config.pairToken)) {
     const isHttps = req.headers['x-forwarded-proto'] === 'https' || 
                     req.headers.host?.startsWith('https') ||
                     config.isProduction;
     const securePart = isHttps ? '; Secure' : '';
     res.setHeader(
       'Set-Cookie',
-      `PAIR_TOKEN=${token}; Path=/; HttpOnly; SameSite=Strict; Max-Age=31536000${securePart}`
+      `PAIR_TOKEN=${config.pairToken}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${COOKIE_MAX_AGE}${securePart}`
     );
     sendJson(res, { success: true });
   } else {
     sendError(res, 'Invalid token', 401);
   }
+});
+
+addRoute('POST', '/logout', async (req, res) => {
+  const isHttps = req.headers['x-forwarded-proto'] === 'https' || 
+                  req.headers.host?.startsWith('https') ||
+                  config.isProduction;
+  const securePart = isHttps ? '; Secure' : '';
+  res.setHeader(
+    'Set-Cookie',
+    `PAIR_TOKEN=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0${securePart}`
+  );
+  sendJson(res, { success: true });
 });
 
 addRoute('GET', '/api/pairing', async (req, res) => {
@@ -572,7 +651,23 @@ addRoute('POST', '/api/projects', async (req, res) => {
     return;
   }
 
-  const id = body.name.toLowerCase().replace(/\s+/g, '-');
+  let id: string;
+  try {
+    id = slugifyProjectName(body.name);
+  } catch (err) {
+    if (err instanceof ProjectIdValidationError) {
+      sendError(res, err.message);
+      return;
+    }
+    throw err;
+  }
+
+  const existing = getProject(id);
+  if (existing) {
+    sendJson(res, { success: false, error: 'Project with this ID already exists' }, 409);
+    return;
+  }
+
   const project = createProject({ id, name: body.name, description: body.description });
   sendJson(res, { success: true, data: project });
 });
@@ -583,8 +678,20 @@ addRoute('PUT', '/api/projects/:id/token', async (req, res) => {
     return;
   }
 
+  const rawProjectId = req.url?.split('/')[3] ?? '';
+  
+  let projectId: string;
+  try {
+    projectId = validateProjectId(decodeURIComponent(rawProjectId));
+  } catch (err) {
+    if (err instanceof ProjectIdValidationError) {
+      sendError(res, err.message);
+      return;
+    }
+    throw err;
+  }
+
   const body = await parseBody<{ token?: string }>(req);
-  const projectId = req.url?.split('/')[3] ?? '';
 
   if (body.token) {
     setProjectToken(projectId, body.token);
@@ -601,7 +708,19 @@ addRoute('PUT', '/api/projects/:id/activate', async (req, res) => {
     return;
   }
 
-  const projectId = req.url?.split('/')[3] ?? '';
+  const rawProjectId = req.url?.split('/')[3] ?? '';
+  
+  let projectId: string;
+  try {
+    projectId = validateProjectId(decodeURIComponent(rawProjectId));
+  } catch (err) {
+    if (err instanceof ProjectIdValidationError) {
+      sendError(res, err.message);
+      return;
+    }
+    throw err;
+  }
+  
   const project = getProject(projectId);
   
   if (!project) {
@@ -1953,11 +2072,11 @@ export function getWizardHtml(settings: ReturnType<typeof loadSettings>, pairing
       <form id="identityForm">
         <div class="form-group">
           <label for="ownerName">שם הבעלים *</label>
-          <input type="text" id="ownerName" name="ownerName" value="${settings.ownerName || ''}" placeholder="השם שלך" required>
+          <input type="text" id="ownerName" name="ownerName" value="${escapeHtml(settings.ownerName)}" placeholder="השם שלך" required>
         </div>
         <div class="form-group">
           <label for="businessName">שם העסק</label>
-          <input type="text" id="businessName" name="businessName" value="${settings.businessName || ''}" placeholder="שם החברה או העסק">
+          <input type="text" id="businessName" name="businessName" value="${escapeHtml(settings.businessName)}" placeholder="שם החברה או העסק">
         </div>
         <div class="form-group">
           <label for="timezone">אזור זמן</label>
@@ -1970,7 +2089,7 @@ export function getWizardHtml(settings: ReturnType<typeof loadSettings>, pairing
         </div>
         <div class="form-group">
           <label for="businessDescription">תיאור העסק</label>
-          <textarea id="businessDescription" name="businessDescription" placeholder="תאר את העסק שלך בקצרה...">${settings.businessDescription || ''}</textarea>
+          <textarea id="businessDescription" name="businessDescription" placeholder="תאר את העסק שלך בקצרה...">${escapeHtml(settings.businessDescription)}</textarea>
         </div>
         <div class="btn-group">
           <button type="submit">סיום הגדרה</button>
@@ -2021,12 +2140,17 @@ export function getWizardHtml(settings: ReturnType<typeof loadSettings>, pairing
 }
 
 export function getDashboardHtml(settings: ReturnType<typeof loadSettings>, pairingState: { isPaired: boolean; phoneNumber?: string; name?: string }): string {
+  const safeBotName = escapeHtml(settings.botName);
+  const safeName = escapeHtml(pairingState.name);
+  const safePhone = escapeHtml(pairingState.phoneNumber);
+  const safeActiveProject = escapeHtml(settings.activeProject);
+  
   return `<!DOCTYPE html>
 <html lang="he" dir="rtl">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>${settings.botName} - לוח בקרה</title>
+  <title>${safeBotName} - לוח בקרה</title>
   <style>
     ${getThemeCss()}
     
@@ -2109,12 +2233,12 @@ export function getDashboardHtml(settings: ReturnType<typeof loadSettings>, pair
 </head>
 <body>
   <nav class="navbar">
-    <h1>🤖 ${settings.botName}</h1>
+    <h1>🤖 ${safeBotName}</h1>
     <div class="nav-links">
       <a href="/settings" class="nav-link">⚙️ הגדרות</a>
       <div class="nav-status">
         <span class="status-dot ${pairingState.isPaired ? '' : 'offline'}"></span>
-        <span>${pairingState.isPaired ? `${pairingState.name || pairingState.phoneNumber}` : 'מנותק'}</span>
+        <span>${pairingState.isPaired ? `${safeName || safePhone}` : 'מנותק'}</span>
       </div>
     </div>
   </nav>
@@ -2125,11 +2249,11 @@ export function getDashboardHtml(settings: ReturnType<typeof loadSettings>, pair
         <h2>📱 WhatsApp</h2>
         <div class="stat">${pairingState.isPaired ? '✅' : '❌'}</div>
         <div class="stat-label">${pairingState.isPaired ? 'מחובר' : 'מנותק'}</div>
-        ${pairingState.phoneNumber ? `<p style="margin-top: 12px; color: var(--text-muted);">${pairingState.phoneNumber}</p>` : ''}
+        ${safePhone ? `<p style="margin-top: 12px; color: var(--text-muted);">${safePhone}</p>` : ''}
       </div>
       <div class="card">
         <h2>📁 פרויקט פעיל</h2>
-        <div class="stat" style="font-size: 24px;">${settings.activeProject}</div>
+        <div class="stat" style="font-size: 24px;">${safeActiveProject}</div>
         <div class="stat-label">מצב מפתחות: ${settings.apiKeyMode === 'shared' ? 'משותף' : 'לפי פרויקט'}</div>
       </div>
       <div class="card">

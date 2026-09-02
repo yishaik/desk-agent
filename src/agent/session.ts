@@ -12,6 +12,7 @@ import { loadSettings, updateSettings, isActionDisabled } from '../core/settings
 import { config } from '../core/config.ts';
 import { OpenConnectorClient } from '../open-connector/client.ts';
 import { join } from 'node:path';
+import { validateProjectId, assertPathInsideDataDir, ProjectIdValidationError } from '../core/projects.ts';
 import { 
   resolveActiveModel, 
   listRuntimeCredentials,
@@ -397,8 +398,11 @@ export async function getOrCreateSession(projectId: string): Promise<ProjectSess
 }
 
 async function createSession(projectId: string): Promise<ProjectSession> {
+  const validProjectId = validateProjectId(projectId);
   const settings = loadSettings();
-  const projectCwd = `${config.dataDir}/projects/${projectId}`;
+  const projectCwd = join(config.dataDir, 'projects', validProjectId);
+  
+  assertPathInsideDataDir(projectCwd, 'Project directory');
 
   const { existsSync, mkdirSync } = await import('node:fs');
   if (!existsSync(projectCwd)) {

@@ -184,3 +184,148 @@ describe('Auth Module', () => {
     expect(typeof result.success).toBe('boolean');
   });
 });
+
+describe('HTTP Authentication Security (server.ts)', () => {
+  it('SECURITY: imports timingSafeEqual from crypto', async () => {
+    const fs = await import('node:fs');
+    const path = await import('node:path');
+    const serverCode = fs.readFileSync(path.join(__dirname, 'server.ts'), 'utf8');
+    
+    expect(serverCode).toContain("import { timingSafeEqual } from 'node:crypto'");
+  });
+
+  it('SECURITY: has timingSafeTokenCompare function using timingSafeEqual', async () => {
+    const fs = await import('node:fs');
+    const path = await import('node:path');
+    const serverCode = fs.readFileSync(path.join(__dirname, 'server.ts'), 'utf8');
+    
+    expect(serverCode).toContain('function timingSafeTokenCompare');
+    expect(serverCode).toContain('timingSafeEqual(providedBuf, expectedBuf)');
+  });
+
+  it('SECURITY: isAuthenticated uses timing-safe comparison', async () => {
+    const fs = await import('node:fs');
+    const path = await import('node:path');
+    const serverCode = fs.readFileSync(path.join(__dirname, 'server.ts'), 'utf8');
+    
+    expect(serverCode).toContain('timingSafeTokenCompare(token, config.pairToken)');
+  });
+
+  it('SECURITY: parseBody has MAX_BODY_SIZE limit and destroys oversized requests', async () => {
+    const fs = await import('node:fs');
+    const path = await import('node:path');
+    const serverCode = fs.readFileSync(path.join(__dirname, 'server.ts'), 'utf8');
+    
+    expect(serverCode).toContain('const MAX_BODY_SIZE = 64 * 1024');
+    expect(serverCode).toContain('size > MAX_BODY_SIZE');
+    expect(serverCode).toContain('req.destroy()');
+  });
+
+  it('SECURITY: cookie max age is 30 days, not 1 year', async () => {
+    const fs = await import('node:fs');
+    const path = await import('node:path');
+    const serverCode = fs.readFileSync(path.join(__dirname, 'server.ts'), 'utf8');
+    
+    expect(serverCode).toContain('const COOKIE_MAX_AGE = 30 * 24 * 60 * 60');
+    expect(serverCode).not.toContain('Max-Age=31536000');
+  });
+
+  it('SECURITY: GET / with ?token= redirects to / after setting cookie', async () => {
+    const fs = await import('node:fs');
+    const path = await import('node:path');
+    const serverCode = fs.readFileSync(path.join(__dirname, 'server.ts'), 'utf8');
+    
+    expect(serverCode).toMatch(/if \(queryToken && timingSafeTokenCompare\(queryToken[\s\S]*?redirect\(res, '\/'\)/);
+  });
+
+  it('SECURITY: POST /logout endpoint exists and clears cookie', async () => {
+    const fs = await import('node:fs');
+    const path = await import('node:path');
+    const serverCode = fs.readFileSync(path.join(__dirname, 'server.ts'), 'utf8');
+    
+    expect(serverCode).toContain("addRoute('POST', '/logout'");
+    expect(serverCode).toContain('PAIR_TOKEN=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0');
+  });
+
+  it('SECURITY: POST /auth returns 413 on oversized body, not 401', async () => {
+    const fs = await import('node:fs');
+    const path = await import('node:path');
+    const serverCode = fs.readFileSync(path.join(__dirname, 'server.ts'), 'utf8');
+    
+    expect(serverCode).toContain('class BodyTooLargeError');
+    expect(serverCode).toMatch(/addRoute\('POST', '\/auth'[\s\S]*?BodyTooLargeError[\s\S]*?413/);
+  });
+
+  it('SECURITY: PUT /api/projects/:id/token validates projectId', async () => {
+    const fs = await import('node:fs');
+    const path = await import('node:path');
+    const serverCode = fs.readFileSync(path.join(__dirname, 'server.ts'), 'utf8');
+    
+    const tokenRouteMatch = serverCode.match(/addRoute\('PUT', '\/api\/projects\/:id\/token'[\s\S]*?sendJson\(res, \{ success: true \}\);[\s\S]*?\}\);/);
+    expect(tokenRouteMatch).toBeTruthy();
+    
+    const tokenRoute = tokenRouteMatch![0];
+    expect(tokenRoute).toContain('validateProjectId');
+    expect(tokenRoute).toContain('decodeURIComponent');
+    expect(tokenRoute).toContain('ProjectIdValidationError');
+  });
+});
+
+describe('GET /api/auth/session (Caddy forward_auth)', () => {
+  it('exists and only reads cookie, not query token or Authorization', async () => {
+    const fs = await import('node:fs');
+    const path = await import('node:path');
+    const serverCode = fs.readFileSync(path.join(__dirname, 'server.ts'), 'utf8');
+    
+    const sessionRouteMatch = serverCode.match(/addRoute\('GET', '\/api\/auth\/session'[\s\S]*?\}\);/);
+    expect(sessionRouteMatch).toBeTruthy();
+    
+    const sessionRoute = sessionRouteMatch![0];
+    
+    expect(sessionRoute).toContain("req.headers.cookie");
+    expect(sessionRoute).toContain("PAIR_TOKEN");
+    expect(sessionRoute).toContain('timingSafeTokenCompare');
+    
+    expect(sessionRoute).not.toContain('query');
+    expect(sessionRoute).not.toContain('authorization');
+    expect(sessionRoute).not.toContain('Authorization');
+    expect(sessionRoute).not.toContain('isAuthenticated');
+  });
+
+  it('returns 200 on valid cookie match', async () => {
+    const fs = await import('node:fs');
+    const path = await import('node:path');
+    const serverCode = fs.readFileSync(path.join(__dirname, 'server.ts'), 'utf8');
+    
+    const sessionRouteMatch = serverCode.match(/addRoute\('GET', '\/api\/auth\/session'[\s\S]*?\}\);/);
+    expect(sessionRouteMatch).toBeTruthy();
+    
+    const sessionRoute = sessionRouteMatch![0];
+    expect(sessionRoute).toContain('res.writeHead(200)');
+    expect(sessionRoute).toContain('res.end()');
+  });
+
+  it('returns 401 on missing or wrong cookie', async () => {
+    const fs = await import('node:fs');
+    const path = await import('node:path');
+    const serverCode = fs.readFileSync(path.join(__dirname, 'server.ts'), 'utf8');
+    
+    const sessionRouteMatch = serverCode.match(/addRoute\('GET', '\/api\/auth\/session'[\s\S]*?\}\);/);
+    expect(sessionRouteMatch).toBeTruthy();
+    
+    const sessionRoute = sessionRouteMatch![0];
+    expect(sessionRoute).toContain("sendError(res, 'Unauthorized', 401)");
+  });
+
+  it('SECURITY: does NOT call isAuthenticated (which accepts query/bearer)', async () => {
+    const fs = await import('node:fs');
+    const path = await import('node:path');
+    const serverCode = fs.readFileSync(path.join(__dirname, 'server.ts'), 'utf8');
+    
+    const sessionRouteMatch = serverCode.match(/addRoute\('GET', '\/api\/auth\/session'[\s\S]*?\}\);/);
+    expect(sessionRouteMatch).toBeTruthy();
+    
+    const sessionRoute = sessionRouteMatch![0];
+    expect(sessionRoute).not.toContain('isAuthenticated(');
+  });
+});

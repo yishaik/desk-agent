@@ -1,4 +1,4 @@
-import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
+import { readFileSync, writeFileSync, existsSync, mkdirSync, renameSync, copyFileSync, chmodSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import type { Settings, Project, ServiceConfig } from './types.ts';
 import { DEFAULT_SETTINGS } from './types.ts';
@@ -6,6 +6,17 @@ import { config } from './config.ts';
 import { createChildLogger } from './logger.ts';
 
 const log = createChildLogger('settings');
+
+const SETTINGS_FILE_MODE = 0o600;
+
+export class SettingsParseError extends Error {
+  constructor(message: string, public readonly corruptPath?: string) {
+    super(message);
+    this.name = 'SettingsParseError';
+  }
+}
+
+let lastSuccessfulLoad: Settings | null = null;
 
 function getSettingsPath(): string {
   return join(config.dataDir, 'settings.json');
@@ -15,7 +26,7 @@ function ensureDataDir(): void {
   const path = getSettingsPath();
   const dir = dirname(path);
   if (!existsSync(dir)) {
-    mkdirSync(dir, { recursive: true });
+    mkdirSync(dir, { recursive: true, mode: 0o700 });
   }
 }
 
@@ -30,26 +41,71 @@ export function loadSettings(): Settings {
       settings.sharedConnectorToken = config.openConnectorToken;
     }
     saveSettings(settings);
+    lastSuccessfulLoad = settings;
     return settings;
   }
 
   try {
     const data = readFileSync(path, 'utf-8');
-    const settings = JSON.parse(data) as Settings;
+    const parsed = JSON.parse(data) as Partial<Settings>;
+    
+    const settings: Settings = {
+      ...DEFAULT_SETTINGS,
+      ...parsed,
+      services: parsed.services ?? DEFAULT_SETTINGS.services,
+      projectTokens: parsed.projectTokens ?? DEFAULT_SETTINGS.projectTokens,
+    };
+    
     log.info({ setupComplete: settings.setupComplete }, 'Loaded settings');
+    lastSuccessfulLoad = settings;
     return settings;
   } catch (err) {
-    log.error({ err }, 'Failed to load settings, using defaults');
-    return { ...DEFAULT_SETTINGS };
+    const timestamp = Date.now();
+    const corruptPath = `${path}.corrupt-${timestamp}`;
+    
+    try {
+      copyFileSync(path, corruptPath);
+      log.error({ err, corruptPath }, 'Failed to parse settings, backed up corrupt file');
+    } catch (backupErr) {
+      log.error({ err, backupErr }, 'Failed to parse settings and backup failed');
+    }
+    
+    if (lastSuccessfulLoad) {
+      log.warn('Returning last successfully loaded settings');
+      return lastSuccessfulLoad;
+    }
+    
+    throw new SettingsParseError(
+      `Settings file is corrupted and no previous valid settings available. Backed up to ${corruptPath}`,
+      corruptPath
+    );
   }
 }
 
 export function saveSettings(settings: Settings): void {
   ensureDataDir();
   const path = getSettingsPath();
+  const tempPath = `${path}.tmp`;
+  
   settings.updatedAt = new Date().toISOString();
-  writeFileSync(path, JSON.stringify(settings, null, 2));
-  log.debug('Settings saved');
+  const content = JSON.stringify(settings, null, 2);
+  
+  writeFileSync(tempPath, content, { mode: SETTINGS_FILE_MODE });
+  
+  try {
+    chmodSync(tempPath, SETTINGS_FILE_MODE);
+  } catch {
+  }
+  
+  renameSync(tempPath, path);
+  
+  try {
+    chmodSync(path, SETTINGS_FILE_MODE);
+  } catch {
+  }
+  
+  lastSuccessfulLoad = settings;
+  log.debug('Settings saved atomically');
 }
 
 export function updateSettings(updates: Partial<Settings>): Settings {

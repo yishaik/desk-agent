@@ -34,6 +34,50 @@ describe('Shared Theme CSS', () => {
   });
 });
 
+describe('HTML Escape Security', () => {
+  it('escapeHtml escapes all dangerous characters', async () => {
+    const { escapeHtml } = await import('./html.ts');
+    
+    expect(escapeHtml('<script>alert("xss")</script>')).toBe('&lt;script&gt;alert(&quot;xss&quot;)&lt;/script&gt;');
+    expect(escapeHtml("'onclick='evil'")).toBe("&#39;onclick=&#39;evil&#39;");
+    expect(escapeHtml('&<>"\'')).toBe('&amp;&lt;&gt;&quot;&#39;');
+  });
+
+  it('escapeHtml handles null and undefined', async () => {
+    const { escapeHtml } = await import('./html.ts');
+    
+    expect(escapeHtml(null)).toBe('');
+    expect(escapeHtml(undefined)).toBe('');
+    expect(escapeHtml('')).toBe('');
+  });
+
+  it('SECURITY: XSS in botName is escaped in dashboard', async () => {
+    const fs = await import('node:fs');
+    const serverCode = fs.readFileSync(path.join(__dirname, 'server.ts'), 'utf8');
+    
+    expect(serverCode).toContain("const safeBotName = escapeHtml(settings.botName)");
+    expect(serverCode).toContain("<title>${safeBotName}");
+    expect(serverCode).toContain("<h1>🤖 ${safeBotName}");
+  });
+
+  it('SECURITY: XSS in pairingState values is escaped', async () => {
+    const fs = await import('node:fs');
+    const serverCode = fs.readFileSync(path.join(__dirname, 'server.ts'), 'utf8');
+    
+    expect(serverCode).toContain("const safeName = escapeHtml(pairingState.name)");
+    expect(serverCode).toContain("const safePhone = escapeHtml(pairingState.phoneNumber)");
+  });
+
+  it('SECURITY: XSS in wizard form values is escaped', async () => {
+    const fs = await import('node:fs');
+    const serverCode = fs.readFileSync(path.join(__dirname, 'server.ts'), 'utf8');
+    
+    expect(serverCode).toContain('escapeHtml(settings.ownerName)');
+    expect(serverCode).toContain('escapeHtml(settings.businessName)');
+    expect(serverCode).toContain('escapeHtml(settings.businessDescription)');
+  });
+});
+
 describe('Server HTML Source Code Requirements', () => {
   let serverCode: string;
 
