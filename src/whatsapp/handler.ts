@@ -229,17 +229,30 @@ async function checkForConfirmationResponse(text: string, projectId: string): Pr
   }
 
   if (isSimpleConfirm) {
-    if (allPending.length === 1 && allPending[0]) {
-      const single = allPending[0];
-      confirmAction(single.confirmationId);
-      return executePendingAction(single, projectId);
+    // S-04 (#108): ALWAYS show structured payload before execution, even for a
+    // single action. The model's description may differ from the actual args —
+    // prompt injection from email/docs must not hide the real recipient behind a
+    // friendly narrative. Only execute when the user replies with the
+    // confirmation ID (handled above) or picks a number (for multi-action).
+    const lines = allPending.length === 1
+      ? ['⚠️ לפני אישור, וודא שזה מה שרצית:']
+      : ['⚠️ יש מספר פעולות ממתינות לאישור. בחר מספר:'];
+
+    allPending.forEach((p, i) => {
+      if (allPending.length > 1) {
+        lines.push(`\n*${i + 1}.* ${formatPendingForUser(p)}`);
+      } else {
+        lines.push(`\n${formatPendingForUser(p)}`);
+      }
+    });
+
+    if (allPending.length > 1) {
+      lines.push('\nהשב עם מספר (1, 2...) לאישור, או "לא" לביטול הכל.');
+    } else {
+      const single = allPending[0]!;
+      lines.push(`\nהשב עם הקוד *${single.confirmationId}* לאישור, או "לא" לביטול.`);
     }
 
-    const lines = ['⚠️ יש מספר פעולות ממתינות לאישור. בחר מספר:'];
-    allPending.forEach((p, i) => {
-      lines.push(`\n*${i + 1}.* ${formatPendingForUser(p)}`);
-    });
-    lines.push('\nהשב עם מספר (1, 2...) לאישור, או "לא" לביטול הכל.');
     return {
       handled: true,
       response: lines.join('\n'),
