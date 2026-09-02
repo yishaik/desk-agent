@@ -181,3 +181,18 @@ describe('Message Key', () => {
     expect(messageKey.participant).toBeDefined();
   });
 });
+
+describe('Executed-action notes reach the model (#26)', () => {
+  it('prefixes the next prompt once with what ran outside the model', async () => {
+    const { recordExecutedAction } = await import('../core/confirmations.ts');
+    const { withExecutedActionNotes } = await import('./handler.ts');
+    recordExecutedAction({ projectId: 'default', actionId: 'gmail.send_email', success: true, summary: '{"id":"m1"}' });
+
+    const prompt = withExecutedActionNotes('default', 'thanks');
+    expect(prompt).toContain('gmail.send_email: executed successfully');
+    expect(prompt).toContain('Do not execute them again');
+    expect(prompt.endsWith('thanks')).toBe(true);
+
+    expect(withExecutedActionNotes('default', 'again')).toBe('again');
+  });
+});

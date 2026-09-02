@@ -9,12 +9,13 @@
  * Protocol: newline-delimited JSON-RPC 2.0 (MCP stdio transport).
  */
 import { createInterface } from 'node:readline';
+import { pathToFileURL } from 'node:url';
 import { OpenConnectorClient } from '../open-connector/client.ts';
 import { loadSettings } from '../core/settings.ts';
 import {
   requiresConfirmation,
   createPendingConfirmation,
-  confirmAction,
+  formatConfirmationRequest,
 } from '../core/confirmations.ts';
 
 const client = new OpenConnectorClient(process.env['DESK_PROJECT_ID'] || undefined);
@@ -33,7 +34,7 @@ function isActionEnabled(actionId: string): boolean {
   return !(svc?.disabledActions ?? []).includes(actionId);
 }
 
-const TOOLS = [
+export const TOOLS = [
   {
     name: 'search_actions',
     description: 'Search for available actions across connected services. Use this to discover what you can do.',
@@ -57,14 +58,13 @@ const TOOLS = [
   },
   {
     name: 'execute_action',
-    description: 'Execute an Open Connector action. Mutating actions (send/create/delete/...) require the user to reply "yes" in WhatsApp first — you cannot self-confirm.',
+    description: 'Execute an Open Connector action. Read-only actions run immediately. Mutating actions (send, reply, create, update, delete, ...) are never executed by this tool directly: it records a pending confirmation that the user approves by replying "yes" in WhatsApp, outside the model. You cannot approve on the user\'s behalf — do not call this tool again for the same action.',
     inputSchema: {
       type: 'object',
       properties: {
         actionId: { type: 'string' },
         input: { type: 'object', description: 'Action input matching its schema' },
         connectionName: { type: 'string' },
-        confirmed: { type: 'string', description: 'A confirmation id (confirm_...) already approved by the user' },
       },
       required: ['actionId', 'input'],
     },
@@ -76,7 +76,7 @@ const TOOLS = [
   },
 ];
 
-async function callTool(name: string, args: Record<string, unknown>): Promise<string> {
+export async function callTool(name: string, args: Record<string, unknown>): Promise<string> {
   switch (name) {
     case 'search_actions': {
       const query = String(args['query'] ?? '');
@@ -111,22 +111,10 @@ async function callTool(name: string, args: Record<string, unknown>): Promise<st
       if (!isActionEnabled(actionId)) return `Action "${actionId}" is currently disabled.`;
 
       if (requiresConfirmation(actionId)) {
-        const confirmed = args['confirmed'] ? String(args['confirmed']) : '';
-        const idMatch = confirmed.match(/confirm_\d+_[a-z0-9]+/);
-        if (!idMatch || !confirmAction(idMatch[0])) {
-          const confirmationId = createPendingConfirmation({ actionId, input, connectionName });
-          return [
-            `⚠️ Action "${actionId}" requires the user's confirmation.`,
-            '',
-            '**Planned action:**',
-            `- Action: ${actionId}`,
-            `- Input: ${JSON.stringify(input, null, 2)}`,
-            '',
-            'Tell the user what you are about to do and that they should reply "yes" (or "אשר") to approve, or "no" (or "בטל") to cancel. The approval is handled outside the model — do NOT retry this tool yourself.',
-            '',
-            `_Confirmation ID: ${confirmationId}_`,
-          ].join('\n');
-        }
+        // Never executed from inside the model's turn — see core/confirmations.ts.
+        // The owner's "yes" in WhatsApp is resolved by the agent process.
+        const confirmationId = createPendingConfirmation({ actionId, input, connectionName });
+        return formatConfirmationRequest(actionId, input, confirmationId);
       }
 
       const result = await client.executeAction({ actionId, input, connectionName });
@@ -158,8 +146,10 @@ function send(msg: Record<string, unknown>): void {
   process.stdout.write(JSON.stringify(msg) + '\n');
 }
 
-const rl = createInterface({ input: process.stdin });
-rl.on('line', (line) => {
+// Only serve stdio when run as the entry point (tests import callTool directly).
+const isMain = !!process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href;
+const rl = isMain ? createInterface({ input: process.stdin }) : null;
+rl?.on('line', (line) => {
   if (!line.trim()) return;
   let req: { jsonrpc: string; id?: number | string; method: string; params?: Record<string, unknown> };
   try {
