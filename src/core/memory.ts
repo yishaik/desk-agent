@@ -185,6 +185,26 @@ export function saveMessage(message: Message): boolean {
   return true;
 }
 
+/**
+ * Keep the message log bounded (#79). It only serves duplicate detection and
+ * debugging, so the most recent `keep` rows are plenty. Runs at startup and daily.
+ */
+export function pruneMessages(keep = 500): number {
+  const db = getDb();
+  const result = db
+    .prepare(
+      `DELETE FROM messages WHERE id NOT IN (
+         SELECT id FROM messages ORDER BY timestamp DESC LIMIT ?
+       )`
+    )
+    .run(keep);
+  const deleted = Number(result.changes ?? 0);
+  if (deleted > 0) {
+    log.info({ deleted, keep }, 'Pruned old messages');
+  }
+  return deleted;
+}
+
 export function closeDatabase(): void {
   if (db) {
     db.close();

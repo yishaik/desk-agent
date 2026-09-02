@@ -3,7 +3,7 @@ import { handleMessage } from './whatsapp/handler.ts';
 import { startServer } from './http/server.ts';
 import { createChildLogger } from './core/logger.ts';
 import { config } from './core/config.ts';
-import { closeDatabase } from './core/memory.ts';
+import { closeDatabase, pruneMessages } from './core/memory.ts';
 
 const log = createChildLogger('main');
 
@@ -18,6 +18,21 @@ async function main(): Promise<void> {
 `);
 
   startServer();
+
+  // Bounded message log: prune at startup and once a day (#79).
+  try {
+    pruneMessages();
+  } catch (err) {
+    log.warn({ err }, 'Message prune at startup failed');
+  }
+  const pruneTimer = setInterval(() => {
+    try {
+      pruneMessages();
+    } catch (err) {
+      log.warn({ err }, 'Scheduled message prune failed');
+    }
+  }, 24 * 60 * 60 * 1000);
+  pruneTimer.unref();
 
   const wa = getWhatsAppClient();
   wa.onMessage(handleMessage);
