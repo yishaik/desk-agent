@@ -87,13 +87,13 @@ Open Connector adds the authentication and executes the action.
 1. Generate a new token: `openssl rand -hex 32`
 2. Update `.env` with new `PAIR_TOKEN`
 3. Restart the agent: `docker compose restart agent`
-4. Old sessions are invalidated (session tokens are HMAC-signed with PAIR_TOKEN)
+4. All browser sessions are invalidated (cookie no longer matches)
 
-**Session Security:**
-- Browser sessions use derived HMAC-signed session identifiers, not the raw PAIR_TOKEN
-- Session tokens are stored in `data/sessions.json` with server-side expiry tracking
-- Logout invalidates the session server-side, not just the cookie
-- Sessions expire after 30 days or when the server revokes them
+**Cookie Security:**
+- PAIR_TOKEN is stored in an HttpOnly cookie (not accessible to JavaScript)
+- Cookie uses SameSite=Strict and Secure flags in production
+- Query string `?token=` is redeemed ONCE into the cookie, then stripped from URL via redirect
+- Logout clears the cookie; rotate `.env` PAIR_TOKEN to revoke all sessions
 
 ### OPEN_CONNECTOR_TOKEN
 

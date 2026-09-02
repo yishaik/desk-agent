@@ -28,54 +28,22 @@ afterEach(() => {
   delete process.env['PORT'];
 });
 
-describe('Session Management', () => {
-  it('creates a signed session token', async () => {
-    const { createSession, clearSessionCache } = await import('./session.ts');
-    clearSessionCache();
+describe('PAIR_TOKEN Cookie Authentication', () => {
+  it('cookie is HttpOnly', async () => {
+    const fs = await import('node:fs');
+    const path = await import('node:path');
+    const serverCode = fs.readFileSync(path.join(__dirname, 'server.ts'), 'utf8');
     
-    const session = createSession();
-    expect(session).toBeDefined();
-    expect(typeof session).toBe('string');
-    expect(session.split('.').length).toBe(2);
+    expect(serverCode).toContain('HttpOnly');
+    expect(serverCode).toContain('SameSite=Strict');
   });
 
-  it('validates a valid session', async () => {
-    const { createSession, validateSession, clearSessionCache } = await import('./session.ts');
-    clearSessionCache();
+  it('cookie max age is 30 days', async () => {
+    const fs = await import('node:fs');
+    const path = await import('node:path');
+    const serverCode = fs.readFileSync(path.join(__dirname, 'server.ts'), 'utf8');
     
-    const session = createSession();
-    expect(validateSession(session)).toBe(true);
-  });
-
-  it('rejects an invalid session signature', async () => {
-    const { createSession, validateSession, clearSessionCache } = await import('./session.ts');
-    clearSessionCache();
-    
-    const session = createSession();
-    const [sessionId] = session.split('.');
-    const tamperedSession = `${sessionId}.invalidsignature`;
-    
-    expect(validateSession(tamperedSession)).toBe(false);
-  });
-
-  it('rejects a revoked session', async () => {
-    const { createSession, validateSession, revokeSession, clearSessionCache } = await import('./session.ts');
-    clearSessionCache();
-    
-    const session = createSession();
-    expect(validateSession(session)).toBe(true);
-    
-    revokeSession(session);
-    expect(validateSession(session)).toBe(false);
-  });
-
-  it('rejects undefined or empty sessions', async () => {
-    const { validateSession, clearSessionCache } = await import('./session.ts');
-    clearSessionCache();
-    
-    expect(validateSession(undefined)).toBe(false);
-    expect(validateSession('')).toBe(false);
-    expect(validateSession('invalid')).toBe(false);
+    expect(serverCode).toContain('COOKIE_MAX_AGE = 30 * 24 * 60 * 60');
   });
 });
 
@@ -97,7 +65,7 @@ describe('Bearer Token Authentication (API clients)', () => {
 });
 
 describe('Login Form Flow (טוקן גישה)', () => {
-  it('POST /auth creates session and sets DESK_SESSION cookie', async () => {
+  it('POST /auth validates PAIR_TOKEN and sets HttpOnly cookie', async () => {
     const fs = await import('node:fs');
     const path = await import('node:path');
     const serverCode = fs.readFileSync(path.join(__dirname, 'server.ts'), 'utf8');
@@ -106,11 +74,8 @@ describe('Login Form Flow (טוקן גישה)', () => {
     expect(authRoute).toBeTruthy();
     
     const route = authRoute![0];
-    expect(route).toContain('validatePairToken(token)');
-    expect(route).toContain('createSession()');
-    expect(route).toContain('SESSION_COOKIE_NAME');
-    expect(route).toContain('SESSION_MAX_AGE_SECONDS');
-    expect(route).not.toContain('PAIR_TOKEN=${');
+    expect(route).toContain('timingSafeTokenCompare(token, config.pairToken)');
+    expect(route).toContain('setAuthCookie');
   });
 
   it('Login form submits token via JSON POST, not query string', async () => {
@@ -121,14 +86,6 @@ describe('Login Form Flow (טוקן גישה)', () => {
     expect(serverCode).toContain("fetch('/auth'");
     expect(serverCode).toContain("method: 'POST'");
     expect(serverCode).toContain("body: JSON.stringify({ token })");
-  });
-
-  it('Session cookie enables authenticated API calls for Gmail/Calendar Connect', async () => {
-    const { createSession, validateSession, clearSessionCache } = await import('./session.ts');
-    clearSessionCache();
-    
-    const sessionToken = createSession();
-    expect(validateSession(sessionToken)).toBe(true);
   });
 });
 
@@ -155,7 +112,7 @@ describe('Secure Cookie Setting', () => {
   });
 });
 
-describe('SECURITY: Query token authentication (S-02)', () => {
+describe('SECURITY: Query token one-time redemption (S-02)', () => {
   it('SECURITY: isAuthenticated must NOT accept query token', async () => {
     const fs = await import('node:fs');
     const path = await import('node:path');
@@ -167,33 +124,32 @@ describe('SECURITY: Query token authentication (S-02)', () => {
     const isAuthFn = isAuthenticatedMatch![0];
     expect(isAuthFn).not.toContain('queryToken');
     expect(isAuthFn).not.toContain("query['token']");
-    expect(isAuthFn).not.toContain('url.query');
+    expect(isAuthFn).not.toContain('parseUrl');
   });
 
-  it('SECURITY: session cookie uses SESSION_COOKIE_NAME, not raw PAIR_TOKEN', async () => {
+  it('SECURITY: GET / redeems ?token= ONCE into HttpOnly cookie, then redirects', async () => {
     const fs = await import('node:fs');
     const path = await import('node:path');
     const serverCode = fs.readFileSync(path.join(__dirname, 'server.ts'), 'utf8');
-    const sessionCode = fs.readFileSync(path.join(__dirname, 'session.ts'), 'utf8');
     
-    expect(serverCode).toContain('SESSION_COOKIE_NAME');
-    expect(sessionCode).toContain("SESSION_COOKIE_NAME = 'DESK_SESSION'");
+    const rootRouteMatch = serverCode.match(/addRoute\('GET', '\/'\s*,\s*async \(req, res\) => \{[\s\S]*?(?=addRoute\('GET'|$)/);
+    expect(rootRouteMatch).toBeTruthy();
     
-    const authRoute = serverCode.match(/addRoute\('POST', '\/auth'[\s\S]*?\}\);/);
-    expect(authRoute).toBeTruthy();
-    expect(authRoute![0]).toContain('SESSION_COOKIE_NAME');
-    expect(authRoute![0]).not.toContain('PAIR_TOKEN=${config.pairToken}');
-    expect(authRoute![0]).toContain('createSession()');
+    const rootRoute = rootRouteMatch![0];
+    expect(rootRoute).toContain('queryToken');
+    expect(rootRoute).toContain('timingSafeTokenCompare(queryToken, config.pairToken)');
+    expect(rootRoute).toContain('setAuthCookie');
+    expect(rootRoute).toContain("redirect(res, '/')");
   });
 
-  it('SECURITY: POST /logout invalidates session server-side', async () => {
+  it('SECURITY: POST /logout clears cookie', async () => {
     const fs = await import('node:fs');
     const path = await import('node:path');
     const serverCode = fs.readFileSync(path.join(__dirname, 'server.ts'), 'utf8');
     
     const logoutRoute = serverCode.match(/addRoute\('POST', '\/logout'[\s\S]*?\}\);/);
     expect(logoutRoute).toBeTruthy();
-    expect(logoutRoute![0]).toContain('revokeSession');
+    expect(logoutRoute![0]).toContain('clearAuthCookie');
   });
 
   it('SECURITY: startServer does not print ?token= URL', async () => {
@@ -336,42 +292,6 @@ describe('HTTP Authentication Security (server.ts)', () => {
     expect(serverCode).toContain('req.destroy()');
   });
 
-  it('SECURITY: session max age is 30 days', async () => {
-    const fs = await import('node:fs');
-    const path = await import('node:path');
-    const sessionCode = fs.readFileSync(path.join(__dirname, 'session.ts'), 'utf8');
-    
-    expect(sessionCode).toContain('SESSION_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000');
-    expect(sessionCode).not.toContain('365 * 24 * 60 * 60');
-  });
-
-  it('SECURITY: GET / does NOT accept ?token= query param', async () => {
-    const fs = await import('node:fs');
-    const path = await import('node:path');
-    const serverCode = fs.readFileSync(path.join(__dirname, 'server.ts'), 'utf8');
-    
-    const rootRouteMatch = serverCode.match(/addRoute\('GET', '\/'\s*,\s*async \(req, res\) => \{[\s\S]*?(?=addRoute\('GET'|$)/);
-    expect(rootRouteMatch).toBeTruthy();
-    
-    const rootRoute = rootRouteMatch![0];
-    expect(rootRoute).not.toContain("query['token']");
-    expect(rootRoute).not.toContain('queryToken');
-  });
-
-  it('SECURITY: POST /logout endpoint revokes session server-side', async () => {
-    const fs = await import('node:fs');
-    const path = await import('node:path');
-    const serverCode = fs.readFileSync(path.join(__dirname, 'server.ts'), 'utf8');
-    
-    expect(serverCode).toContain("addRoute('POST', '/logout'");
-    
-    const logoutRoute = serverCode.match(/addRoute\('POST', '\/logout'[\s\S]*?\}\);/);
-    expect(logoutRoute).toBeTruthy();
-    expect(logoutRoute![0]).toContain('revokeSession');
-    expect(logoutRoute![0]).toContain('SESSION_COOKIE_NAME');
-    expect(logoutRoute![0]).toContain('Max-Age=0');
-  });
-
   it('SECURITY: POST /auth returns 413 on oversized body, not 401', async () => {
     const fs = await import('node:fs');
     const path = await import('node:path');
@@ -397,35 +317,7 @@ describe('HTTP Authentication Security (server.ts)', () => {
 });
 
 describe('GET /api/auth/session (Caddy forward_auth)', () => {
-  it('Caddy forward_auth: returns 200 when valid DESK_SESSION cookie is present', async () => {
-    const { createSession, validateSession, clearSessionCache, SESSION_COOKIE_NAME } = await import('./session.ts');
-    clearSessionCache();
-    
-    const sessionToken = createSession();
-    expect(SESSION_COOKIE_NAME).toBe('DESK_SESSION');
-    expect(validateSession(sessionToken)).toBe(true);
-  });
-
-  it('Caddy forward_auth: returns 401 when no session cookie', async () => {
-    const { validateSession, clearSessionCache } = await import('./session.ts');
-    clearSessionCache();
-    
-    expect(validateSession(undefined)).toBe(false);
-    expect(validateSession('')).toBe(false);
-  });
-
-  it('Caddy forward_auth: returns 401 when session is revoked', async () => {
-    const { createSession, validateSession, revokeSession, clearSessionCache } = await import('./session.ts');
-    clearSessionCache();
-    
-    const sessionToken = createSession();
-    expect(validateSession(sessionToken)).toBe(true);
-    
-    revokeSession(sessionToken);
-    expect(validateSession(sessionToken)).toBe(false);
-  });
-
-  it('exists and validates session cookie', async () => {
+  it('Caddy forward_auth: checks PAIR_TOKEN cookie only (not query or bearer)', async () => {
     const fs = await import('node:fs');
     const path = await import('node:path');
     const serverCode = fs.readFileSync(path.join(__dirname, 'server.ts'), 'utf8');
@@ -435,8 +327,9 @@ describe('GET /api/auth/session (Caddy forward_auth)', () => {
     
     const sessionRoute = sessionRouteMatch![0];
     
-    expect(sessionRoute).toContain('getSessionCookie');
-    expect(sessionRoute).toContain('validateSession');
+    expect(sessionRoute).toContain('getPairTokenCookie');
+    expect(sessionRoute).toContain('timingSafeTokenCompare');
+    expect(sessionRoute).toContain('config.pairToken');
     
     expect(sessionRoute).not.toContain('query');
     expect(sessionRoute).not.toContain('authorization');
@@ -444,7 +337,7 @@ describe('GET /api/auth/session (Caddy forward_auth)', () => {
     expect(sessionRoute).not.toContain('isAuthenticated');
   });
 
-  it('returns 200 on valid session', async () => {
+  it('Caddy forward_auth: returns 200 on valid PAIR_TOKEN cookie', async () => {
     const fs = await import('node:fs');
     const path = await import('node:path');
     const serverCode = fs.readFileSync(path.join(__dirname, 'server.ts'), 'utf8');
@@ -457,7 +350,7 @@ describe('GET /api/auth/session (Caddy forward_auth)', () => {
     expect(sessionRoute).toContain('res.end()');
   });
 
-  it('returns 401 on missing or invalid session', async () => {
+  it('Caddy forward_auth: returns 401 on missing or invalid cookie', async () => {
     const fs = await import('node:fs');
     const path = await import('node:path');
     const serverCode = fs.readFileSync(path.join(__dirname, 'server.ts'), 'utf8');
@@ -480,17 +373,28 @@ describe('GET /api/auth/session (Caddy forward_auth)', () => {
     const sessionRoute = sessionRouteMatch![0];
     expect(sessionRoute).not.toContain('isAuthenticated(');
   });
+});
 
-  it('SECURITY: uses DESK_SESSION cookie, not PAIR_TOKEN cookie', async () => {
+describe('Revocation model (S-02)', () => {
+  it('Rotate .env PAIR_TOKEN to revoke all sessions', async () => {
+    const fs = await import('node:fs');
+    const path = await import('node:path');
+    const securityDoc = fs.readFileSync(path.join(__dirname, '../../SECURITY.md'), 'utf8');
+    
+    expect(securityDoc).toContain('PAIR_TOKEN');
+    expect(securityDoc).toContain('Restart the agent');
+  });
+
+  it('Logout clears cookie (no server-side session store)', async () => {
     const fs = await import('node:fs');
     const path = await import('node:path');
     const serverCode = fs.readFileSync(path.join(__dirname, 'server.ts'), 'utf8');
     
-    const sessionRouteMatch = serverCode.match(/addRoute\('GET', '\/api\/auth\/session'[\s\S]*?\}\);/);
-    expect(sessionRouteMatch).toBeTruthy();
+    const logoutRoute = serverCode.match(/addRoute\('POST', '\/logout'[\s\S]*?\}\);/);
+    expect(logoutRoute).toBeTruthy();
     
-    const sessionRoute = sessionRouteMatch![0];
-    expect(sessionRoute).not.toContain("key === 'PAIR_TOKEN'");
-    expect(sessionRoute).not.toContain('config.pairToken');
+    expect(logoutRoute![0]).toContain('clearAuthCookie');
+    expect(logoutRoute![0]).not.toContain('revokeSession');
+    expect(logoutRoute![0]).not.toContain('sessions');
   });
 });

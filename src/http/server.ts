@@ -19,14 +19,6 @@ import {
   setActionConfirmation,
   getActionConfirmationOverride,
 } from '../core/settings.ts';
-import {
-  createSession,
-  validateSession,
-  revokeSession,
-  startSessionCleanup,
-  SESSION_COOKIE_NAME,
-  SESSION_MAX_AGE_SECONDS,
-} from './session.ts';
 import { requiresConfirmation } from '../core/confirmations.ts';
 import { listSkillPacks, isKnownSkillPack, DEFAULT_SKILL_PACKS } from '../core/skills.ts';
 import { listProjects, createProject, getProject } from '../core/memory.ts';
@@ -116,17 +108,19 @@ function timingSafeTokenCompare(provided: string | undefined, expected: string):
   return timingSafeEqual(providedBuf, expectedBuf);
 }
 
-function getSessionCookie(req: IncomingMessage): string | undefined {
+const COOKIE_MAX_AGE = 30 * 24 * 60 * 60;
+
+function getPairTokenCookie(req: IncomingMessage): string | undefined {
   const cookies = req.headers.cookie ?? '';
   return cookies
     .split(';')
     .map((c) => c.trim().split('='))
-    .find(([key]) => key === SESSION_COOKIE_NAME)?.[1];
+    .find(([key]) => key === 'PAIR_TOKEN')?.[1];
 }
 
 function isAuthenticated(req: IncomingMessage): boolean {
-  const sessionToken = getSessionCookie(req);
-  if (sessionToken && validateSession(sessionToken)) {
+  const cookieToken = getPairTokenCookie(req);
+  if (cookieToken && timingSafeTokenCompare(cookieToken, config.pairToken)) {
     return true;
   }
 
@@ -142,8 +136,26 @@ function isAuthenticated(req: IncomingMessage): boolean {
   return false;
 }
 
-function validatePairToken(token: string | undefined): boolean {
-  return timingSafeTokenCompare(token, config.pairToken);
+function setAuthCookie(res: ServerResponse, req: IncomingMessage): void {
+  const isHttps = req.headers['x-forwarded-proto'] === 'https' ||
+                  req.headers.host?.startsWith('https') ||
+                  config.isProduction;
+  const securePart = isHttps ? '; Secure' : '';
+  res.setHeader(
+    'Set-Cookie',
+    `PAIR_TOKEN=${config.pairToken}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${COOKIE_MAX_AGE}${securePart}`
+  );
+}
+
+function clearAuthCookie(res: ServerResponse, req: IncomingMessage): void {
+  const isHttps = req.headers['x-forwarded-proto'] === 'https' ||
+                  req.headers.host?.startsWith('https') ||
+                  config.isProduction;
+  const securePart = isHttps ? '; Secure' : '';
+  res.setHeader(
+    'Set-Cookie',
+    `PAIR_TOKEN=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0${securePart}`
+  );
 }
 
 function sendJson(res: ServerResponse, data: unknown, status = 200): void {
@@ -214,6 +226,15 @@ addRoute('GET', '/health', async (req, res) => {
 });
 
 addRoute('GET', '/', async (req, res) => {
+  const url = parseUrl(req.url ?? '', true);
+  const queryToken = url.query['token'] as string | undefined;
+
+  if (queryToken && timingSafeTokenCompare(queryToken, config.pairToken)) {
+    setAuthCookie(res, req);
+    redirect(res, '/');
+    return;
+  }
+
   if (!isAuthenticated(req)) {
     const loginHtml = getLoginHtml();
     sendHtml(res, loginHtml);
@@ -291,9 +312,9 @@ addRoute('GET', '/settings', async (req, res) => {
 });
 
 addRoute('GET', '/api/auth/session', async (req, res) => {
-  const sessionToken = getSessionCookie(req);
+  const cookieToken = getPairTokenCookie(req);
 
-  if (sessionToken && validateSession(sessionToken)) {
+  if (cookieToken && timingSafeTokenCompare(cookieToken, config.pairToken)) {
     res.writeHead(200);
     res.end();
   } else {
@@ -529,16 +550,8 @@ addRoute('POST', '/auth', async (req, res) => {
   
   const token = body.token;
 
-  if (validatePairToken(token)) {
-    const sessionToken = createSession();
-    const isHttps = req.headers['x-forwarded-proto'] === 'https' || 
-                    req.headers.host?.startsWith('https') ||
-                    config.isProduction;
-    const securePart = isHttps ? '; Secure' : '';
-    res.setHeader(
-      'Set-Cookie',
-      `${SESSION_COOKIE_NAME}=${sessionToken}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${SESSION_MAX_AGE_SECONDS}${securePart}`
-    );
+  if (timingSafeTokenCompare(token, config.pairToken)) {
+    setAuthCookie(res, req);
     sendJson(res, { success: true });
   } else {
     sendError(res, 'Invalid token', 401);
@@ -546,19 +559,7 @@ addRoute('POST', '/auth', async (req, res) => {
 });
 
 addRoute('POST', '/logout', async (req, res) => {
-  const sessionToken = getSessionCookie(req);
-  if (sessionToken) {
-    revokeSession(sessionToken);
-  }
-
-  const isHttps = req.headers['x-forwarded-proto'] === 'https' || 
-                  req.headers.host?.startsWith('https') ||
-                  config.isProduction;
-  const securePart = isHttps ? '; Secure' : '';
-  res.setHeader(
-    'Set-Cookie',
-    `${SESSION_COOKIE_NAME}=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0${securePart}`
-  );
+  clearAuthCookie(res, req);
   sendJson(res, { success: true });
 });
 
@@ -2272,8 +2273,6 @@ export function getDashboardHtml(settings: ReturnType<typeof loadSettings>, pair
 }
 
 export function startServer(): void {
-  startSessionCleanup();
-  
   const server = createServer(async (req, res) => {
     const url = parseUrl(req.url ?? '', true);
     const path = url.pathname ?? '/';
