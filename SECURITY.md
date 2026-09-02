@@ -109,9 +109,11 @@ Open Connector adds the authentication and executes the action.
 3. Update `.env` with new `OPEN_CONNECTOR_TOKEN`
 4. Restart: `docker compose restart agent`
 
-### Admin Token (First-Run)
+### Admin Token (Optional — Operators Only)
 
-During first-run setup, an admin token is shown **once** for Open Connector console access. The owner must acknowledge saving it before completing setup. This token is never shown again.
+`CONNECTOR_ADMIN_TOKEN` is an optional credential for accessing the Open Connector console at `https://console.{DOMAIN}`. Operators set it in `.env` before deployment if they need the console for additional integrations beyond Gmail/Calendar.
+
+This token is **not** part of the customer first-run wizard. Gmail and Calendar connect directly from Settings without the console. The admin token is for operators who need to configure extra tools or manage OAuth apps.
 
 ### CONNECTOR_ENCRYPTION_KEY
 

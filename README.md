@@ -21,8 +21,6 @@ After `docker compose up`, the Web UI guides you through:
 1. **WhatsApp Pairing** - Scan QR code with your phone (Settings → Linked Devices → Link a Device)
 2. **AI Provider Login** - Connect **Claude (subscription — recommended)**: authorize in the browser, copy the code Claude shows, paste it in the wizard. Or connect ChatGPT via OAuth.
 3. **Identity Setup** - Enter your name, business name, and timezone (writes SOUL.md and AGENTS.md)
-4. **Open Connector** - Health check and connection status
-5. **Admin Token** - Shown once, save it securely, then acknowledge (never shown again)
 
 After onboarding, the **Settings** page lets you:
 - Review and edit identity (name, business, timezone)
@@ -187,7 +185,7 @@ Caddy handles TLS and routing:
 - On `{$DOMAIN}` nothing but the OAuth callback reaches the connector: `/v1/*`, `/mcp`, `/api/files/*`, `/api/runs*`, `/openapi.json` stay internal
 - Agent-to-connector traffic uses the internal Docker network (`http://connector:3000`)
 
-**Console URL:** `https://console.your-domain.com` (log in with the admin token the wizard shows once). Override the host with `CONSOLE_DOMAIN` / the link with `CONSOLE_URL`.
+**Console URL:** `https://console.your-domain.com` (optional, extra tools — operators set `CONNECTOR_ADMIN_TOKEN` in `.env` to access). Override the host with `CONSOLE_DOMAIN` / the link with `CONSOLE_URL`.
 
 Set `CONNECTOR_ORIGIN=https://your-domain.com` so OAuth callbacks land on the agent's domain.
 
