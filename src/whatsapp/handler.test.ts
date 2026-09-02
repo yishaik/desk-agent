@@ -268,6 +268,46 @@ describe('handleMessage — self-chat gate integration', () => {
     expect(mockSendMessage).toHaveBeenCalled();
   });
 
+  it('DOES process self-chat via phone JID when LID is missing (does not silent-return)', async () => {
+    mockGetOwnerLid.mockReturnValue(null);
+    mockGetSelfChatJid.mockReturnValue('1234567890@s.whatsapp.net');
+
+    const { handleMessage } = await import('./handler.ts');
+
+    const selfChatMessage = makeMessage({
+      from: '1234567890:123@s.whatsapp.net',
+      to: '1234567890@s.whatsapp.net',
+      body: '/help',
+      isFromMe: true,
+      messageKey: { remoteJid: '1234567890@s.whatsapp.net', id: 'msg_nolid', fromMe: true },
+    });
+
+    await handleMessage(selfChatMessage);
+
+    expect(mockSendMessage).toHaveBeenCalled();
+    expect(mockSendMessage.mock.calls[0]?.[0]).toBe('1234567890@s.whatsapp.net');
+  });
+
+  it('still skips fromMe to another person when LID is missing (fromMe is not auth)', async () => {
+    mockGetOwnerLid.mockReturnValue(null);
+    mockGetSelfChatJid.mockReturnValue('1234567890@s.whatsapp.net');
+
+    const { handleMessage } = await import('./handler.ts');
+
+    const messageToOther = makeMessage({
+      from: '1234567890:123@s.whatsapp.net',
+      to: '9876543210@s.whatsapp.net',
+      body: '/help',
+      isFromMe: true,
+      messageKey: { remoteJid: '9876543210@s.whatsapp.net', id: 'msg_other', fromMe: true },
+    });
+
+    await handleMessage(messageToOther);
+
+    expect(mockSendMessage).not.toHaveBeenCalled();
+    expect(mockSendReaction).not.toHaveBeenCalled();
+  });
+
   it('returns early when ownerJid is null', async () => {
     mockGetOwnerJid.mockReturnValue(null);
     const { handleMessage } = await import('./handler.ts');
