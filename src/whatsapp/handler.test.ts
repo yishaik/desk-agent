@@ -5,13 +5,69 @@ import type { Message } from '../core/types.ts';
 
 const TEST_DATA_DIR = './test-data-handler';
 
+const mockSendMessage = vi.fn();
+const mockSendReaction = vi.fn();
+const mockGetOwnerJid = vi.fn();
+const mockGetOwnerPhone = vi.fn();
+const mockGetOwnerLid = vi.fn();
+const mockIsConnected = vi.fn();
+
+vi.mock('./client.ts', () => ({
+  getWhatsAppClient: () => ({
+    sendMessage: mockSendMessage,
+    sendReaction: mockSendReaction,
+    getOwnerJid: mockGetOwnerJid,
+    getOwnerPhone: mockGetOwnerPhone,
+    getOwnerLid: mockGetOwnerLid,
+    isConnected: mockIsConnected,
+    isSelfJid: (jid: string | null | undefined) => {
+      const ownerPhone = mockGetOwnerPhone();
+      const ownerLid = mockGetOwnerLid();
+      return isSelfChatJid(jid, ownerPhone, ownerLid);
+    },
+  }),
+  WhatsAppClient: class {},
+}));
+
+vi.mock('../agent/session.ts', () => ({
+  runPromptWithCallbacks: vi.fn(async () => null),
+  clearSession: vi.fn(),
+  getOrCreateSession: vi.fn(async () => ({})),
+  setSessionModel: vi.fn(async () => true),
+  getPendingConfirmation: vi.fn(() => undefined),
+  getLatestPendingConfirmation: vi.fn(() => null),
+  confirmAction: vi.fn(() => false),
+  cancelConfirmation: vi.fn(() => false),
+  cleanupOldConfirmations: vi.fn(),
+  checkCredentialsBeforePrompt: vi.fn(async () => ({ valid: true, model: true, modelId: 'test' })),
+  recreateSessionAfterCredentialChange: vi.fn(async () => {}),
+  CredentialError: class extends Error {},
+}));
+
+vi.mock('../agent/claude-code.ts', () => ({
+  isClaudeCodeConnected: vi.fn(() => false),
+  runClaudeCodePrompt: vi.fn(async () => null),
+  clearClaudeCodeSession: vi.fn(),
+}));
+
+vi.mock('../http/auth.ts', () => ({
+  listRuntimeCredentials: vi.fn(async () => []),
+  resolveActiveModel: vi.fn(async () => ({ valid: true, model: true, modelId: 'test' })),
+}));
+
 beforeEach(() => {
   vi.resetModules();
+  vi.clearAllMocks();
   process.env['DATA_DIR'] = TEST_DATA_DIR;
   if (existsSync(TEST_DATA_DIR)) {
     rmSync(TEST_DATA_DIR, { recursive: true });
   }
   mkdirSync(TEST_DATA_DIR, { recursive: true });
+  
+  mockGetOwnerJid.mockReturnValue('1234567890:123@s.whatsapp.net');
+  mockGetOwnerPhone.mockReturnValue('1234567890');
+  mockGetOwnerLid.mockReturnValue('ABC123XYZ@lid');
+  mockIsConnected.mockReturnValue(true);
 });
 
 afterEach(() => {
@@ -106,25 +162,154 @@ describe('isSelfChatJid — canonical self-chat gate', () => {
   });
 });
 
-describe('Self-Chat Gate — handler integration', () => {
-  const ownerPhone = '1234567890';
-  const ownerLid = 'ABC123XYZ@lid';
-
-  describe('CRITICAL: fromMe alone is NOT authorization', () => {
-    it('handler gate MUST reject fromMe + otherPerson@s.whatsapp.net', () => {
-      const toOther = '9876543210@s.whatsapp.net';
-      expect(isSelfChatJid(toOther, ownerPhone, ownerLid)).toBe(false);
+describe('handleMessage — self-chat gate integration', () => {
+  it('does NOT send/react when fromMe + otherPerson@s.whatsapp.net', async () => {
+    const { handleMessage } = await import('./handler.ts');
+    
+    const messageToOther = makeMessage({
+      from: '1234567890:123@s.whatsapp.net',
+      to: '9876543210@s.whatsapp.net',
+      body: 'Hello someone else',
+      isFromMe: true,
+      messageKey: { remoteJid: '9876543210@s.whatsapp.net', id: 'msg_1', fromMe: true },
     });
 
-    it('handler gate MUST reject fromMe + group@g.us', () => {
-      const toGroup = '123456789-987654321@g.us';
-      expect(isSelfChatJid(toGroup, ownerPhone, ownerLid)).toBe(false);
+    await handleMessage(messageToOther);
+
+    expect(mockSendMessage).not.toHaveBeenCalled();
+    expect(mockSendReaction).not.toHaveBeenCalled();
+  });
+
+  it('does NOT send/react when fromMe + group@g.us', async () => {
+    const { handleMessage } = await import('./handler.ts');
+    
+    const groupMessage = makeMessage({
+      from: '1234567890:123@s.whatsapp.net',
+      to: '123456789-987654321@g.us',
+      body: 'Hello group',
+      isFromMe: true,
+      messageKey: { remoteJid: '123456789-987654321@g.us', id: 'msg_1', fromMe: true },
     });
 
-    it('handler gate MUST reject fromMe + @broadcast', () => {
-      const toBroadcast = 'status@broadcast';
-      expect(isSelfChatJid(toBroadcast, ownerPhone, ownerLid)).toBe(false);
+    await handleMessage(groupMessage);
+
+    expect(mockSendMessage).not.toHaveBeenCalled();
+    expect(mockSendReaction).not.toHaveBeenCalled();
+  });
+
+  it('does NOT send/react when fromMe + @broadcast', async () => {
+    const { handleMessage } = await import('./handler.ts');
+    
+    const broadcastMessage = makeMessage({
+      from: '1234567890:123@s.whatsapp.net',
+      to: 'status@broadcast',
+      body: 'Hello broadcast',
+      isFromMe: true,
+      messageKey: { remoteJid: 'status@broadcast', id: 'msg_1', fromMe: true },
     });
+
+    await handleMessage(broadcastMessage);
+
+    expect(mockSendMessage).not.toHaveBeenCalled();
+    expect(mockSendReaction).not.toHaveBeenCalled();
+  });
+
+  it('does NOT send/react when isFromMe is false (inbound from other person)', async () => {
+    const { handleMessage } = await import('./handler.ts');
+    
+    const inboundMessage = makeMessage({
+      from: '9876543210@s.whatsapp.net',
+      to: '1234567890@s.whatsapp.net',
+      body: 'Hello',
+      isFromMe: false,
+      messageKey: { remoteJid: '1234567890@s.whatsapp.net', id: 'msg_1', fromMe: false },
+    });
+
+    await handleMessage(inboundMessage);
+
+    expect(mockSendMessage).not.toHaveBeenCalled();
+    expect(mockSendReaction).not.toHaveBeenCalled();
+  });
+
+  it('DOES process valid self-chat via phone JID', async () => {
+    const { handleMessage } = await import('./handler.ts');
+    
+    const selfChatMessage = makeMessage({
+      from: '1234567890:123@s.whatsapp.net',
+      to: '1234567890@s.whatsapp.net',
+      body: '/help',
+      isFromMe: true,
+      messageKey: { remoteJid: '1234567890@s.whatsapp.net', id: 'msg_1', fromMe: true },
+    });
+
+    await handleMessage(selfChatMessage);
+
+    expect(mockSendMessage).toHaveBeenCalled();
+  });
+
+  it('DOES process valid self-chat via LID', async () => {
+    const { handleMessage } = await import('./handler.ts');
+    
+    const selfChatMessage = makeMessage({
+      from: '1234567890:123@s.whatsapp.net',
+      to: 'ABC123XYZ@lid',
+      body: '/help',
+      isFromMe: true,
+      messageKey: { remoteJid: 'ABC123XYZ@lid', id: 'msg_1', fromMe: true },
+    });
+
+    await handleMessage(selfChatMessage);
+
+    expect(mockSendMessage).toHaveBeenCalled();
+  });
+
+  it('returns early when ownerJid is null', async () => {
+    mockGetOwnerJid.mockReturnValue(null);
+    const { handleMessage } = await import('./handler.ts');
+    
+    const message = makeMessage({
+      body: '/help',
+      isFromMe: true,
+    });
+
+    await handleMessage(message);
+
+    expect(mockSendMessage).not.toHaveBeenCalled();
+  });
+});
+
+describe('isSelfChat — exported function uses canonical gate', () => {
+  it('isSelfChat calls isSelfChatJid with owner phone and LID', async () => {
+    const { isSelfChat } = await import('./handler.ts');
+    
+    const selfMessage = makeMessage({
+      to: '1234567890@s.whatsapp.net',
+      isFromMe: true,
+    });
+    
+    expect(isSelfChat(selfMessage)).toBe(true);
+  });
+
+  it('isSelfChat rejects when isFromMe is false', async () => {
+    const { isSelfChat } = await import('./handler.ts');
+    
+    const notFromMe = makeMessage({
+      to: '1234567890@s.whatsapp.net',
+      isFromMe: false,
+    });
+    
+    expect(isSelfChat(notFromMe)).toBe(false);
+  });
+
+  it('isSelfChat rejects when to is another person', async () => {
+    const { isSelfChat } = await import('./handler.ts');
+    
+    const toOther = makeMessage({
+      to: '9876543210@s.whatsapp.net',
+      isFromMe: true,
+    });
+    
+    expect(isSelfChat(toOther)).toBe(false);
   });
 });
 

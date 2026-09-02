@@ -38,7 +38,7 @@ import {
   shouldUpdateReaction,
   type ReactionTracker,
 } from './reaction-state.ts';
-import { isSelfChatJid, bareJid } from './self-chat.ts';
+import { isSelfChatJid } from './self-chat.ts';
 
 const log = createChildLogger('handler');
 
@@ -219,13 +219,15 @@ async function checkForConfirmationResponse(text: string, projectId: string): Pr
  * Note: The client's isOwnerMessage has a known bug (if (isFromMe) return true)
  * that lets fromMe messages to other chats reach the handler. This function
  * MUST drop them. fromMe alone is NOT authorization.
+ * 
+ * Uses the canonical isSelfChatJid from self-chat.ts for testability.
  */
 export function isSelfChat(message: Message): boolean {
   if (!message.isFromMe) {
     return false;
   }
   const wa = getWhatsAppClient();
-  return wa.isSelfJid(message.to);
+  return isSelfChatJid(message.to, wa.getOwnerPhone(), wa.getOwnerLid());
 }
 
 export async function handleMessage(message: Message): Promise<void> {
