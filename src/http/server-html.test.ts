@@ -305,3 +305,35 @@ describe('Server HTML Source Code Requirements', () => {
     });
   });
 });
+
+
+describe('Pairing API leftovers (#132)', () => {
+  const serverCode = fs.readFileSync(path.join(__dirname, 'server.ts'), 'utf8');
+
+  it('exposes authenticated POST /api/pairing/unpair that keeps ownerPhone', () => {
+    expect(serverCode).toContain("addRoute('POST', '/api/pairing/unpair'");
+    const unpairIdx = serverCode.indexOf("addRoute('POST', '/api/pairing/unpair'");
+    const nextIdx = serverCode.indexOf("addRoute('POST', '/api/pairing/code'");
+    const unpairBlock = serverCode.slice(unpairIdx, nextIdx);
+    expect(unpairBlock).toContain('isAuthenticated');
+    expect(unpairBlock).toContain('wa.unpair()');
+    expect(unpairBlock).not.toMatch(/updateSettings\s*\(\s*\{\s*ownerPhone/);
+    expect(unpairBlock).not.toContain('.logout(');
+  });
+
+  it('exposes authenticated POST /api/pairing/code that rejects a mismatched phone', () => {
+    expect(serverCode).toContain("addRoute('POST', '/api/pairing/code'");
+    const codeIdx = serverCode.indexOf("addRoute('POST', '/api/pairing/code'");
+    const redactIdx = serverCode.indexOf('function redactSettings', codeIdx);
+    const codeBlock = serverCode.slice(codeIdx, redactIdx);
+    expect(codeBlock).toContain('isAuthenticated');
+    expect(codeBlock).toContain('requestPairingCode');
+    expect(codeBlock).toContain("'/api/pairing/repair'");
+    expect(codeBlock).toContain('403');
+  });
+
+  it('keeps POST /api/pairing/repair as the only owner-change path', () => {
+    expect(serverCode).toContain("addRoute('POST', '/api/pairing/repair'");
+    expect(serverCode).toContain('updateSettings({ ownerPhone: undefined })');
+  });
+});

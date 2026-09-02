@@ -13,7 +13,8 @@ const mockGetOwnerLid = vi.fn();
 const mockIsConnected = vi.fn();
 
 const mockGetSelfChatJid = vi.fn();
-const mockRunPromptWithCallbacks = vi.fn(async () => null);
+const staleSkip = { notified: false };
+const mockRunPromptWithCallbacks = vi.fn(async (): Promise<string | null> => null);
 
 vi.mock('./client.ts', () => ({
   getWhatsAppClient: () => ({
@@ -25,6 +26,11 @@ vi.mock('./client.ts', () => ({
     getSelfChatJid: mockGetSelfChatJid,
     getPairingState: () => ({ isPaired: true, selfChat: 'lid' }),
     isConnected: mockIsConnected,
+    takeStaleSkipNotice: () => {
+      if (staleSkip.notified) return false;
+      staleSkip.notified = true;
+      return true;
+    },
     isSelfJid: (jid: string | null | undefined) => {
       const ownerPhone = mockGetOwnerPhone();
       const ownerLid = mockGetOwnerLid();
@@ -77,6 +83,7 @@ beforeEach(() => {
   mockGetOwnerLid.mockReturnValue('ABC123XYZ@lid');
   mockGetSelfChatJid.mockReturnValue('ABC123XYZ@lid');
   mockIsConnected.mockReturnValue(true);
+  staleSkip.notified = false;
 });
 
 afterEach(() => {
@@ -1060,3 +1067,186 @@ describe('resolveReplyJid — replies stay inside the owner\'s own chat (#73)', 
   });
 });
 
+
+
+describe('U-12 WhatsApp leftovers (#141)', () => {
+  it('captionless media in self-chat gets Hebrew need-text, not a silent drop', async () => {
+    const { MEDIA_WITHOUT_TEXT_BODY } = await import('./inbound.ts');
+    const { handleMessage } = await import('./handler.ts');
+
+    await handleMessage(makeMessage({
+      id: 'msg_media_self',
+      from: '1234567890:123@s.whatsapp.net',
+      to: 'ABC123XYZ@lid',
+      body: MEDIA_WITHOUT_TEXT_BODY,
+      isFromMe: true,
+      messageKey: { remoteJid: 'ABC123XYZ@lid', id: 'msg_media_self', fromMe: true },
+    }));
+
+    expect(mockSendMessage).toHaveBeenCalled();
+    const bodies = mockSendMessage.mock.calls.map((c) => String(c[1]));
+    expect(bodies.some((b) => b.includes('צריך טקסט'))).toBe(true);
+    expect(mockRunPromptWithCallbacks).not.toHaveBeenCalled();
+  });
+
+  it('captionless media in a foreign chat is still dropped by the self-chat gate', async () => {
+    const { MEDIA_WITHOUT_TEXT_BODY } = await import('./inbound.ts');
+    const { handleMessage } = await import('./handler.ts');
+
+    await handleMessage(makeMessage({
+      id: 'msg_media_other',
+      from: '1234567890:123@s.whatsapp.net',
+      to: '9876543210@s.whatsapp.net',
+      body: MEDIA_WITHOUT_TEXT_BODY,
+      isFromMe: true,
+      messageKey: { remoteJid: '9876543210@s.whatsapp.net', id: 'msg_media_other', fromMe: true },
+    }));
+
+    expect(mockSendMessage).not.toHaveBeenCalled();
+    expect(mockRunPromptWithCallbacks).not.toHaveBeenCalled();
+  });
+
+  it('/login is not restored as a command — falls through to the model', async () => {
+    mockRunPromptWithCallbacks.mockResolvedValueOnce('login went to model');
+    const { handleMessage } = await import('./handler.ts');
+
+    await handleMessage(makeMessage({
+      id: 'msg_login_cmd',
+      from: '1234567890:123@s.whatsapp.net',
+      to: 'ABC123XYZ@lid',
+      body: '/login',
+      isFromMe: true,
+      messageKey: { remoteJid: 'ABC123XYZ@lid', id: 'msg_login_cmd', fromMe: true },
+    }));
+
+    expect(mockRunPromptWithCallbacks).toHaveBeenCalled();
+    const bodies = mockSendMessage.mock.calls.map((c) => String(c[1]));
+    expect(bodies).toContain('login went to model');
+    expect(bodies.some((b) => b.includes('ספקי AI'))).toBe(false);
+  });
+
+  it('unknown /command falls through to the model, not פקודה לא מוכרת', async () => {
+    mockRunPromptWithCallbacks.mockResolvedValueOnce('ok from model');
+    const { handleMessage } = await import('./handler.ts');
+
+    await handleMessage(makeMessage({
+      id: 'msg_unknown_cmd',
+      from: '1234567890:123@s.whatsapp.net',
+      to: 'ABC123XYZ@lid',
+      body: '/remind me tomorrow',
+      isFromMe: true,
+      messageKey: { remoteJid: 'ABC123XYZ@lid', id: 'msg_unknown_cmd', fromMe: true },
+    }));
+
+    const bodies = mockSendMessage.mock.calls.map((c) => String(c[1]));
+    expect(bodies.some((b) => b.includes('פקודה לא מוכרת'))).toBe(false);
+    expect(mockRunPromptWithCallbacks).toHaveBeenCalled();
+    expect(bodies).toContain('ok from model');
+  });
+
+  it('/help mentions כן/לא/אשר/בטל and does not restore /login', async () => {
+    const { handleMessage } = await import('./handler.ts');
+
+    await handleMessage(makeMessage({
+      id: 'msg_help_ux',
+      from: '1234567890:123@s.whatsapp.net',
+      to: 'ABC123XYZ@lid',
+      body: '/help',
+      isFromMe: true,
+      messageKey: { remoteJid: 'ABC123XYZ@lid', id: 'msg_help_ux', fromMe: true },
+    }));
+
+    const text = mockSendMessage.mock.calls.map((c) => String(c[1])).join('\n');
+    expect(text).toContain('כן');
+    expect(text).toContain('לא');
+    expect(text).toContain('אשר');
+    expect(text).toContain('בטל');
+    expect(text).not.toContain('/login');
+  });
+});
+
+describe('skip stale inbound messages (#155)', () => {
+  it('skips a self-chat message older than ~10 minutes and sends a quoted Hebrew notice', async () => {
+    const { handleMessage } = await import('./handler.ts');
+    const ts = Math.floor(Date.now() / 1000) - 11 * 60;
+
+    await handleMessage(makeMessage({
+      id: 'msg_stale',
+      from: '1234567890:123@s.whatsapp.net',
+      to: 'ABC123XYZ@lid',
+      body: 'old hello',
+      timestamp: ts,
+      isFromMe: true,
+      messageKey: { remoteJid: 'ABC123XYZ@lid', id: 'msg_stale', fromMe: true },
+    }));
+
+    expect(mockRunPromptWithCallbacks).not.toHaveBeenCalled();
+    expect(mockSendMessage).toHaveBeenCalled();
+    const call = mockSendMessage.mock.calls.find((c) => String(c[1]).includes('דילגתי'));
+    expect(call).toBeTruthy();
+    expect(call![2]).toEqual(expect.objectContaining({ id: 'msg_stale' }));
+  });
+
+  it('processes a recent self-chat message', async () => {
+    mockRunPromptWithCallbacks.mockResolvedValueOnce('fresh reply');
+    const { handleMessage } = await import('./handler.ts');
+
+    await handleMessage(makeMessage({
+      id: 'msg_fresh',
+      from: '1234567890:123@s.whatsapp.net',
+      to: 'ABC123XYZ@lid',
+      body: 'hello now',
+      timestamp: Math.floor(Date.now() / 1000),
+      isFromMe: true,
+      messageKey: { remoteJid: 'ABC123XYZ@lid', id: 'msg_fresh', fromMe: true },
+    }));
+
+    expect(mockRunPromptWithCallbacks).toHaveBeenCalled();
+    const bodies = mockSendMessage.mock.calls.map((c) => String(c[1]));
+    expect(bodies.some((b) => b.includes('דילגתי'))).toBe(false);
+  });
+
+  it('getMessage(id) dedupe still applies — a second stale delivery is not noticed again', async () => {
+    const { handleMessage } = await import('./handler.ts');
+    const msg = makeMessage({
+      id: 'msg_stale_dup',
+      from: '1234567890:123@s.whatsapp.net',
+      to: 'ABC123XYZ@lid',
+      body: 'old hello',
+      timestamp: Math.floor(Date.now() / 1000) - 11 * 60,
+      isFromMe: true,
+      messageKey: { remoteJid: 'ABC123XYZ@lid', id: 'msg_stale_dup', fromMe: true },
+    });
+
+    await handleMessage(msg);
+    await handleMessage(msg);
+
+    const skipCalls = mockSendMessage.mock.calls.filter((c) => String(c[1]).includes('דילגתי'));
+    expect(skipCalls).toHaveLength(1);
+  });
+
+  it('sends one Hebrew stale notice per reconnect, then silently skips further old messages', async () => {
+    const { handleMessage } = await import('./handler.ts');
+    const base = {
+      from: '1234567890:123@s.whatsapp.net',
+      to: 'ABC123XYZ@lid',
+      body: 'old hello',
+      timestamp: Math.floor(Date.now() / 1000) - 11 * 60,
+      isFromMe: true,
+    } as const;
+    await handleMessage(makeMessage({
+      ...base,
+      id: 'msg_stale_a',
+      messageKey: { remoteJid: 'ABC123XYZ@lid', id: 'msg_stale_a', fromMe: true },
+    }));
+    await handleMessage(makeMessage({
+      ...base,
+      id: 'msg_stale_b',
+      timestamp: Math.floor(Date.now() / 1000) - 12 * 60,
+      messageKey: { remoteJid: 'ABC123XYZ@lid', id: 'msg_stale_b', fromMe: true },
+    }));
+    const skipCalls = mockSendMessage.mock.calls.filter((c) => String(c[1]).includes('דילגתי'));
+    expect(skipCalls).toHaveLength(1);
+    expect(mockRunPromptWithCallbacks).not.toHaveBeenCalled();
+  });
+});

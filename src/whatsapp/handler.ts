@@ -43,10 +43,24 @@ import {
 } from './reaction-state.ts';
 import { isSelfChatJid, resolveReplyJid } from './self-chat.ts';
 import { enqueue } from './queue.ts';
+import {
+  MEDIA_WITHOUT_TEXT_BODY,
+  isStaleInbound,
+  shouldQuoteInbound,
+} from './inbound.ts';
 
 const log = createChildLogger('handler');
 
 const COMMAND_PREFIX = '/';
+
+const MEDIA_NEED_TEXT_HE = 'צריך טקסט (או כיתוב לתמונה)';
+const STALE_SKIP_HE = 'דילגתי על הודעות ישנות שנשלחו בזמן ניתוק.';
+
+function quoteArg(message: Message, force = false): MessageKey | undefined {
+  if (!message.messageKey) return undefined;
+  if (force || shouldQuoteInbound(message.timestamp)) return message.messageKey;
+  return undefined;
+}
 
 /**
  * Serial queue for non-bypass work. One chain so /project finishes before the
@@ -374,6 +388,19 @@ export async function handleMessage(message: Message): Promise<void> {
     return;
   }
 
+  if (isStaleInbound(message.timestamp)) {
+    log.info({ messageId: message.id, timestamp: message.timestamp }, 'Skipping stale inbound message');
+    if (wa.takeStaleSkipNotice()) {
+      await wa.sendMessage(chatJid, STALE_SKIP_HE, quoteArg(message, true));
+    }
+    return;
+  }
+
+  if (message.body === MEDIA_WITHOUT_TEXT_BODY) {
+    await wa.sendMessage(chatJid, MEDIA_NEED_TEXT_HE, quoteArg(message, true));
+    return;
+  }
+
   const tracker = message.messageKey ? createReactionTracker(message.messageKey) : null;
 
   // Queue-bypass commands (/status, /help, etc.) can run immediately without
@@ -381,8 +408,8 @@ export async function handleMessage(message: Message): Promise<void> {
   if (message.body.startsWith(COMMAND_PREFIX)) {
     const commandName = message.body.slice(COMMAND_PREFIX.length).split(' ')[0]?.toLowerCase();
     if (commandName && QUEUE_BYPASS_COMMANDS.has(commandName)) {
-      await handleCommandDirect(message, loadSettings(), wa, chatJid, tracker);
-      return;
+      const handled = await handleCommandDirect(message, loadSettings(), wa, chatJid, tracker);
+      if (handled) return;
     }
   }
 
@@ -408,25 +435,31 @@ async function handleCommandDirect(
   wa: WhatsAppClient,
   chatJid: string,
   tracker: ReactionTracker | null
-): Promise<void> {
+): Promise<boolean> {
   if (tracker) {
     await updateReaction(tracker, 'reading');
   }
   try {
     const result = await handleCommand(message.body, settings);
-    if (result.handled && result.response) {
-      if (tracker) {
-        await updateReaction(tracker, 'finished');
+    if (result.handled) {
+      if (result.response) {
+        if (tracker) {
+          await updateReaction(tracker, 'finished');
+        }
+        await wa.sendMessage(chatJid, result.response, quoteArg(message));
       }
-      await wa.sendMessage(chatJid, result.response);
-    } else if (!result.handled) {
-      await updateReaction(tracker, 'error');
-      await wa.sendMessage(chatJid, 'פקודה לא מוכרת. שלח /help לרשימת הפקודות.');
+      return true;
     }
+    return false;
   } catch (err) {
     log.error({ err, command: message.body }, 'Command failed');
     await updateReaction(tracker, 'error');
-    await wa.sendMessage(chatJid, `שגיאה בפקודה: ${err instanceof Error ? err.message : 'Unknown error'}`);
+    await wa.sendMessage(
+      chatJid,
+      `שגיאה בפקודה: ${err instanceof Error ? err.message : 'Unknown error'}`,
+      quoteArg(message)
+    );
+    return true;
   }
 }
 
@@ -443,9 +476,10 @@ async function processMessageQueued(
 
   try {
     // Non-bypass commands (like /project, /model) need the queue.
+    // Unknown /commands are not an error — fall through to the model prompt (#141).
     if (message.body.startsWith(COMMAND_PREFIX)) {
-      await handleCommandDirect(message, settings, wa, chatJid, tracker);
-      return;
+      const handled = await handleCommandDirect(message, settings, wa, chatJid, tracker);
+      if (handled) return;
     }
 
     // Confirmations ("yes", "כן") must be in the queue — they interact with
@@ -459,7 +493,7 @@ async function processMessageQueued(
         if (tracker) {
           await updateReaction(tracker, 'finished');
         }
-        await wa.sendMessage(chatJid, confirmResponse.response);
+        await wa.sendMessage(chatJid, confirmResponse.response, quoteArg(message));
       }
       return;
     }
@@ -470,28 +504,28 @@ async function processMessageQueued(
       const response = await processWithPi(message, settings, tracker);
       if (response) {
         await updateReaction(tracker, 'finished');
-        await sendSplitMessage(chatJid, response, message.id);
+        await sendSplitMessage(chatJid, response, quoteArg(message));
       } else {
         // Never fail silently — the user is staring at a chat with no reply.
         await updateReaction(tracker, 'error');
-        await wa.sendMessage(chatJid, '⚠️ לא התקבלה תשובה מהמודל. נסה שוב, ואם זה חוזר — בדוק את חיבור ה-AI בהגדרות.');
+        await wa.sendMessage(chatJid, '⚠️ לא התקבלה תשובה מהמודל. נסה שוב, ואם זה חוזר — בדוק את חיבור ה-AI בהגדרות.', quoteArg(message));
       }
     } catch (err) {
       log.error({ err }, 'Error processing message');
       await updateReaction(tracker, 'error');
-      await wa.sendMessage(chatJid, `שגיאה: ${err instanceof Error ? err.message : 'Unknown error'}`);
+      await wa.sendMessage(chatJid, `שגיאה: ${err instanceof Error ? err.message : 'Unknown error'}`, quoteArg(message));
     }
   } finally {
     activeProcessing.delete(projectId);
   }
 }
 
-async function sendSplitMessage(jid: string, text: string, _replyToId?: string): Promise<void> {
+async function sendSplitMessage(jid: string, text: string, quoted?: MessageKey): Promise<void> {
   const wa = getWhatsAppClient();
   const MAX_LENGTH = 4000;
   
   if (text.length <= MAX_LENGTH) {
-    await wa.sendMessage(jid, text);
+    await wa.sendMessage(jid, text, quoted);
     return;
   }
 
@@ -499,7 +533,7 @@ async function sendSplitMessage(jid: string, text: string, _replyToId?: string):
   for (let i = 0; i < parts.length; i++) {
     const part = parts[i];
     const prefix = parts.length > 1 ? `[${i + 1}/${parts.length}]\n\n` : '';
-    await wa.sendMessage(jid, prefix + (part ?? ''));
+    await wa.sendMessage(jid, prefix + (part ?? ''), i === 0 ? quoted : undefined);
     if (i < parts.length - 1) {
       await new Promise((r) => setTimeout(r, 500));
     }
@@ -554,6 +588,9 @@ async function handleCommand(text: string, settings: Settings): Promise<CommandR
 /services - רשימת שירותים מחוברים
 /settings - הצג הגדרות
 /model [name] - החלף מודל
+
+*אישור פעולות:*
+כן / אשר — אישור · לא / בטל — ביטול
 
 *פעולות Open Connector:*
 שאל "מה אני יכול לעשות עם Gmail?" או "שלח מייל ל..."
@@ -735,33 +772,6 @@ _היכנס לממשק הניהול לשינוי הגדרות_`,
           response: `✅ מודל שונה ל: *${model}* (ישתנה בהודעה הבאה)`,
         };
       }
-    }
-
-    case 'login': {
-      const credentials = await listRuntimeCredentials();
-      
-      if (credentials.length > 0) {
-        const providers = credentials.map(c => `✅ ${c.providerId} (${c.type})`).join('\n');
-        return {
-          handled: true,
-          response: `*ספקי AI מחוברים*
-
-${providers}
-
-_לניהול חיבורים - היכנס להגדרות ב-Web UI_`,
-        };
-      }
-      
-      return {
-        handled: true,
-        response: `*לא מחובר ספק AI*
-
-היכנס להגדרות ב-Web UI וחבר ספק:
-- Anthropic (Claude Pro/Max)
-- OpenAI (ChatGPT Plus/Pro)
-
-_ההתחברות מתבצעת דרך OAuth - ללא צורך ב-API key_`,
-      };
     }
 
     default:
