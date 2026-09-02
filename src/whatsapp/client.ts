@@ -53,10 +53,6 @@ export function resolvePinnedBaileysVersion(): [number, number, number] {
   return PINNED_BAILEYS_VERSION;
 }
 
-function digitsOnly(value: string | undefined | null): string {
-  return (value ?? '').replace(/\D/g, '');
-}
-
 export type MessageHandler = (message: Message) => Promise<void>;
 
 export class WhatsAppClient {
@@ -549,39 +545,6 @@ export class WhatsAppClient {
   async unpair(): Promise<void> {
     log.info('Starting unpair (ownerPhone unchanged)');
     await this.wipeAuthAndReconnect('unpair');
-  }
-
-  /**
-   * Request a pairing code for the given phone. If ownerPhone is already set,
-   * the number must match — no silent owner swap.
-   */
-  async requestPairingCode(phone: string): Promise<string> {
-    const normalized = digitsOnly(phone);
-    if (!normalized) {
-      throw new Error('Missing phone number for pairing code');
-    }
-
-    const ownerPhone = loadSettings().ownerPhone;
-    if (ownerPhone && normalized !== digitsOnly(ownerPhone)) {
-      throw new Error(
-        `Phone ${normalized} does not match bound owner ${ownerPhone}`
-      );
-    }
-
-    if (!this.socket) {
-      await this.connect();
-    }
-    if (!this.socket) {
-      throw new Error('WhatsApp client not initialized');
-    }
-
-    const code = await this.socket.requestPairingCode(normalized);
-    this.pairingState = {
-      ...this.pairingState,
-      pairingCode: code,
-    };
-    log.info('Requested WhatsApp pairing code');
-    return code;
   }
 }
 

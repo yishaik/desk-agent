@@ -313,7 +313,7 @@ describe('Pairing API leftovers (#132)', () => {
   it('exposes authenticated POST /api/pairing/unpair that keeps ownerPhone', () => {
     expect(serverCode).toContain("addRoute('POST', '/api/pairing/unpair'");
     const unpairIdx = serverCode.indexOf("addRoute('POST', '/api/pairing/unpair'");
-    const nextIdx = serverCode.indexOf("addRoute('POST', '/api/pairing/code'");
+    const nextIdx = serverCode.indexOf('function redactSettings', unpairIdx);
     const unpairBlock = serverCode.slice(unpairIdx, nextIdx);
     expect(unpairBlock).toContain('isAuthenticated');
     expect(unpairBlock).toContain('wa.unpair()');
@@ -321,15 +321,9 @@ describe('Pairing API leftovers (#132)', () => {
     expect(unpairBlock).not.toContain('.logout(');
   });
 
-  it('exposes authenticated POST /api/pairing/code that rejects a mismatched phone', () => {
-    expect(serverCode).toContain("addRoute('POST', '/api/pairing/code'");
-    const codeIdx = serverCode.indexOf("addRoute('POST', '/api/pairing/code'");
-    const redactIdx = serverCode.indexOf('function redactSettings', codeIdx);
-    const codeBlock = serverCode.slice(codeIdx, redactIdx);
-    expect(codeBlock).toContain('isAuthenticated');
-    expect(codeBlock).toContain('requestPairingCode');
-    expect(codeBlock).toContain("'/api/pairing/repair'");
-    expect(codeBlock).toContain('403');
+  it('does not expose POST /api/pairing/code (pairing-code waits)', () => {
+    expect(serverCode).not.toContain("addRoute('POST', '/api/pairing/code'");
+    expect(serverCode).not.toContain('requestPairingCode');
   });
 
   it('keeps POST /api/pairing/repair as the only owner-change path', () => {

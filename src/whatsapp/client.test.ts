@@ -347,40 +347,6 @@ describe('unpair() keeps ownerPhone (#132)', () => {
   });
 });
 
-describe('requestPairingCode — no silent owner swap (#132)', () => {
-  it('rejects a phone that does not match bound ownerPhone', async () => {
-    const { updateSettings } = await import('../core/settings.ts');
-    updateSettings({ ownerPhone: '972501234567' });
-
-    const { WhatsAppClient } = await import('./client.ts');
-    const client = new WhatsAppClient();
-
-    await expect(client.requestPairingCode('972509999999')).rejects.toThrow(
-      /does not match bound owner/
-    );
-  });
-
-  it('allows a matching owner phone and stores the code', async () => {
-    const { updateSettings } = await import('../core/settings.ts');
-    updateSettings({ ownerPhone: '972501234567' });
-
-    const { WhatsAppClient } = await import('./client.ts');
-    const client = new WhatsAppClient();
-
-    const mockSocket = {
-      requestPairingCode: vi.fn().mockResolvedValue('ABCD-1234'),
-      ev: { on: vi.fn(), removeAllListeners: vi.fn() },
-      end: vi.fn(),
-    };
-    (client as unknown as { socket: typeof mockSocket }).socket = mockSocket;
-
-    const code = await client.requestPairingCode('+972-50-123-4567');
-    expect(code).toBe('ABCD-1234');
-    expect(mockSocket.requestPairingCode).toHaveBeenCalledWith('972501234567');
-    expect(client.getPairingState().pairingCode).toBe('ABCD-1234');
-  });
-});
-
 describe('captionless media is delivered to handlers (#141)', () => {
   it('does not silent-drop an image without caption', async () => {
     const { WhatsAppClient } = await import('./client.ts');
@@ -486,7 +452,6 @@ describe('pinned Baileys version (#156)', () => {
     const makeWASocket = vi.fn().mockReturnValue({
       ev: { on: vi.fn(), removeAllListeners: vi.fn() },
       end: vi.fn(),
-      requestPairingCode: vi.fn(),
     });
 
     vi.doMock('@whiskeysockets/baileys', async (importOriginal) => {
