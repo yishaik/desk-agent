@@ -1,3 +1,4 @@
+import { resolve } from 'node:path';
 import { randomBytes } from 'node:crypto';
 
 export interface Config {
@@ -25,7 +26,8 @@ function generatePairToken(): string {
 
 export function loadConfig(): Config {
   const isProduction = process.env['NODE_ENV'] === 'production';
-  const dataDir = getEnvOrDefault('DATA_DIR', './data');
+  // Absolute: it becomes HOME/CLAUDE_CONFIG_DIR of child processes that run with another cwd.
+  const dataDir = resolve(getEnvOrDefault('DATA_DIR', './data'));
   
   let pairToken = process.env['PAIR_TOKEN'] ?? '';
   if (!pairToken) {

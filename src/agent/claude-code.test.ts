@@ -172,12 +172,31 @@ describe('Issue #31: Claude Code child env security', () => {
 });
 
 describe('Issue #32: Session handling and prompt delivery', () => {
-  it('prompt is passed via stdin, not argv (-p -)', async () => {
-    const code = readFileSync(join(process.cwd(), 'src/agent/claude-code.ts'), 'utf8');
-    
-    expect(code).toContain("'-p', '-'");
-    expect(code).toContain('child.stdin?.write(text)');
-    expect(code).toContain('child.stdin?.end()');
+  it('runs the CLI with the prompt on stdin (no positional, no "-" sentinel) and no built-in tools (#75)', async () => {
+    // The runner does not inherit process.env (#31): the stub logs under HOME (= data/claude-code).
+    const logPath = join(TEST_DATA_DIR, 'claude-code', 'fake-claude.log');
+    process.env['CLAUDE_CODE_BIN'] = join(process.cwd(), 'scripts', 'fake-claude.mjs');
+    vi.resetModules();
+    const cc = await import('./claude-code.ts');
+    // "connected" = credentials file present
+    mkdirSync(join(TEST_DATA_DIR, 'claude-code', 'config'), { recursive: true });
+    writeFileSync(join(TEST_DATA_DIR, 'claude-code', 'config', '.credentials.json'), '{}');
+
+    const text = await cc.runClaudeCodePrompt('default', '--help me with -this message');
+    expect(text).toBe('echo: --help me with -this message');
+
+    const call = JSON.parse(readFileSync(logPath, 'utf8').trim().split('\n')[0]!) as { args: string[]; stdin: string };
+    expect(call.stdin).toBe('--help me with -this message');
+    expect(call.args).not.toContain('--help me with -this message');
+    expect(call.args[0]).toBe('-p');
+    expect(call.args[1]).toBe('--output-format');           // no "-" sentinel after -p
+    expect(call.args).toContain('--tools');
+    expect(call.args[call.args.indexOf('--tools') + 1]).toBe('');
+    expect(call.args).toContain('--strict-mcp-config');
+    expect(call.args[call.args.indexOf('--allowed-tools') + 1]).toBe('mcp__connector__*');
+    // the session id from the stream is persisted for --resume
+    const sessions = JSON.parse(readFileSync(join(TEST_DATA_DIR, 'claude-code', 'sessions.json'), 'utf8')) as Record<string, string>;
+    expect(sessions['default']).toBe('fake-session-1');
   });
 
   it('SESSION_INVALID_PATTERNS are defined for targeted retry', async () => {

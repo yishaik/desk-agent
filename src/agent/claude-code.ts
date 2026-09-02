@@ -310,12 +310,18 @@ export async function runClaudeCodePrompt(
   const attempt = (resumeId?: string): Promise<{ text: string | null; sessionId?: string; errorMessage?: string; exitCode: number | null; stderr: string }> =>
     new Promise((resolve) => {
       const mcpConfigPath = buildMcpConfig(projectId);
+      // Verified against claude 2.1.258: with no positional prompt, `-p` reads the
+      // prompt from stdin verbatim. `-p -` is NOT a stdin sentinel — it sent a
+      // literal "-\n" line ahead of every message (#75). `--tools ""` removes every
+      // built-in tool (Skill, ToolSearch, Cron*, SendMessage, ...), not just the
+      // ones a deny list happens to name; the MCP connector tools stay allowed.
       const args = [
-        '-p', '-',
+        '-p',
         '--output-format', 'stream-json',
         '--verbose',
         '--mcp-config', mcpConfigPath,
         '--strict-mcp-config',
+        '--tools', '',
         '--allowed-tools', 'mcp__connector__*',
         '--disallowed-tools', 'Bash,Edit,Write,NotebookEdit,Read,Glob,Grep,Task,WebFetch,WebSearch',
         '--append-system-prompt', buildSystemPrompt(),
