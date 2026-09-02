@@ -1,4 +1,5 @@
 import { createServer, IncomingMessage, ServerResponse } from 'node:http';
+import { timingSafeEqual } from 'node:crypto';
 import { parse as parseUrl } from 'node:url';
 import { parse as parseQuery } from 'node:querystring';
 import { readFileSync } from 'node:fs';
@@ -98,6 +99,21 @@ function matchRoute(
   return null;
 }
 
+function timingSafeTokenCompare(provided: string | undefined, expected: string): boolean {
+  if (!provided || typeof provided !== 'string') {
+    return false;
+  }
+  
+  const providedBuf = Buffer.from(provided, 'utf8');
+  const expectedBuf = Buffer.from(expected, 'utf8');
+  
+  if (providedBuf.length !== expectedBuf.length) {
+    return false;
+  }
+  
+  return timingSafeEqual(providedBuf, expectedBuf);
+}
+
 function isAuthenticated(req: IncomingMessage): boolean {
   const url = parseUrl(req.url ?? '', true);
   const queryToken = url.query['token'] as string | undefined;
@@ -114,7 +130,7 @@ function isAuthenticated(req: IncomingMessage): boolean {
     : undefined;
 
   const token = queryToken ?? cookieToken ?? bearerToken;
-  return token === config.pairToken;
+  return timingSafeTokenCompare(token, config.pairToken);
 }
 
 function sendJson(res: ServerResponse, data: unknown, status = 200): void {
@@ -136,10 +152,23 @@ function redirect(res: ServerResponse, url: string): void {
   res.end();
 }
 
+const MAX_BODY_SIZE = 64 * 1024;
+
 async function parseBody<T>(req: IncomingMessage): Promise<T> {
   return new Promise((resolve, reject) => {
     let body = '';
-    req.on('data', (chunk) => (body += chunk));
+    let size = 0;
+    
+    req.on('data', (chunk: Buffer | string) => {
+      size += chunk.length;
+      if (size > MAX_BODY_SIZE) {
+        req.destroy();
+        reject(new Error('Request body too large'));
+        return;
+      }
+      body += chunk;
+    });
+    
     req.on('end', () => {
       try {
         resolve(JSON.parse(body) as T);
@@ -164,6 +193,8 @@ addRoute('GET', '/health', async (req, res) => {
   });
 });
 
+const COOKIE_MAX_AGE = 30 * 24 * 60 * 60;
+
 addRoute('GET', '/', async (req, res) => {
   if (!isAuthenticated(req)) {
     const loginHtml = getLoginHtml();
@@ -171,18 +202,20 @@ addRoute('GET', '/', async (req, res) => {
     return;
   }
 
-  // Entering via /?token=... must also set the session cookie, otherwise the
-  // wizard's same-origin API fetches (no query token) all get 401.
-  const queryToken = parseUrl(req.url ?? '', true).query['token'];
-  if (queryToken === config.pairToken) {
+  const url = parseUrl(req.url ?? '', true);
+  const queryToken = url.query['token'] as string | undefined;
+  
+  if (queryToken && timingSafeTokenCompare(queryToken, config.pairToken)) {
     const isHttps = req.headers['x-forwarded-proto'] === 'https' ||
                     req.headers.host?.startsWith('https') ||
                     config.isProduction;
     const securePart = isHttps ? '; Secure' : '';
     res.setHeader(
       'Set-Cookie',
-      `PAIR_TOKEN=${queryToken}; Path=/; HttpOnly; SameSite=Strict; Max-Age=31536000${securePart}`
+      `PAIR_TOKEN=${config.pairToken}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${COOKIE_MAX_AGE}${securePart}`
     );
+    redirect(res, '/');
+    return;
   }
 
   const settings = loadSettings();
@@ -433,19 +466,31 @@ addRoute('POST', '/auth', async (req, res) => {
   const body = await parseBody<{ token?: string }>(req).catch(() => ({ token: undefined }));
   const token = body.token;
 
-  if (token === config.pairToken) {
+  if (timingSafeTokenCompare(token, config.pairToken)) {
     const isHttps = req.headers['x-forwarded-proto'] === 'https' || 
                     req.headers.host?.startsWith('https') ||
                     config.isProduction;
     const securePart = isHttps ? '; Secure' : '';
     res.setHeader(
       'Set-Cookie',
-      `PAIR_TOKEN=${token}; Path=/; HttpOnly; SameSite=Strict; Max-Age=31536000${securePart}`
+      `PAIR_TOKEN=${config.pairToken}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${COOKIE_MAX_AGE}${securePart}`
     );
     sendJson(res, { success: true });
   } else {
     sendError(res, 'Invalid token', 401);
   }
+});
+
+addRoute('POST', '/logout', async (req, res) => {
+  const isHttps = req.headers['x-forwarded-proto'] === 'https' || 
+                  req.headers.host?.startsWith('https') ||
+                  config.isProduction;
+  const securePart = isHttps ? '; Secure' : '';
+  res.setHeader(
+    'Set-Cookie',
+    `PAIR_TOKEN=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0${securePart}`
+  );
+  sendJson(res, { success: true });
 });
 
 addRoute('GET', '/api/pairing', async (req, res) => {

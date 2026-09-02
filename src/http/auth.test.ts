@@ -184,3 +184,66 @@ describe('Auth Module', () => {
     expect(typeof result.success).toBe('boolean');
   });
 });
+
+describe('HTTP Authentication Security (server.ts)', () => {
+  it('SECURITY: imports timingSafeEqual from crypto', async () => {
+    const fs = await import('node:fs');
+    const path = await import('node:path');
+    const serverCode = fs.readFileSync(path.join(__dirname, 'server.ts'), 'utf8');
+    
+    expect(serverCode).toContain("import { timingSafeEqual } from 'node:crypto'");
+  });
+
+  it('SECURITY: has timingSafeTokenCompare function using timingSafeEqual', async () => {
+    const fs = await import('node:fs');
+    const path = await import('node:path');
+    const serverCode = fs.readFileSync(path.join(__dirname, 'server.ts'), 'utf8');
+    
+    expect(serverCode).toContain('function timingSafeTokenCompare');
+    expect(serverCode).toContain('timingSafeEqual(providedBuf, expectedBuf)');
+  });
+
+  it('SECURITY: isAuthenticated uses timing-safe comparison', async () => {
+    const fs = await import('node:fs');
+    const path = await import('node:path');
+    const serverCode = fs.readFileSync(path.join(__dirname, 'server.ts'), 'utf8');
+    
+    expect(serverCode).toContain('timingSafeTokenCompare(token, config.pairToken)');
+  });
+
+  it('SECURITY: parseBody has MAX_BODY_SIZE limit and destroys oversized requests', async () => {
+    const fs = await import('node:fs');
+    const path = await import('node:path');
+    const serverCode = fs.readFileSync(path.join(__dirname, 'server.ts'), 'utf8');
+    
+    expect(serverCode).toContain('const MAX_BODY_SIZE = 64 * 1024');
+    expect(serverCode).toContain('size > MAX_BODY_SIZE');
+    expect(serverCode).toContain('req.destroy()');
+  });
+
+  it('SECURITY: cookie max age is 30 days, not 1 year', async () => {
+    const fs = await import('node:fs');
+    const path = await import('node:path');
+    const serverCode = fs.readFileSync(path.join(__dirname, 'server.ts'), 'utf8');
+    
+    expect(serverCode).toContain('const COOKIE_MAX_AGE = 30 * 24 * 60 * 60');
+    expect(serverCode).not.toContain('Max-Age=31536000');
+  });
+
+  it('SECURITY: GET / with ?token= redirects to / after setting cookie', async () => {
+    const fs = await import('node:fs');
+    const path = await import('node:path');
+    const serverCode = fs.readFileSync(path.join(__dirname, 'server.ts'), 'utf8');
+    
+    expect(serverCode).toMatch(/if \(queryToken && timingSafeTokenCompare\(queryToken[\s\S]*?redirect\(res, '\/'\)/);
+  });
+
+  it('SECURITY: POST /logout endpoint exists and clears cookie', async () => {
+    const fs = await import('node:fs');
+    const path = await import('node:path');
+    const serverCode = fs.readFileSync(path.join(__dirname, 'server.ts'), 'utf8');
+    
+    expect(serverCode).toContain("addRoute('POST', '/logout'");
+    expect(serverCode).toContain('PAIR_TOKEN=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0');
+  });
+});
