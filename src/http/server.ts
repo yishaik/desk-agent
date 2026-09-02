@@ -23,7 +23,10 @@ import {
   getService,
   setServiceEnabled,
   isActionEnabled,
+  setActionConfirmation,
+  getActionConfirmationOverride,
 } from '../core/settings.ts';
+import { requiresConfirmation } from '../core/confirmations.ts';
 import { listProjects, createProject, getProject } from '../core/memory.ts';
 import { getWhatsAppClient } from '../whatsapp/client.ts';
 import { createClient, isRealConnection } from '../open-connector/client.ts';
@@ -1017,6 +1020,10 @@ interface ActionInfo {
   displayName: string;
   description: string;
   enabled: boolean;
+  /** Override set by the owner: 'auto' (verb-based), 'always', or 'never'. */
+  confirmation: 'auto' | 'always' | 'never';
+  /** Effective gate: will the agent ask for a "yes" before running this action? */
+  requiresConfirmation: boolean;
 }
 
 addRoute('GET', '/api/connector/actions', async (req, res) => {
@@ -1050,6 +1057,8 @@ addRoute('GET', '/api/connector/actions', async (req, res) => {
         displayName: action.displayName,
         description: action.description,
         enabled,
+        confirmation: getActionConfirmationOverride(action.id),
+        requiresConfirmation: requiresConfirmation(action.id),
       };
     });
 
@@ -1057,6 +1066,53 @@ addRoute('GET', '/api/connector/actions', async (req, res) => {
   } catch (err) {
     log.error({ err, service: serviceFilter }, 'Failed to fetch actions');
     sendError(res, 'Failed to fetch actions', 500);
+  }
+});
+
+addRoute('PATCH', '/api/connector/tools/:service/actions/:action/confirmation', async (req, res, params) => {
+  if (!isAuthenticated(req)) {
+    sendError(res, 'Unauthorized', 401);
+    return;
+  }
+
+  const service = params.service ? decodeURIComponent(params.service) : '';
+  const action = params.action ? decodeURIComponent(params.action) : '';
+  if (!service || !action) {
+    sendError(res, 'Service ID and action ID required', 400);
+    return;
+  }
+
+  let body: { mode?: string };
+  try {
+    body = await parseBody<{ mode?: string }>(req);
+  } catch {
+    sendError(res, 'Invalid JSON body', 400);
+    return;
+  }
+  const mode = body.mode;
+  if (mode !== 'auto' && mode !== 'always' && mode !== 'never') {
+    sendError(res, "mode must be 'auto', 'always' or 'never'", 400);
+    return;
+  }
+
+  const settings = loadSettings();
+  const connector = createClient(settings.activeProject);
+
+  try {
+    const actions = await connector.listActions(service);
+    if (!actions.some((a) => a.id === action)) {
+      sendJson(res, { success: false, error: `Action '${action}' not found for service '${service}'` }, 404);
+      return;
+    }
+
+    setActionConfirmation(service, action, mode);
+    sendJson(res, {
+      success: true,
+      data: { service, action, confirmation: mode, requiresConfirmation: requiresConfirmation(action) },
+    });
+  } catch (err) {
+    log.error({ err, service, action }, 'Failed to update action confirmation mode');
+    sendError(res, 'Failed to update confirmation mode', 500);
   }
 });
 

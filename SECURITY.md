@@ -239,13 +239,13 @@ Then explicitly allow sending through the agent's confirmation flow.
 
 ## Confirmation Gates
 
-The agent asks for confirmation before:
-- Sending emails
-- Creating/modifying calendar events
-- Posting to external services
-- Deleting anything
+Every action that is not read-only requires the owner's approval in WhatsApp before it runs. The gate is an **allow-list**: only actions whose leading verb is read-only (`get`, `list`, `search`, `fetch`, `retrieve`, `query`, `find`, `describe`, `read`, `lookup`, `count`, `check`, …) run immediately. Anything else — send, reply, create, update, delete, move, trash, modify, schedule, upload, and verbs the agent has never seen — is held until the owner replies "yes".
 
-This is enforced in the message handler, not just the prompts.
+Per-action overrides are stored in `settings.json` (`services[].confirmationOverrides`) and set through
+`PATCH /api/connector/tools/:service/actions/:action/confirmation` with `{"mode": "always" | "never" | "auto"}`.
+`GET /api/connector/actions` reports the effective gate for every action.
+
+This is enforced in the tool implementations and the message handler, not just the prompts: the model has no parameter through which it can approve an action, and a confirmed action is executed by the handler outside the model's turn.
 
 ## Logging and Audit
 

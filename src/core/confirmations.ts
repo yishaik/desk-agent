@@ -2,6 +2,7 @@ import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { config } from './config.ts';
 import { createChildLogger } from './logger.ts';
+import { getActionConfirmationOverride } from './settings.ts';
 
 const log = createChildLogger('confirmations');
 
@@ -36,25 +37,36 @@ function save(store: Store): void {
   }
 }
 
-const MUTATING_ACTION_PATTERNS = [
-  /\.send[A-Z_]/i,
-  /\.create[A-Z_]/i,
-  /\.update[A-Z_]/i,
-  /\.delete[A-Z_]/i,
-  /\.remove[A-Z_]/i,
-  /\.post[A-Z_]/i,
-  /\.publish[A-Z_]/i,
-  /send[A-Z]/i,
-  /create[A-Z]/i,
-  /update[A-Z]/i,
-  /delete[A-Z]/i,
-  /remove[A-Z]/i,
-  /post[A-Z]/i,
-  /publish[A-Z]/i,
-];
+// --- classification --------------------------------------------------------
+// The gate is an ALLOW-list: only actions whose leading verb is unambiguously
+// read-only run without the owner's approval. Everything else — including
+// verbs we have never seen — is held for a "yes". (The previous deny-list
+// missed reply/trash/modify/schedule/upload, see #27.) Open Connector's
+// catalog carries no read-only/mutating metadata, so the verb is the signal.
+const READ_ONLY_VERBS = new Set([
+  'get', 'list', 'search', 'fetch', 'retrieve', 'query', 'find', 'describe', 'read',
+  'lookup', 'count', 'check', 'exists', 'is', 'has', 'preview', 'download', 'validate',
+  'render', 'calculate', 'compute', 'translate', 'summarize', 'analyze', 'classify',
+  'detect', 'parse', 'convert', 'ping', 'whoami',
+]);
+
+/** Leading verb of an action name: "gmail.get_message" → "get", "getMessages" → "get". */
+export function actionVerb(actionId: string): string {
+  const name = actionId.includes('.') ? actionId.slice(actionId.indexOf('.') + 1) : actionId;
+  const first = name.split(/[_\-\s]/)[0] ?? '';
+  const match = first.match(/^[A-Za-z][a-z]*/);
+  return (match ? match[0] : first).toLowerCase();
+}
+
+export function isReadOnlyAction(actionId: string): boolean {
+  return READ_ONLY_VERBS.has(actionVerb(actionId));
+}
 
 export function requiresConfirmation(actionId: string): boolean {
-  return MUTATING_ACTION_PATTERNS.some((pattern) => pattern.test(actionId));
+  const override = getActionConfirmationOverride(actionId);
+  if (override === 'never') return false;
+  if (override === 'always') return true;
+  return !isReadOnlyAction(actionId);
 }
 
 /**

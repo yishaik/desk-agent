@@ -24,6 +24,8 @@ export interface ServiceConfig {
   name: string;
   enabled: boolean;
   disabledActions?: string[];
+  /** Per-action confirmation override: 'always' forces the gate, 'never' bypasses it (read-only-safe actions only). */
+  confirmationOverrides?: Record<string, 'always' | 'never'>;
   connectedAt?: string;
 }
 
