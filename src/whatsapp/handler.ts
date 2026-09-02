@@ -1,8 +1,7 @@
 import { createChildLogger } from '../core/logger.ts';
 import { loadSettings, updateSettings, getActiveConnectorToken } from '../core/settings.ts';
-import { saveMessage, listProjects, createProject, getProject } from '../core/memory.ts';
+import { saveMessage, listProjects, createProject, getProject, getMessage } from '../core/memory.ts';
 import { slugifyProjectName, ProjectIdValidationError } from '../core/projects.ts';
-import { config } from '../core/config.ts';
 import { recordExecutedAction, consumeExecutedActionNotes } from '../core/confirmations.ts';
 import type { Message, MessageKey, Settings } from '../core/types.ts';
 import { getWhatsAppClient, WhatsAppClient } from './client.ts';
@@ -109,6 +108,9 @@ interface CommandResult {
   response?: string;
 }
 
+// The only place a mutating action is ever executed: after the owner's "yes".
+// The model never sees this tool result, so a note is recorded and prefixed to
+// the next prompt (withExecutedActionNotes).
 async function executePendingAction(
   pending: { actionId: string; input: Record<string, unknown>; connectionName?: string },
   projectId: string
@@ -168,7 +170,7 @@ async function checkForConfirmationResponse(text: string, projectId: string): Pr
 
   const trimmedText = text.trim();
   const confirmIdMatch = trimmedText.match(/confirm_\d+_[a-z0-9]+/);
-  
+
   if (confirmIdMatch) {
     const confirmId = confirmIdMatch[0];
     const pending = getPendingConfirmation(confirmId);
@@ -230,7 +232,7 @@ async function checkForConfirmationResponse(text: string, projectId: string): Pr
       confirmAction(single.confirmationId);
       return executePendingAction(single, projectId);
     }
-    
+
     const lines = ['⚠️ יש מספר פעולות ממתינות לאישור. בחר מספר:'];
     allPending.forEach((p, i) => {
       lines.push(`\n*${i + 1}.* ${formatPendingForUser(p)}`);
@@ -287,14 +289,34 @@ export async function handleMessage(message: Message): Promise<void> {
     return;
   }
 
-  const chatJid = message.messageKey?.remoteJid ?? ownerJid;
+  // Reply ONLY to LID self-chat. Prefer inbound @lid if self-chat, else getSelfChatJid().
+  const inboundJid = message.messageKey?.remoteJid;
+  const isInboundLidSelfChat = inboundJid?.endsWith('@lid') && wa.isSelfJid(inboundJid);
+  const chatJid = isInboundLidSelfChat ? inboundJid : wa.getSelfChatJid();
+
+  if (!chatJid || !chatJid.endsWith('@lid')) {
+    log.warn({ inboundJid, chatJid }, 'No LID self-chat available, skipping message');
+    return;
+  }
 
   const projectId = settings.activeProject;
   message.projectId = projectId;
-  saveMessage(message);
+
+  if (getMessage(message.id)) {
+    log.debug({ messageId: message.id }, 'Duplicate message, skipping');
+    return;
+  }
+
+  const saved = saveMessage(message);
+  if (!saved) {
+    log.debug({ messageId: message.id }, 'Message already processed, skipping');
+    return;
+  }
 
   const tracker = message.messageKey ? createReactionTracker(message.messageKey) : null;
 
+  // Queue-bypass commands (/status, /help, etc.) can run immediately without
+  // waiting for a queued model prompt to finish — they're read-only.
   if (message.body.startsWith(COMMAND_PREFIX)) {
     const commandName = message.body.slice(COMMAND_PREFIX.length).split(' ')[0]?.toLowerCase();
     if (commandName && QUEUE_BYPASS_COMMANDS.has(commandName)) {
@@ -303,8 +325,12 @@ export async function handleMessage(message: Message): Promise<void> {
     }
   }
 
+  // Everything else (model prompts, confirmations, non-bypass commands) goes
+  // through the per-project queue to prevent concurrent model access (#33).
   const wasActive = activeProcessing.has(projectId);
 
+  // If the model is already working on this project, send ⏳ immediately so
+  // the user knows their message is queued, not lost.
   if (wasActive && tracker) {
     await safeReaction(tracker.messageKey!, 'queued');
     log.debug({ projectId, messageId: message.id }, 'Message queued behind active processing');
@@ -312,7 +338,7 @@ export async function handleMessage(message: Message): Promise<void> {
 
   const previousTask = projectQueues.get(projectId) ?? Promise.resolve();
   const currentTask = previousTask.then(() => processMessageQueued(message, settings, wa, chatJid, tracker));
-  projectQueues.set(projectId, currentTask.catch(() => {}));
+  projectQueues.set(projectId, currentTask.catch(() => {})); // swallow errors in queue chain
 
   await currentTask;
 }
@@ -356,11 +382,14 @@ async function processMessageQueued(
   activeProcessing.add(projectId);
 
   try {
+    // Non-bypass commands (like /project, /model) need the queue.
     if (message.body.startsWith(COMMAND_PREFIX)) {
       await handleCommandDirect(message, settings, wa, chatJid, tracker);
       return;
     }
 
+    // Confirmations ("yes", "כן") must be in the queue — they interact with
+    // pending-confirmation state that may be mid-update by a model prompt.
     const confirmResponse = await checkForConfirmationResponse(message.body, projectId);
     if (confirmResponse.handled) {
       if (tracker) {
@@ -383,6 +412,7 @@ async function processMessageQueued(
         await updateReaction(tracker, 'finished');
         await sendSplitMessage(chatJid, response, message.id);
       } else {
+        // Never fail silently — the user is staring at a chat with no reply.
         await updateReaction(tracker, 'error');
         await wa.sendMessage(chatJid, '⚠️ לא התקבלה תשובה מהמודל. נסה שוב, ואם זה חוזר — בדוק את חיבור ה-AI בהגדרות.');
       }
@@ -475,7 +505,8 @@ _שלח הודעה לעצמך כדי לדבר עם הסוכן_`,
     case 'status': {
       const wa = getWhatsAppClient();
       const token = getActiveConnectorToken(settings);
-      const connectorHealth = await checkConnectorHealth();
+      const client = new OpenConnectorClient(settings.activeProject);
+      const connectorHealth = await client.checkHealth();
       
       const claudeCode = isClaudeCodeConnected();
       const credentials = await listRuntimeCredentials();
@@ -486,6 +517,8 @@ _שלח הודעה לעצמך כדי לדבר עם הסוכן_`,
       ].filter(Boolean).join(', ');
       const hasAnyProvider = claudeCode || credentials.length > 0;
 
+      // Claude Code is the active engine whenever it's connected; the pi
+      // model resolution is only relevant otherwise.
       let modelStatus: string;
       if (claudeCode) {
         modelStatus = '✅ Claude Code — מנוע פעיל (מכסת המנוי)';
@@ -676,14 +709,6 @@ _ההתחברות מתבצעת דרך OAuth - ללא צורך ב-API key_`,
   }
 }
 
-async function checkConnectorHealth(): Promise<boolean> {
-  try {
-    const response = await fetch(`${config.openConnectorUrl}/v1/health`);
-    return response.ok;
-  } catch {
-    return false;
-  }
-}
 
 async function processWithPi(
   message: Message, 
@@ -692,6 +717,8 @@ async function processWithPi(
 ): Promise<string | null> {
   await updateReaction(tracker, 'processing');
 
+  // Claude Code (customer's own subscription login) takes precedence — it is
+  // the only path that draws on Pro/Max plan limits.
   if (isClaudeCodeConnected()) {
     log.info({ projectId: settings.activeProject, message: message.body.slice(0, 50) }, 'Processing with Claude Code');
     const response = await runClaudeCodePrompt(settings.activeProject, withExecutedActionNotes(settings.activeProject, message.body), {
