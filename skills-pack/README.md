@@ -1,5 +1,7 @@
 # Desk Agent Skill Packs
 
+Selected in **Settings → סקילים** (`settings.skillPacks`, default `inbox-calendar`). Both engines load the selected packs: Pi through its skill loader (`additionalSkillPaths`), Claude Code through the system prompt. Add a pack with `skills-pack/<id>/SKILL.md` (`name`/`description` frontmatter + instructions).
+
 Pre-built skill configurations for common SMB use cases. Each skill pack is a directory containing a `SKILL.md` file with:
 
 - YAML frontmatter (name, description)

@@ -106,6 +106,11 @@ export function getSettingsHtml(data: SettingsPageData): string {
       font-weight: 600;
     }
     
+    .skill-packs { display: flex; flex-direction: column; gap: 10px; }
+    .skill-pack { display: grid; grid-template-columns: auto 1fr; gap: 4px 10px; align-items: start; padding: 10px 12px; border: 1px solid var(--border); border-radius: 10px; cursor: pointer; }
+    .skill-pack input { margin-top: 3px; }
+    .skill-pack-name { font-weight: 600; }
+    .skill-pack-desc { grid-column: 2; font-size: 13px; color: var(--text-muted); }
     .section-description {
       color: var(--text-secondary);
       font-size: 14px;
@@ -633,6 +638,16 @@ export function getSettingsHtml(data: SettingsPageData): string {
           <button type="submit">שמור שינויים</button>
         </div>
       </form>
+    </div>
+
+    <!-- Skill Packs Section -->
+    <div class="section">
+      <div class="section-header">
+        <span class="section-icon">📚</span>
+        <h3 class="section-title">סקילים</h3>
+      </div>
+      <p class="section-description">חבילות ידע שמגדירות איך הסוכן מטפל במשימות נפוצות. נטענות לשני המנועים ומשפיעות מיד.</p>
+      <div id="skillPacksList" class="skill-packs">טוען...</div>
     </div>
 
     <!-- AI Providers Section -->
@@ -1240,6 +1255,48 @@ export function getSettingsHtml(data: SettingsPageData): string {
       }
     }
 
+    async function loadSkillPacks() {
+      const container = document.getElementById('skillPacksList');
+      try {
+        const res = await fetch('/api/skills');
+        const json = await res.json();
+        if (!json.success) throw new Error(json.error || 'failed');
+        if (!json.data.length) {
+          container.textContent = 'לא נמצאו חבילות סקילים.';
+          return;
+        }
+        container.innerHTML = json.data.map((p) => \`
+          <label class="skill-pack">
+            <input type="checkbox" name="skillPack" value="\${escapeHtmlJs(p.id)}" \${p.enabled ? 'checked' : ''}>
+            <span class="skill-pack-name">\${escapeHtmlJs(p.name)}</span>
+            <span class="skill-pack-desc">\${escapeHtmlJs(p.description)}</span>
+          </label>\`).join('');
+        container.querySelectorAll('input[name="skillPack"]').forEach((box) => {
+          box.addEventListener('change', saveSkillPacks);
+        });
+      } catch (err) {
+        container.textContent = 'שגיאה בטעינת הסקילים';
+      }
+    }
+
+    async function saveSkillPacks() {
+      const ids = Array.from(document.querySelectorAll('input[name="skillPack"]:checked')).map((b) => b.value);
+      try {
+        const res = await fetch('/api/settings', {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ skillPacks: ids })
+        });
+        if (res.ok) showToast('הסקילים עודכנו'); else showToast('שגיאה בשמירת הסקילים', 'error');
+      } catch (err) {
+        showToast('שגיאה בשמירת הסקילים', 'error');
+      }
+    }
+
+    function escapeHtmlJs(value) {
+      return String(value ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
+    }
+
     async function loadConnectorConsoleLink() {
       try {
         const res = await fetch('/api/connector/status');
@@ -1260,6 +1317,7 @@ export function getSettingsHtml(data: SettingsPageData): string {
     loadProviders();
     loadTools();
     loadConnectorConsoleLink();
+    loadSkillPacks();
   </script>
 </body>
 </html>`;

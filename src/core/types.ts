@@ -13,6 +13,8 @@ export interface Settings {
   projectTokens: Record<string, string>;
   activeProject: string;
   services: ServiceConfig[];
+  /** Selected skill packs (directory names under skills-pack/); see core/skills.ts. */
+  skillPacks?: string[];
   setupComplete: boolean;
   connectorAdminTokenAcknowledged: boolean;
   createdAt: string;
@@ -102,6 +104,7 @@ export const DEFAULT_SETTINGS: Settings = {
   projectTokens: {},
   activeProject: 'default',
   services: [],
+  skillPacks: ['inbox-calendar'],
   setupComplete: false,
   connectorAdminTokenAcknowledged: false,
   createdAt: new Date().toISOString(),

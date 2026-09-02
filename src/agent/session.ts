@@ -20,6 +20,7 @@ import {
   type ModelResolution,
 } from '../http/auth.ts';
 import { buildIdentityPrompt, writeIdentityFiles } from '../core/identity-files.ts';
+import { skillPackDirs } from '../core/skills.ts';
 
 const log = createChildLogger('pi-session');
 
@@ -444,7 +445,8 @@ async function createSession(projectId: string): Promise<ProjectSession> {
     agentDir: piAgentDir,
     additionalSkillPaths: [
       join(workspaceRoot, '.pi', 'skills'),
-      join(workspaceRoot, 'skills-pack'),
+      // Only the packs the owner selected in Settings (#74); each dir holds a SKILL.md.
+      ...skillPackDirs(settings.skillPacks),
     ],
     additionalExtensionPaths: [
       join(workspaceRoot, '.pi', 'extensions'),

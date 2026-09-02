@@ -28,6 +28,7 @@ import {
   getActionConfirmationOverride,
 } from '../core/settings.ts';
 import { requiresConfirmation } from '../core/confirmations.ts';
+import { listSkillPacks, isKnownSkillPack, DEFAULT_SKILL_PACKS } from '../core/skills.ts';
 import { listProjects, createProject, getProject } from '../core/memory.ts';
 import { slugifyProjectName, validateProjectId, ProjectIdValidationError } from '../core/projects.ts';
 import { getWhatsAppClient } from '../whatsapp/client.ts';
@@ -565,6 +566,18 @@ addRoute('POST', '/logout', async (req, res) => {
   sendJson(res, { success: true });
 });
 
+addRoute('GET', '/api/skills', async (req, res) => {
+  if (!isAuthenticated(req)) {
+    sendError(res, 'Unauthorized', 401);
+    return;
+  }
+  const selected = new Set(loadSettings().skillPacks ?? DEFAULT_SKILL_PACKS);
+  sendJson(res, {
+    success: true,
+    data: listSkillPacks().map((p) => ({ id: p.id, name: p.name, description: p.description, enabled: selected.has(p.id) })),
+  });
+});
+
 addRoute('GET', '/api/pairing', async (req, res) => {
   if (!isAuthenticated(req)) {
     sendError(res, 'Unauthorized', 401);
@@ -616,7 +629,15 @@ addRoute('PUT', '/api/settings', async (req, res) => {
     timezone: string;
     model: string;
     apiKeyMode: 'shared' | 'per-project';
+    skillPacks: string[];
   }>>(req);
+
+  if (body.skillPacks !== undefined) {
+    if (!Array.isArray(body.skillPacks) || !body.skillPacks.every((id) => typeof id === 'string' && isKnownSkillPack(id))) {
+      sendError(res, 'skillPacks חייב להיות רשימה של חבילות סקילים קיימות', 400);
+      return;
+    }
+  }
 
   const stringFields: Array<keyof typeof body> = [
     'botName', 'ownerName', 'businessName', 'businessDescription',
@@ -665,6 +686,7 @@ addRoute('PUT', '/api/settings', async (req, res) => {
   if (body.timezone !== undefined) updates.timezone = body.timezone;
   if (body.model !== undefined) updates.model = body.model;
   if (body.apiKeyMode !== undefined) updates.apiKeyMode = body.apiKeyMode;
+  if (body.skillPacks !== undefined) updates.skillPacks = Array.from(new Set(body.skillPacks));
 
   const settings = updateSettings(updates);
   
@@ -677,7 +699,11 @@ addRoute('PUT', '/api/settings', async (req, res) => {
   const modelChanged = body.model !== undefined && body.model !== previousSettings.model;
 
   let sessionRecreated = false;
-  if (modelChanged || identityChanged) {
+  const skillsChanged =
+    body.skillPacks !== undefined &&
+    JSON.stringify([...body.skillPacks].sort()) !== JSON.stringify([...(previousSettings.skillPacks ?? DEFAULT_SKILL_PACKS)].sort());
+
+  if (modelChanged || identityChanged || skillsChanged) {
     try {
       await recreateSessionAfterCredentialChange(settings.activeProject);
       sessionRecreated = true;

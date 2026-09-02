@@ -225,7 +225,7 @@ Reference configurations for common tasks. See `skills-pack/` directory:
 - **light-crm** - Contact tracking and follow-ups
 - **storefront-faq** - Answer business questions
 
-**Note:** Skill packs are reference templates. They are not automatically loaded — see `skills-pack/README.md` for manual setup instructions.
+Pick packs in **Settings → סקילים** (`settings.skillPacks`, default `inbox-calendar`). Selected packs are loaded by both engines: Pi via its skill loader, Claude Code via the system prompt. Add a pack by creating `skills-pack/<id>/SKILL.md` with `name`/`description` frontmatter.
 
 ## License
 
