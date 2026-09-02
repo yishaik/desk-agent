@@ -63,11 +63,14 @@ After onboarding, the **Settings** page lets you:
 
 - **Baileys** client with QR code pairing
 - **LID Message-yourself** for sending (self-chat only)
-- **Quoted replies** when responding to specific messages
-- **Composing/paused** indicators while AI is thinking
-- **Read receipts** after processing
+- **Emoji reactions** to indicate processing status (reading → processing/thinking/tools → done/error)
 - **Graceful disconnect** on restart (socket.end, not logout - preserves pairing)
 - **515 error handling** after scan reconnects with existing creds (no wipe)
+
+**Not implemented:**
+- Quoted replies (parameter exists but unused)
+- Composing/typing indicators
+- Read receipts
 
 ## Web UI
 
@@ -97,18 +100,15 @@ Send these to yourself in WhatsApp:
 
 ## AI Provider Login
 
-Three options, shown in the wizard and Settings:
+Two options, shown in the wizard and Settings:
 
 1. **⭐ Claude — Pro/Max subscription (recommended).** Drives Claude Code's own
    interactive login: click Connect, authorize at claude.ai, copy the code
    shown, paste it back. Credentials are stored by the `claude` binary inside
    the customer's stack; usage draws on their plan limits. When connected,
    this engine takes precedence.
-2. **ChatGPT.** Codex OAuth via the Pi runtime — authorize, then paste the
-   full `localhost:1455/...` redirect URL from the address bar. Uses the
-   ChatGPT subscription.
-3. **Claude via API OAuth (not recommended).** Billed from Anthropic
-   **extra usage** per token, not plan limits.
+2. **ChatGPT.** Device code flow via the Pi runtime — authorize in the browser,
+   then paste the redirect URL from the address bar. Uses the ChatGPT subscription.
 
 Neither flow requires an API key. If auth expires, Settings shows a reconnect
 prompt. Switch Claude Code models with `/model claude-code/<name>` in WhatsApp.
@@ -209,11 +209,13 @@ Key points:
 
 ## Skill Packs
 
-Pre-built configurations for common tasks. See `skills-pack/` directory:
+Reference configurations for common tasks. See `skills-pack/` directory:
 
 - **inbox-calendar** - Email and calendar management
 - **light-crm** - Contact tracking and follow-ups
 - **storefront-faq** - Answer business questions
+
+**Note:** Skill packs are reference templates. They are not automatically loaded — see `skills-pack/README.md` for manual setup instructions.
 
 ## License
 

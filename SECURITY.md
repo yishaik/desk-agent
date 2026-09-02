@@ -256,9 +256,11 @@ docker compose logs -f agent
 ```
 
 Logs include:
-- Message processing (without content)
+- Message processing (first 50 characters of message content at `info` level)
 - API requests
 - Errors
+
+**Note:** Message content is partially logged for debugging. To disable, set `LOG_LEVEL=warn` or above.
 
 ### Open Connector Audit
 
