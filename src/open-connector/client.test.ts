@@ -210,7 +210,7 @@ describe('API Path Correctness', () => {
 });
 
 describe('Health Check Path', () => {
-  it('checkHealth uses authenticated /v1/health (not bare fetch)', async () => {
+  it('checkHealth uses unauthenticated /health (not /v1/health)', async () => {
     vi.resetModules();
     
     const { OpenConnectorClient } = await import('./client.ts');
@@ -218,9 +218,9 @@ describe('Health Check Path', () => {
     const client = new OpenConnectorClient();
     
     const checkHealthSource = client.checkHealth.toString();
-    expect(checkHealthSource).toContain('this.request');
-    expect(checkHealthSource).toContain('/v1/health');
-    expect(checkHealthSource).not.toContain('fetch(');
+    expect(checkHealthSource).toContain('/health');
+    expect(checkHealthSource).not.toContain('/v1/health');
+    expect(checkHealthSource).not.toContain('this.request');
   });
 
   it('handler /status uses OpenConnectorClient.checkHealth not standalone fetch', async () => {
