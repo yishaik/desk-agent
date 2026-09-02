@@ -8,7 +8,7 @@ import makeWASocket, {
 import type { WASocket } from '@whiskeysockets/baileys';
 import { Boom } from '@hapi/boom';
 import { join } from 'node:path';
-import { existsSync, mkdirSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, rmSync, readFileSync, writeFileSync } from 'node:fs';
 import qrcode from 'qrcode-terminal';
 import pino from 'pino';
 import { config } from '../core/config.ts';
@@ -17,6 +17,60 @@ import { loadSettings, updateSettings } from '../core/settings.ts';
 import type { PairingState, Message, MessageKey } from '../core/types.ts';
 
 const log = createChildLogger('whatsapp');
+
+const VERSION_CACHE_PATH = join(config.dataDir, 'wa-version.json');
+const VERSION_FETCH_TIMEOUT_MS = 5000;
+
+interface VersionCache {
+  version: [number, number, number];
+  fetchedAt: string;
+}
+
+async function fetchVersionWithFallback(): Promise<[number, number, number]> {
+  const loadCached = (): [number, number, number] | null => {
+    try {
+      if (existsSync(VERSION_CACHE_PATH)) {
+        const data = JSON.parse(readFileSync(VERSION_CACHE_PATH, 'utf8')) as VersionCache;
+        return data.version;
+      }
+    } catch {
+      // Ignore read errors
+    }
+    return null;
+  };
+
+  const saveCache = (version: [number, number, number]): void => {
+    try {
+      const cache: VersionCache = { version, fetchedAt: new Date().toISOString() };
+      writeFileSync(VERSION_CACHE_PATH, JSON.stringify(cache, null, 2));
+    } catch {
+      // Ignore write errors
+    }
+  };
+
+  try {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), VERSION_FETCH_TIMEOUT_MS);
+
+    const { version } = await fetchLatestBaileysVersion({ signal: controller.signal });
+    clearTimeout(timeoutId);
+
+    saveCache(version);
+    log.debug({ version }, 'Fetched Baileys version');
+    return version;
+  } catch (err) {
+    log.warn({ err }, 'Failed to fetch Baileys version, trying cache');
+
+    const cached = loadCached();
+    if (cached) {
+      log.info({ version: cached }, 'Using cached Baileys version');
+      return cached;
+    }
+
+    log.warn('No cached version available, using hardcoded fallback');
+    return [2, 3000, 1015629576];
+  }
+}
 
 export type MessageHandler = (message: Message) => Promise<void>;
 
@@ -28,15 +82,26 @@ export class WhatsAppClient {
   private maxReconnectAttempts = 5;
   private ownerJid: string | null = null;
   private ownerLid: string | null = null;
+  private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 
   async connect(): Promise<void> {
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
+
+    if (this.socket) {
+      this.removeSocketListeners();
+      this.socket = null;
+    }
+
     const authDir = join(config.dataDir, 'whatsapp-auth');
     if (!existsSync(authDir)) {
       mkdirSync(authDir, { recursive: true });
     }
 
     const { state, saveCreds } = await useMultiFileAuthState(authDir);
-    const { version } = await fetchLatestBaileysVersion();
+    const version = await fetchVersionWithFallback();
 
     const baileysLogger = pino({ level: 'silent' });
 
@@ -53,6 +118,29 @@ export class WhatsAppClient {
 
     this.setupEventHandlers(saveCreds);
     log.info('WhatsApp client initialized');
+  }
+
+  private removeSocketListeners(): void {
+    if (this.socket) {
+      this.socket.ev.removeAllListeners('connection.update');
+      this.socket.ev.removeAllListeners('creds.update');
+      this.socket.ev.removeAllListeners('messages.upsert');
+    }
+  }
+
+  private scheduleReconnect(delay: number): void {
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+    }
+
+    this.reconnectTimer = setTimeout(() => {
+      this.reconnectTimer = null;
+      this.connect().catch((err) => {
+        log.error({ err }, 'Reconnect failed');
+        const nextDelay = Math.min(delay * 2, 60000);
+        this.scheduleReconnect(nextDelay);
+      });
+    }, delay);
   }
 
   private setupEventHandlers(saveCreds: () => Promise<void>): void {
@@ -74,33 +162,44 @@ export class WhatsAppClient {
 
       if (connection === 'close') {
         const statusCode = (lastDisconnect?.error as Boom)?.output?.statusCode;
-        const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
 
         log.warn(
-          { statusCode, shouldReconnect, attempts: this.reconnectAttempts },
+          { statusCode, attempts: this.reconnectAttempts },
           'Connection closed'
         );
 
         this.pairingState.isPaired = false;
 
-        if (shouldReconnect && this.reconnectAttempts < this.maxReconnectAttempts) {
-          this.reconnectAttempts++;
-          const delay = Math.min(1000 * Math.pow(2, this.reconnectAttempts), 30000);
-          log.info({ delay }, 'Reconnecting...');
-          setTimeout(() => this.connect(), delay);
-        } else if (statusCode === DisconnectReason.loggedOut) {
-          log.warn('Logged out, clearing session and reconnecting for a fresh QR');
+        const shouldWipeAuth =
+          statusCode === DisconnectReason.loggedOut ||
+          statusCode === DisconnectReason.connectionReplaced ||
+          statusCode === DisconnectReason.forbidden;
+
+        if (shouldWipeAuth) {
+          const reason =
+            statusCode === DisconnectReason.loggedOut
+              ? 'Logged out'
+              : statusCode === DisconnectReason.connectionReplaced
+                ? 'Connection replaced by another session'
+                : 'Connection forbidden (403)';
+
+          log.warn({ statusCode }, `${reason}, clearing session and reconnecting for a fresh QR`);
           this.pairingState = { isPaired: false };
-          // Stale creds would just 401 again — wipe them so connect() pairs anew.
           rmSync(join(config.dataDir, 'whatsapp-auth'), { recursive: true, force: true });
           this.reconnectAttempts = 0;
-          setTimeout(() => this.connect(), 1000);
+          this.scheduleReconnect(1000);
+          return;
+        }
+
+        if (this.reconnectAttempts < this.maxReconnectAttempts) {
+          this.reconnectAttempts++;
+          const delay = Math.min(1000 * Math.pow(2, this.reconnectAttempts), 30000);
+          log.info({ delay, attempt: this.reconnectAttempts }, 'Scheduling reconnect...');
+          this.scheduleReconnect(delay);
         } else {
-          // Out of fast retries — don't sit dead until a container restart;
-          // keep trying on a slow cadence.
           log.error({ statusCode }, 'Reconnect attempts exhausted, retrying in 60s');
           this.reconnectAttempts = 0;
-          setTimeout(() => this.connect(), 60000);
+          this.scheduleReconnect(60000);
         }
       }
 
@@ -265,11 +364,9 @@ export class WhatsAppClient {
       throw new Error('WhatsApp client not connected');
     }
 
-    // React in the chat the message actually lives in — the LID self-chat and
-    // the phone-JID self-chat are different conversations.
-    const targetJid = messageKey.remoteJid ?? this.resolveSelfChatJid();
+    const targetJid = this.getSelfChatJid();
     if (!targetJid) {
-      log.warn('No self-chat JID available for reaction');
+      log.debug({ messageId: messageKey.id }, 'Skipping reaction: no LID self-chat available');
       return;
     }
 
@@ -286,8 +383,12 @@ export class WhatsAppClient {
     });
   }
 
-  resolveSelfChatJid(): string | null {
-    return this.ownerJid;
+  getSelfChatJid(): string | null {
+    if (this.ownerLid && this.ownerLid.endsWith('@lid')) {
+      return this.ownerLid;
+    }
+    log.debug({ ownerLid: this.ownerLid }, 'getSelfChatJid: no valid @lid available');
+    return null;
   }
 
   async sendFile(
@@ -332,7 +433,13 @@ export class WhatsAppClient {
   }
 
   async disconnect(): Promise<void> {
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
+
     if (this.socket) {
+      this.removeSocketListeners();
       this.socket.end(undefined);
       this.socket = null;
       this.pairingState = { isPaired: false };
