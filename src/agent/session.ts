@@ -58,6 +58,8 @@ export {
   getAllPendingConfirmations,
   cancelAllPendingConfirmations,
   formatPendingForUser,
+  markPayloadPresented,
+  isPayloadPresented,
 } from '../core/confirmations.ts';
 
 async function getOrCreateModelRuntime(): Promise<ModelRuntime> {

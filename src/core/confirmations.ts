@@ -17,6 +17,12 @@ export interface PendingConfirmation {
   connectionName?: string;
   projectId?: string;
   createdAt: number;
+  /**
+   * S-04 (#108): Timestamp when the WhatsApp handler showed formatPendingForUser
+   * for this pending item. Execution is blocked until this is set — the customer
+   * must see the real payload (to/subject/body), not just the model's description.
+   */
+  payloadPresentedAt?: number;
 }
 
 type Store = Record<string, PendingConfirmation>;
@@ -166,6 +172,26 @@ export function confirmAction(confirmationId: string): boolean {
 
 export function cancelConfirmation(confirmationId: string): boolean {
   return confirmAction(confirmationId);
+}
+
+/**
+ * S-04 (#108): Mark that the WhatsApp handler has shown formatPendingForUser
+ * for this pending item. Execution is blocked until this is set.
+ */
+export function markPayloadPresented(confirmationId: string): boolean {
+  const store = load();
+  if (!store[confirmationId]) return false;
+  store[confirmationId]!.payloadPresentedAt = Date.now();
+  save(store);
+  return true;
+}
+
+/**
+ * S-04 (#108): Check if the handler has shown the payload for this pending item.
+ */
+export function isPayloadPresented(confirmationId: string): boolean {
+  const pending = load()[confirmationId];
+  return pending?.payloadPresentedAt !== undefined;
 }
 
 // --- executed-action notes -------------------------------------------------

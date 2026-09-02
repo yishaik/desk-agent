@@ -358,6 +358,55 @@ describe('PendingConfirmation with projectId', () => {
   });
 });
 
+describe('S-04 (#108) — payloadPresentedAt tracking', () => {
+  it('markPayloadPresented sets the flag', async () => {
+    const { createPendingConfirmation, markPayloadPresented, isPayloadPresented } = await import('./confirmations.ts');
+
+    const confirmationId = createPendingConfirmation({
+      actionId: 'gmail.send_email',
+      input: { to: 'test@example.com' },
+      projectId: 'default',
+    });
+
+    // Initially not presented
+    expect(isPayloadPresented(confirmationId)).toBe(false);
+
+    // Mark as presented
+    const result = markPayloadPresented(confirmationId);
+    expect(result).toBe(true);
+
+    // Now it should be presented
+    expect(isPayloadPresented(confirmationId)).toBe(true);
+  });
+
+  it('isPayloadPresented returns false for unknown confirmation', async () => {
+    const { isPayloadPresented } = await import('./confirmations.ts');
+    expect(isPayloadPresented('confirm_nonexistent_xxx')).toBe(false);
+  });
+
+  it('markPayloadPresented returns false for unknown confirmation', async () => {
+    const { markPayloadPresented } = await import('./confirmations.ts');
+    expect(markPayloadPresented('confirm_nonexistent_xxx')).toBe(false);
+  });
+
+  it('payloadPresentedAt is preserved when loading from disk', async () => {
+    const { createPendingConfirmation, markPayloadPresented, getPendingConfirmation } = await import('./confirmations.ts');
+
+    const confirmationId = createPendingConfirmation({
+      actionId: 'gmail.send_email',
+      input: { to: 'test@example.com' },
+      projectId: 'default',
+    });
+
+    markPayloadPresented(confirmationId);
+
+    // Reload and check
+    const pending = getPendingConfirmation(confirmationId);
+    expect(pending?.payloadPresentedAt).toBeDefined();
+    expect(typeof pending?.payloadPresentedAt).toBe('number');
+  });
+});
+
 describe('formatPendingForUser', () => {
   it('formats email action nicely', async () => {
     const { formatPendingForUser } = await import('./confirmations.ts');
