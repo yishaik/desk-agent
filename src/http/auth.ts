@@ -59,10 +59,6 @@ async function getRuntime(): Promise<ModelRuntime> {
   return runtime;
 }
 
-export async function getSharedRuntime(): Promise<ModelRuntime> {
-  return getRuntime();
-}
-
 export function clearRuntimeCache(): void {
   sharedRuntime = null;
   log.info('Runtime cache cleared');
