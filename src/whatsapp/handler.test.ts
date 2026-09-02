@@ -1060,93 +1060,142 @@ describe('resolveReplyJid — replies stay inside the owner\'s own chat (#73)', 
   });
 });
 
-describe('U-12 / R-07 leftovers — media, unknown slash, stale skip', () => {
-  function selfChat(overrides: Partial<Message>): Message {
-    return makeMessage({
+
+
+describe('U-12 WhatsApp leftovers (#141)', () => {
+  it('captionless media in self-chat gets Hebrew need-text, not a silent drop', async () => {
+    const { MEDIA_WITHOUT_TEXT_BODY } = await import('./inbound.ts');
+    const { handleMessage } = await import('./handler.ts');
+
+    await handleMessage(makeMessage({
+      id: 'msg_media_self',
       from: '1234567890:123@s.whatsapp.net',
       to: 'ABC123XYZ@lid',
+      body: MEDIA_WITHOUT_TEXT_BODY,
       isFromMe: true,
-      messageKey: { remoteJid: 'ABC123XYZ@lid', id: overrides.id ?? 'msg_leftover', fromMe: true },
-      ...overrides,
-    });
-  }
-
-  it('skips inbound self-chat older than 10 minutes and quotes a Hebrew notice', async () => {
-    const { handleMessage } = await import('./handler.ts');
-    const old = selfChat({
-      id: 'msg_stale',
-      body: 'hello from yesterday',
-      timestamp: Math.floor(Date.now() / 1000) - 11 * 60,
-      messageKey: { remoteJid: 'ABC123XYZ@lid', id: 'msg_stale', fromMe: true },
-    });
-    await handleMessage(old);
-    expect(mockRunPromptWithCallbacks).not.toHaveBeenCalled();
-    expect(mockSendMessage).toHaveBeenCalledWith(
-      'ABC123XYZ@lid',
-      expect.stringContaining('הודעה ישנה'),
-      expect.objectContaining({ id: 'msg_stale' }),
-    );
-  });
-
-  it('replies in Hebrew for captionless media and does not send it to the model', async () => {
-    const { handleMessage } = await import('./handler.ts');
-    const media = selfChat({
-      id: 'msg_media',
-      body: '__desk_agent_media_no_text__',
-      timestamp: Math.floor(Date.now() / 1000),
-      messageKey: { remoteJid: 'ABC123XYZ@lid', id: 'msg_media', fromMe: true },
-    });
-    await handleMessage(media);
-    expect(mockRunPromptWithCallbacks).not.toHaveBeenCalled();
-    expect(mockSendMessage).toHaveBeenCalledWith(
-      'ABC123XYZ@lid',
-      expect.stringContaining('מדיה'),
-      expect.objectContaining({ id: 'msg_media' }),
-    );
-  });
-
-  it('does not reply to captionless media in someone else\'s chat', async () => {
-    const { handleMessage } = await import('./handler.ts');
-    await handleMessage(makeMessage({
-      id: 'msg_foreign_media',
-      from: '1234567890:123@s.whatsapp.net',
-      to: '555000111@s.whatsapp.net',
-      body: '__desk_agent_media_no_text__',
-      isFromMe: true,
-      timestamp: Math.floor(Date.now() / 1000),
-      messageKey: { remoteJid: '555000111@s.whatsapp.net', id: 'msg_foreign_media', fromMe: true },
+      messageKey: { remoteJid: 'ABC123XYZ@lid', id: 'msg_media_self', fromMe: true },
     }));
+
+    expect(mockSendMessage).toHaveBeenCalled();
+    const bodies = mockSendMessage.mock.calls.map((c) => String(c[1]));
+    expect(bodies.some((b) => b.includes('צריך טקסט'))).toBe(true);
+    expect(mockRunPromptWithCallbacks).not.toHaveBeenCalled();
+  });
+
+  it('captionless media in a foreign chat is still dropped by the self-chat gate', async () => {
+    const { MEDIA_WITHOUT_TEXT_BODY } = await import('./inbound.ts');
+    const { handleMessage } = await import('./handler.ts');
+
+    await handleMessage(makeMessage({
+      id: 'msg_media_other',
+      from: '1234567890:123@s.whatsapp.net',
+      to: '9876543210@s.whatsapp.net',
+      body: MEDIA_WITHOUT_TEXT_BODY,
+      isFromMe: true,
+      messageKey: { remoteJid: '9876543210@s.whatsapp.net', id: 'msg_media_other', fromMe: true },
+    }));
+
     expect(mockSendMessage).not.toHaveBeenCalled();
     expect(mockRunPromptWithCallbacks).not.toHaveBeenCalled();
   });
 
-  it('unknown slash including leftover /login falls through to the model, not "פקודה לא מוכרת"', async () => {
-    mockRunPromptWithCallbacks.mockResolvedValueOnce(null);
+  it('unknown /command falls through to the model, not פקודה לא מוכרת', async () => {
+    mockRunPromptWithCallbacks.mockResolvedValueOnce('ok from model');
     const { handleMessage } = await import('./handler.ts');
-    await handleMessage(selfChat({
-      id: 'msg_login',
-      body: '/login',
-      timestamp: Math.floor(Date.now() / 1000),
-      messageKey: { remoteJid: 'ABC123XYZ@lid', id: 'msg_login', fromMe: true },
+
+    await handleMessage(makeMessage({
+      id: 'msg_unknown_cmd',
+      from: '1234567890:123@s.whatsapp.net',
+      to: 'ABC123XYZ@lid',
+      body: '/remind me tomorrow',
+      isFromMe: true,
+      messageKey: { remoteJid: 'ABC123XYZ@lid', id: 'msg_unknown_cmd', fromMe: true },
     }));
+
+    const bodies = mockSendMessage.mock.calls.map((c) => String(c[1]));
+    expect(bodies.some((b) => b.includes('פקודה לא מוכרת'))).toBe(false);
     expect(mockRunPromptWithCallbacks).toHaveBeenCalled();
-    const texts = mockSendMessage.mock.calls.map((c) => String(c[1]));
-    expect(texts.some((s) => s.includes('פקודה לא מוכרת'))).toBe(false);
+    expect(bodies).toContain('ok from model');
   });
 
-  it('/help lists confirmation words and does not list /login', async () => {
+  it('/help mentions כן/לא/אשר/בטל and does not restore /login', async () => {
     const { handleMessage } = await import('./handler.ts');
-    await handleMessage(selfChat({
-      id: 'msg_help',
+
+    await handleMessage(makeMessage({
+      id: 'msg_help_ux',
+      from: '1234567890:123@s.whatsapp.net',
+      to: 'ABC123XYZ@lid',
       body: '/help',
-      timestamp: Math.floor(Date.now() / 1000),
-      messageKey: { remoteJid: 'ABC123XYZ@lid', id: 'msg_help', fromMe: true },
+      isFromMe: true,
+      messageKey: { remoteJid: 'ABC123XYZ@lid', id: 'msg_help_ux', fromMe: true },
     }));
+
+    const text = mockSendMessage.mock.calls.map((c) => String(c[1])).join('\n');
+    expect(text).toContain('כן');
+    expect(text).toContain('לא');
+    expect(text).toContain('אשר');
+    expect(text).toContain('בטל');
+    expect(text).not.toContain('/login');
+  });
+});
+
+describe('skip stale inbound messages (#155)', () => {
+  it('skips a self-chat message older than ~10 minutes and sends a quoted Hebrew notice', async () => {
+    const { handleMessage } = await import('./handler.ts');
+    const ts = Math.floor(Date.now() / 1000) - 11 * 60;
+
+    await handleMessage(makeMessage({
+      id: 'msg_stale',
+      from: '1234567890:123@s.whatsapp.net',
+      to: 'ABC123XYZ@lid',
+      body: 'old hello',
+      timestamp: ts,
+      isFromMe: true,
+      messageKey: { remoteJid: 'ABC123XYZ@lid', id: 'msg_stale', fromMe: true },
+    }));
+
+    expect(mockRunPromptWithCallbacks).not.toHaveBeenCalled();
     expect(mockSendMessage).toHaveBeenCalled();
-    const help = mockSendMessage.mock.calls.map((c) => String(c[1])).join('\n');
-    expect(help).toContain('כן');
-    expect(help).toContain('אשר');
-    expect(help).toContain('בטל');
-    expect(help).not.toContain('/login');
+    const call = mockSendMessage.mock.calls.find((c) => String(c[1]).includes('דילגתי'));
+    expect(call).toBeTruthy();
+    expect(call![2]).toEqual(expect.objectContaining({ id: 'msg_stale' }));
+  });
+
+  it('processes a recent self-chat message', async () => {
+    mockRunPromptWithCallbacks.mockResolvedValueOnce('fresh reply');
+    const { handleMessage } = await import('./handler.ts');
+
+    await handleMessage(makeMessage({
+      id: 'msg_fresh',
+      from: '1234567890:123@s.whatsapp.net',
+      to: 'ABC123XYZ@lid',
+      body: 'hello now',
+      timestamp: Math.floor(Date.now() / 1000),
+      isFromMe: true,
+      messageKey: { remoteJid: 'ABC123XYZ@lid', id: 'msg_fresh', fromMe: true },
+    }));
+
+    expect(mockRunPromptWithCallbacks).toHaveBeenCalled();
+    const bodies = mockSendMessage.mock.calls.map((c) => String(c[1]));
+    expect(bodies.some((b) => b.includes('דילגתי'))).toBe(false);
+  });
+
+  it('getMessage(id) dedupe still applies — a second stale delivery is not noticed again', async () => {
+    const { handleMessage } = await import('./handler.ts');
+    const msg = makeMessage({
+      id: 'msg_stale_dup',
+      from: '1234567890:123@s.whatsapp.net',
+      to: 'ABC123XYZ@lid',
+      body: 'old hello',
+      timestamp: Math.floor(Date.now() / 1000) - 11 * 60,
+      isFromMe: true,
+      messageKey: { remoteJid: 'ABC123XYZ@lid', id: 'msg_stale_dup', fromMe: true },
+    });
+
+    await handleMessage(msg);
+    await handleMessage(msg);
+
+    const skipCalls = mockSendMessage.mock.calls.filter((c) => String(c[1]).includes('דילגתי'));
+    expect(skipCalls).toHaveLength(1);
   });
 });
