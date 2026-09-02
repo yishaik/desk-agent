@@ -180,7 +180,9 @@ docker compose logs -f
 
 ## שלב 6: חיבור שירותים
 
-### Gmail ו-Google Calendar
+### הגדרת OAuth App (מפעיל בלבד)
+
+**זה שלב למפעיל — לא ללקוח!**
 
 1. צור OAuth App ב-Google Cloud Console:
    - APIs & Services → Credentials → Create OAuth Client ID
@@ -195,12 +197,22 @@ docker compose logs -f
      קבוע לחץ **Publish app** (עם סקופים של Gmail יוצג מסך "unverified",
      ממשיכים דרך Advanced → Continue)
 
-3. ב-Open Connector:
+3. ב-Open Connector console (`https://console.agent.example.com`):
    - Providers → Google → Configure OAuth App
    - הזן Client ID ו-Client Secret
-   - לחץ Connect ואשר גישה
+   - **אל תלחץ Connect!** הלקוח יחבר מ-Settings.
 
-### שירותים אחרים
+### חיבור Gmail ו-Calendar (לקוח)
+
+הלקוח מחבר את Gmail ו-Google Calendar מדף **Settings** בממשק הסוכן:
+1. לחיצה על **התחבר** ליד Gmail או Google Calendar
+2. נפתח חלון OAuth — הלקוח מאשר גישה בחשבון Google שלו
+3. החיבור מופיע בטולים
+
+### שירותים אחרים (אופציונלי)
+
+לכלים נוספים מעבר ל-Gmail/Calendar, המפעיל יכול להשתמש בקונסולת Open Connector:
+`https://console.your-domain.com` (מתחברים עם הטוקן שהאשף מציג פעם אחת).
 
 ראה תיעוד Open Connector: https://github.com/oomol-lab/open-connector
 
@@ -219,14 +231,17 @@ docker compose logs -f
 
 - **Identity** - שם, עסק, timezone (עריכה)
 - **AI Login** - ChatGPT / Claude (reconnect אם פג)
+- **Gmail / Calendar** - כפתורי **התחבר** לחיבור Gmail ו-Google Calendar (OAuth popup)
 - **Open Connector** - סטטוס ושירותים מחוברים
 - **WhatsApp** - סטטוס ו-re-pair אם נדרש
+
+לכלים נוספים, קיים קישור (אופציונלי) לקונסולת Open Connector בכתובת `https://console.{DOMAIN}`.
 
 ### עמוד כלים
 
 מציג רק שירותי Open Connector **מחוברים**:
 - כרטיסי לוגו + פעולות קריאות
-- מצב ריק מפנה לקונסולת OC
+- מצב ריק מפנה ל-Settings לחיבור Gmail/Calendar, או לקונסולת OC לכלים נוספים
 
 ## Caddy Routing
 
