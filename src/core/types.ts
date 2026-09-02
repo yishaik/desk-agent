@@ -85,6 +85,8 @@ export interface PairingState {
   phoneNumber?: string;
   name?: string;
   error?: string;
+  /** How replies are addressed: the account's LID (preferred), the phone JID (fallback), or nothing yet. */
+  selfChat?: 'lid' | 'phone' | 'none';
 }
 
 export const DEFAULT_SETTINGS: Settings = {

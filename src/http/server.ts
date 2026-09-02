@@ -2191,7 +2191,7 @@ export function getWizardHtml(settings: ReturnType<typeof loadSettings>, pairing
 </html>`;
 }
 
-export function getDashboardHtml(settings: ReturnType<typeof loadSettings>, pairingState: { isPaired: boolean; phoneNumber?: string; name?: string }): string {
+export function getDashboardHtml(settings: ReturnType<typeof loadSettings>, pairingState: { isPaired: boolean; phoneNumber?: string; name?: string; selfChat?: 'lid' | 'phone' | 'none' }): string {
   const safeBotName = escapeHtml(settings.botName);
   const safeName = escapeHtml(pairingState.name);
   const safePhone = escapeHtml(pairingState.phoneNumber);
@@ -2302,6 +2302,7 @@ export function getDashboardHtml(settings: ReturnType<typeof loadSettings>, pair
         <div class="stat">${pairingState.isPaired ? '✅' : '❌'}</div>
         <div class="stat-label">${pairingState.isPaired ? 'מחובר' : 'מנותק'}</div>
         ${safePhone ? `<p style="margin-top: 12px; color: var(--text-muted);">${safePhone}</p>` : ''}
+        ${pairingState.selfChat === 'phone' ? `<p style="margin-top: 8px; color: var(--warning, #b45309); font-size: 13px;">⚠️ לחשבון אין LID — התשובות נשלחות דרך מספר הטלפון</p>` : ''}
       </div>
       <div class="card">
         <h2>📁 פרויקט פעיל</h2>

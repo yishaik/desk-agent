@@ -40,7 +40,7 @@ import {
   shouldUpdateReaction,
   type ReactionTracker,
 } from './reaction-state.ts';
-import { isSelfChatJid } from './self-chat.ts';
+import { isSelfChatJid, resolveReplyJid } from './self-chat.ts';
 
 const log = createChildLogger('handler');
 
@@ -93,6 +93,12 @@ async function updateReaction(
 
   recordTransition(tracker, newState);
   await safeReaction(tracker.messageKey, newState);
+}
+
+function describeSelfChat(mode: 'lid' | 'phone' | 'none' | undefined): string {
+  if (mode === 'phone') return ' (⚠️ ללא LID — תשובות דרך מספר הטלפון)';
+  if (mode === 'none') return ' (⚠️ אין יעד לצ׳אט עצמי)';
+  return '';
 }
 
 const CONFIRM_PATTERNS = [
@@ -289,13 +295,11 @@ export async function handleMessage(message: Message): Promise<void> {
     return;
   }
 
-  // Reply ONLY to LID self-chat. Prefer inbound @lid if self-chat, else getSelfChatJid().
-  const inboundJid = message.messageKey?.remoteJid;
-  const isInboundLidSelfChat = inboundJid?.endsWith('@lid') && wa.isSelfJid(inboundJid);
-  const chatJid = isInboundLidSelfChat ? inboundJid : wa.getSelfChatJid();
-
-  if (!chatJid || !chatJid.endsWith('@lid')) {
-    log.warn({ inboundJid, chatJid }, 'No LID self-chat available, skipping message');
+  // Reply into the owner's own chat: the inbound chat when it is the self-chat
+  // (LID or phone JID), otherwise the client's preferred self-chat JID (#73).
+  const chatJid = resolveReplyJid(message.messageKey?.remoteJid, (jid) => wa.isSelfJid(jid), wa.getSelfChatJid());
+  if (!chatJid) {
+    log.warn({ inboundJid: message.messageKey?.remoteJid }, 'No self-chat JID available (not connected?), skipping message');
     return;
   }
 
@@ -535,7 +539,7 @@ _שלח הודעה לעצמך כדי לדבר עם הסוכן_`,
         handled: true,
         response: `*סטטוס מערכת*
 
-📱 WhatsApp: ${wa.isConnected() ? '✅ מחובר' : '❌ מנותק'}
+📱 WhatsApp: ${wa.isConnected() ? '✅ מחובר' : '❌ מנותק'}${describeSelfChat(wa.getPairingState().selfChat)}
 🤖 ספקי AI: ${hasAnyProvider ? '✅ ' + providerList : '❌ לא מחובר'}
 🧠 מודל: ${modelStatus}
 🔌 Open Connector: ${connectorHealth ? '✅ תקין' : '❌ לא זמין'}
