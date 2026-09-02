@@ -138,7 +138,7 @@ describe('S-05: Link preview security', () => {
 });
 
 describe('S-03: Owner binding — pairing is bound to owner identity', () => {
-  it('rejects pairing from a different phone when ownerPhone is already set', async () => {
+  it('rejects pairing from a different phone and wipes auth for fresh QR', async () => {
     const { updateSettings, loadSettings } = await import('../core/settings.ts');
     updateSettings({ ownerPhone: '972501234567' });
     
@@ -159,7 +159,9 @@ describe('S-03: Owner binding — pairing is bound to owner identity', () => {
     
     (client as unknown as { socket: typeof mockSocket }).socket = mockSocket;
     
-    const connectionHandler = vi.fn();
+    const mockScheduleReconnect = vi.fn();
+    (client as unknown as { scheduleReconnect: typeof mockScheduleReconnect }).scheduleReconnect = mockScheduleReconnect;
+    
     const saveCreds = vi.fn();
     
     (client as unknown as { setupEventHandlers: (saveCreds: () => Promise<void>) => void })
@@ -179,11 +181,34 @@ describe('S-03: Owner binding — pairing is bound to owner identity', () => {
     expect(pairingState.error).toContain('צימוד נדחה');
     expect(pairingState.error).toContain('972509999999');
     expect(pairingState.error).toContain('972501234567');
+    expect(pairingState.error).toContain('/api/pairing/repair');
     
     expect(mockSocket.end).toHaveBeenCalled();
+    expect(mockSocket.ev.removeAllListeners).toHaveBeenCalled();
+    expect(mockScheduleReconnect).toHaveBeenCalledWith(1000);
     
     const settingsAfter = loadSettings();
     expect(settingsAfter.ownerPhone).toBe('972501234567');
+  });
+
+  it('SECURITY: mismatch must wipe auth (not just socket.end) to prevent attacker cred reuse', async () => {
+    const fs = await import('node:fs');
+    const path = await import('node:path');
+    const clientSource = fs.readFileSync(
+      path.join(process.cwd(), 'src/whatsapp/client.ts'),
+      'utf8'
+    );
+    
+    const mismatchBlock = clientSource.match(
+      /if\s*\(\s*settings\.ownerPhone\s*&&\s*newPhoneNumber\s*&&\s*newPhoneNumber\s*!==\s*settings\.ownerPhone\s*\)[\s\S]*?return;\s*\}/
+    )?.[0] || '';
+    
+    expect(mismatchBlock).toBeTruthy();
+    expect(mismatchBlock).toContain('rmSync');
+    expect(mismatchBlock).toContain('whatsapp-auth');
+    expect(mismatchBlock).toContain('scheduleReconnect');
+    expect(mismatchBlock).not.toContain('logout');
+    expect(mismatchBlock).not.toContain('updateSettings');
   });
 
   it('allows pairing from the same phone when ownerPhone is already set', async () => {

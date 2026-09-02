@@ -213,18 +213,22 @@ export class WhatsAppClient {
         if (settings.ownerPhone && newPhoneNumber && newPhoneNumber !== settings.ownerPhone) {
           log.error(
             { attemptedPhone: newPhoneNumber, ownerPhone: settings.ownerPhone },
-            'ניסיון צימוד לא מורשה: מספר טלפון שונה מהבעלים הרשום'
+            'ניסיון צימוד לא מורשה: מספר טלפון שונה מהבעלים הרשום — מוחק auth ומחדש QR'
           );
           this.pairingState = {
             isPaired: false,
-            error: `צימוד נדחה: מספר ${newPhoneNumber} אינו הבעלים הרשום (${settings.ownerPhone}). יש לבצע איפוס מפורש של הבעלים או לסרוק עם הטלפון המקורי.`,
+            error: `צימוד נדחה: מספר ${newPhoneNumber} אינו הבעלים הרשום (${settings.ownerPhone}). יש לבצע איפוס מפורש של הבעלים (POST /api/pairing/repair) או לסרוק עם הטלפון המקורי.`,
           };
           this.ownerJid = null;
           this.ownerLid = null;
           if (this.socket) {
+            this.removeSocketListeners();
             this.socket.end(undefined);
             this.socket = null;
           }
+          rmSync(join(config.dataDir, 'whatsapp-auth'), { recursive: true, force: true });
+          this.reconnectAttempts = 0;
+          this.scheduleReconnect(1000);
           return;
         }
 
