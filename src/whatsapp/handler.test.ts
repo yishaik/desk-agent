@@ -1121,7 +1121,7 @@ describe('U-12 / R-07 leftovers — media, unknown slash, stale skip', () => {
   });
 
   it('unknown slash including leftover /login falls through to the model, not "פקודה לא מוכרת"', async () => {
-    mockRunPromptWithCallbacks.mockResolvedValueOnce('ok from model');
+    mockRunPromptWithCallbacks.mockResolvedValueOnce(null);
     const { handleMessage } = await import('./handler.ts');
     await handleMessage(selfChat({
       id: 'msg_login',
