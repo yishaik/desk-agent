@@ -1,5 +1,5 @@
 import { writeFileSync, existsSync, mkdirSync } from 'node:fs';
-import { join, dirname } from 'node:path';
+import { join } from 'node:path';
 import type { Settings } from './types.ts';
 import { config } from './config.ts';
 import { createChildLogger } from './logger.ts';

@@ -1,6 +1,6 @@
 import { readFileSync, writeFileSync, existsSync, mkdirSync, renameSync, copyFileSync, chmodSync, statSync } from 'node:fs';
 import { join, dirname } from 'node:path';
-import type { Settings, Project, ServiceConfig } from './types.ts';
+import type { Settings, ServiceConfig } from './types.ts';
 import { DEFAULT_SETTINGS } from './types.ts';
 import { config } from './config.ts';
 import { createChildLogger } from './logger.ts';

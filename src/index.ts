@@ -2,7 +2,6 @@ import { getWhatsAppClient } from './whatsapp/client.ts';
 import { handleMessage } from './whatsapp/handler.ts';
 import { startServer } from './http/server.ts';
 import { createChildLogger } from './core/logger.ts';
-import { config } from './core/config.ts';
 import { closeDatabase, pruneMessages } from './core/memory.ts';
 
 const log = createChildLogger('main');

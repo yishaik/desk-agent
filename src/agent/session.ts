@@ -12,14 +12,13 @@ import { loadSettings, updateSettings, isActionDisabled } from '../core/settings
 import { config } from '../core/config.ts';
 import { OpenConnectorClient } from '../open-connector/client.ts';
 import { join } from 'node:path';
-import { validateProjectId, assertPathInsideDataDir, ProjectIdValidationError } from '../core/projects.ts';
-import { 
-  resolveActiveModel, 
-  listRuntimeCredentials,
+import { validateProjectId, assertPathInsideDataDir } from '../core/projects.ts';
+import {
+  resolveActiveModel,
   clearRuntimeCache,
   type ModelResolution,
 } from '../http/auth.ts';
-import { buildIdentityPrompt, writeIdentityFiles } from '../core/identity-files.ts';
+import { writeIdentityFiles } from '../core/identity-files.ts';
 import { skillPackDirs } from '../core/skills.ts';
 import { waitForIdle } from '../whatsapp/queue.ts';
 
@@ -164,7 +163,7 @@ export function createOpenConnectorTools(projectId: string): ToolDefinition[] {
     label: 'Search Actions',
     description: 'Search for available actions across connected services. Use this to discover what you can do.',
     parameters: SearchActionsSchema,
-    async execute(toolCallId, params: SearchActionsParams, signal, onUpdate, ctx) {
+    async execute(_toolCallId, params: SearchActionsParams, _signal, _onUpdate, _ctx) {
       const client = getClient();
       const disabledServices = getDisabledServices();
       const disabledActions = getDisabledActions();
@@ -219,7 +218,7 @@ export function createOpenConnectorTools(projectId: string): ToolDefinition[] {
     label: 'Get Action Guide',
     description: 'Get detailed documentation and input schema for an action before executing it.',
     parameters: GetActionGuideSchema,
-    async execute(toolCallId, params: GetActionGuideParams, signal, onUpdate, ctx) {
+    async execute(_toolCallId, params: GetActionGuideParams, _signal, _onUpdate, _ctx) {
       if (!isActionEnabled(params.actionId)) {
         const serviceId = params.actionId.split('.')[0];
         const isServiceDisabled = serviceId && !isServiceEnabled(serviceId);
@@ -253,7 +252,7 @@ export function createOpenConnectorTools(projectId: string): ToolDefinition[] {
     label: 'Execute Action',
     description: 'Execute an Open Connector action. Read-only actions run immediately. Mutating actions (send, reply, create, update, delete, ...) are never executed by this tool directly: it records a pending confirmation that the user approves by replying "yes" in WhatsApp, outside the model. You cannot approve on the user\'s behalf — do not call this tool again for the same action.',
     parameters: ExecuteActionSchema,
-    async execute(toolCallId, params: ExecuteActionParams, signal, onUpdate, ctx) {
+    async execute(_toolCallId, params: ExecuteActionParams, _signal, _onUpdate, _ctx) {
       if (!isActionEnabled(params.actionId)) {
         const serviceId = params.actionId.split('.')[0];
         const isServiceDisabled = serviceId && !isServiceEnabled(serviceId);
@@ -323,7 +322,7 @@ export function createOpenConnectorTools(projectId: string): ToolDefinition[] {
     label: 'List Connections',
     description: 'List all connected services and their status.',
     parameters: ListConnectionsSchema,
-    async execute(toolCallId, params: ListConnectionsParams, signal, onUpdate, ctx) {
+    async execute(_toolCallId, _params: ListConnectionsParams, _signal, _onUpdate, _ctx) {
       const client = getClient();
       const disabledServices = getDisabledServices();
       try {

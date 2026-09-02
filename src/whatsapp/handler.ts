@@ -6,13 +6,12 @@ import { recordExecutedAction, consumeExecutedActionNotes } from '../core/confir
 import type { Message, MessageKey, Settings } from '../core/types.ts';
 import { getWhatsAppClient, WhatsAppClient } from './client.ts';
 import { OpenConnectorClient } from '../open-connector/client.ts';
-import { 
-  runPromptWithCallbacks, 
-  clearSession, 
-  getOrCreateSession, 
+import {
+  runPromptWithCallbacks,
+  clearSession,
+  getOrCreateSession,
   setSessionModel,
   getPendingConfirmation,
-  getLatestPendingConfirmation,
   confirmAction,
   cancelConfirmation,
   cleanupOldConfirmations,
@@ -623,7 +622,7 @@ _שלח הודעה לעצמך כדי לדבר עם הסוכן_`,
           handled: true,
           response: `*שירותים מחוברים*\n\n${list}`,
         };
-      } catch (err) {
+      } catch {
         return {
           handled: true,
           response: '❌ לא ניתן לטעון רשימת שירותים. ודא ש-Open Connector פועל.',
