@@ -111,9 +111,8 @@ export async function callTool(name: string, args: Record<string, unknown>): Pro
       if (!isActionEnabled(actionId)) return `Action "${actionId}" is currently disabled.`;
 
       if (requiresConfirmation(actionId)) {
-        // Never executed from inside the model's turn — see core/confirmations.ts.
-        // The owner's "yes" in WhatsApp is resolved by the agent process.
-        const confirmationId = createPendingConfirmation({ actionId, input, connectionName });
+        const projectId = process.env['DESK_PROJECT_ID'] || undefined;
+        const confirmationId = createPendingConfirmation({ actionId, input, connectionName, projectId });
         return formatConfirmationRequest(actionId, input, confirmationId);
       }
 

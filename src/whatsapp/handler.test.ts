@@ -563,3 +563,37 @@ describe('Gate mutation safety', () => {
     expect(isSelfChatJid('ABC123XYZ@lid', ownerPhone, ownerLid)).toBe(true);
   });
 });
+
+describe('Confirmation Patterns (handler)', () => {
+  const CONFIRM_PATTERNS = [
+    /^(yes|כן|אשר|confirm)$/i,
+  ];
+
+  it('CONFIRM_PATTERNS does NOT include ok', () => {
+    expect(CONFIRM_PATTERNS.some((p) => p.test('ok'))).toBe(false);
+  });
+
+  it('CONFIRM_PATTERNS does NOT include בסדר', () => {
+    expect(CONFIRM_PATTERNS.some((p) => p.test('בסדר'))).toBe(false);
+  });
+
+  it('CONFIRM_PATTERNS does NOT include אוקיי', () => {
+    expect(CONFIRM_PATTERNS.some((p) => p.test('אוקיי'))).toBe(false);
+  });
+
+  it('CONFIRM_PATTERNS includes כן', () => {
+    expect(CONFIRM_PATTERNS.some((p) => p.test('כן'))).toBe(true);
+  });
+
+  it('CONFIRM_PATTERNS includes אשר', () => {
+    expect(CONFIRM_PATTERNS.some((p) => p.test('אשר'))).toBe(true);
+  });
+
+  it('CONFIRM_PATTERNS includes yes', () => {
+    expect(CONFIRM_PATTERNS.some((p) => p.test('yes'))).toBe(true);
+  });
+
+  it('CONFIRM_PATTERNS includes confirm', () => {
+    expect(CONFIRM_PATTERNS.some((p) => p.test('confirm'))).toBe(true);
+  });
+});

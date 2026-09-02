@@ -46,6 +46,7 @@ import {
   requiresConfirmation,
   createPendingConfirmation,
   formatConfirmationRequest,
+  formatPendingForUser,
 } from '../core/confirmations.ts';
 export {
   getPendingConfirmation,
@@ -53,6 +54,9 @@ export {
   confirmAction,
   cancelConfirmation,
   cleanupOldConfirmations,
+  getAllPendingConfirmations,
+  cancelAllPendingConfirmations,
+  formatPendingForUser,
 } from '../core/confirmations.ts';
 
 async function getOrCreateModelRuntime(): Promise<ModelRuntime> {
@@ -261,15 +265,11 @@ export function createOpenConnectorTools(projectId: string): ToolDefinition[] {
       }
 
       if (requiresConfirmation(params.actionId)) {
-        // Mutating actions are never executed from inside the model's turn.
-        // The pending store holds *unapproved* requests; the only thing that
-        // approves one is the owner replying "yes" in WhatsApp, resolved by
-        // whatsapp/handler.ts outside the model. There is deliberately no
-        // parameter through which the model can claim approval.
         const confirmationId = createPendingConfirmation({
           actionId: params.actionId,
           input: params.input as Record<string, unknown>,
           connectionName: params.connectionName,
+          projectId,
         });
 
         return {
@@ -381,7 +381,6 @@ export async function getOrCreateSession(projectId: string): Promise<ProjectSess
     return existing;
   }
 
-  // If another call is already creating the session, wait for it (#33).
   const pending = pendingCreations.get(projectId);
   if (pending) {
     return pending;
@@ -513,18 +512,6 @@ export function clearAllSessions(): void {
   log.info('All Pi sessions and runtime cleared');
 }
 
-/**
- * Recreate the Pi session after credential or settings change.
- * 
- * Contract with Settings UI: this export must remain stable.
- * Settings UI calls this after updateSettings + writeIdentityFiles.
- * 
- * - clearAllSessions() is required so ModelRuntime is not left on the old model
- * - Identity files (AGENTS.md) should be written BEFORE calling this
- * - Claude Code session is also cleared for the project
- * 
- * Calling twice is idempotent (recreate is safe).
- */
 export async function recreateSessionAfterCredentialChange(projectId: string): Promise<void> {
   const { clearClaudeCodeSession } = await import('./claude-code.ts');
   
@@ -537,27 +524,12 @@ export async function recreateSessionAfterCredentialChange(projectId: string): P
   log.info({ projectId }, 'Session recreated after credential/settings change');
 }
 
-/**
- * Alias for recreateSessionAfterCredentialChange.
- * Use when refreshing session after settings save (model or identity change).
- */
 export const refreshSessionAfterSettingsSave = recreateSessionAfterCredentialChange;
 
 export function getSession(projectId: string): ProjectSession | undefined {
   return activeSessions.get(projectId);
 }
 
-/**
- * Extract assistant text from a slice of messages (the CURRENT turn only).
- *
- * Previously this walked the entire messages array from the end and returned
- * the first assistant message with text — if the current turn had no text, it
- * would return text from a PREVIOUS turn (#34). Now callers pass startIndex
- * (messages.length before session.prompt) so we only look at the current turn.
- *
- * We also collect ALL assistant text from the current turn (a turn with
- * several tool calls may have intermediate text worth joining).
- */
 export function extractTextFromMessages(
   messages: unknown[],
   startIndex = 0
@@ -658,8 +630,6 @@ export async function runPromptWithCallbacks(
         { lastMessage: JSON.stringify(last)?.slice(0, 2000), count: messages.length, startIndex },
         'Pi turn produced no assistant text'
       );
-      // Surface the provider's actual error to the user instead of a generic
-      // "no answer" — quota/auth problems are actionable, silence is not.
       if (last?.errorMessage) {
         throw new Error(`המודל החזיר שגיאה: ${last.errorMessage.slice(0, 300)}`);
       }

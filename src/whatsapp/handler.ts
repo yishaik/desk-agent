@@ -16,6 +16,9 @@ import {
   confirmAction,
   cancelConfirmation,
   cleanupOldConfirmations,
+  getAllPendingConfirmations,
+  cancelAllPendingConfirmations,
+  formatPendingForUser,
   checkCredentialsBeforePrompt,
   recreateSessionAfterCredentialChange,
   CredentialError,
@@ -93,7 +96,7 @@ async function updateReaction(
 }
 
 const CONFIRM_PATTERNS = [
-  /^(yes|כן|אשר|confirm|ok|אוקיי|בסדר)$/i,
+  /^(yes|כן|אשר|confirm)$/i,
 ];
 
 const CANCEL_PATTERNS = [
@@ -160,53 +163,95 @@ export function withExecutedActionNotes(projectId: string, text: string): string
 async function checkForConfirmationResponse(text: string, projectId: string): Promise<CommandResult> {
   cleanupOldConfirmations();
 
-  const confirmIdMatch = text.match(/confirm_\d+_[a-z0-9]+/);
+  const allPending = getAllPendingConfirmations(projectId);
+  if (allPending.length === 0) {
+    return { handled: false };
+  }
+
+  const trimmedText = text.trim();
+  const confirmIdMatch = trimmedText.match(/confirm_\d+_[a-z0-9]+/);
+
   if (confirmIdMatch) {
     const confirmId = confirmIdMatch[0];
     const pending = getPendingConfirmation(confirmId);
 
-    if (pending) {
-      const isConfirm = CONFIRM_PATTERNS.some((p) => p.test(text.replace(confirmId, '').trim()));
-      const isCancel = CANCEL_PATTERNS.some((p) => p.test(text.replace(confirmId, '').trim())) ||
-                       text.toLowerCase().includes('cancel') || text.includes('בטל');
+    if (pending && pending.projectId === projectId) {
+      const textWithoutId = trimmedText.replace(confirmId, '').trim();
+      const isConfirm = CONFIRM_PATTERNS.some((p) => p.test(textWithoutId));
+      const isCancel = CANCEL_PATTERNS.some((p) => p.test(textWithoutId)) ||
+                       textWithoutId.toLowerCase().includes('cancel') || textWithoutId.includes('בטל');
 
       if (isCancel) {
         cancelConfirmation(confirmId);
         return {
           handled: true,
-          response: `❌ Action "${pending.actionId}" cancelled.`,
+          response: `❌ הפעולה "${pending.actionId}" בוטלה.`,
         };
       }
 
-      if (isConfirm || text.trim() === confirmId) {
+      if (isConfirm || textWithoutId === '') {
         confirmAction(confirmId);
         return executePendingAction(pending, projectId);
       }
     }
   }
 
-  // The confirmation prompt tells the user to reply a plain "yes"/"אשר" —
-  // resolve that against the most recent pending confirmation.
-  const isSimpleConfirm = CONFIRM_PATTERNS.some((p) => p.test(text.trim()));
-  const isSimpleCancel = CANCEL_PATTERNS.some((p) => p.test(text.trim()));
+  const isSimpleConfirm = CONFIRM_PATTERNS.some((p) => p.test(trimmedText));
+  const isSimpleCancel = CANCEL_PATTERNS.some((p) => p.test(trimmedText));
+  const numberMatch = trimmedText.match(/^(\d+)$/);
 
-  if (isSimpleConfirm || isSimpleCancel) {
-    const latest = getLatestPendingConfirmation();
-    if (!latest) {
-      return { handled: false };
+  if (allPending.length > 1 && numberMatch && numberMatch[1]) {
+    const idx = parseInt(numberMatch[1], 10) - 1;
+    if (idx >= 0 && idx < allPending.length) {
+      const selected = allPending[idx];
+      if (selected) {
+        confirmAction(selected.confirmationId);
+        return executePendingAction(selected, projectId);
+      }
     }
-    if (isSimpleCancel) {
-      cancelConfirmation(latest.confirmationId);
-      return {
-        handled: true,
-        response: `❌ Action "${latest.actionId}" cancelled.`,
-      };
-    }
-    confirmAction(latest.confirmationId);
-    return executePendingAction(latest, projectId);
+    return {
+      handled: true,
+      response: `❌ מספר לא תקין. בחר מספר בין 1 ל-${allPending.length}, או השב "לא" לביטול הכל.`,
+    };
   }
 
-  return { handled: false };
+  if (isSimpleCancel) {
+    const count = cancelAllPendingConfirmations(projectId);
+    const actionNames = allPending.map((p) => p.actionId).join(', ');
+    return {
+      handled: true,
+      response: count === 1
+        ? `❌ הפעולה "${actionNames}" בוטלה.`
+        : `❌ ${count} פעולות בוטלו: ${actionNames}`,
+    };
+  }
+
+  if (isSimpleConfirm) {
+    if (allPending.length === 1 && allPending[0]) {
+      const single = allPending[0];
+      confirmAction(single.confirmationId);
+      return executePendingAction(single, projectId);
+    }
+
+    const lines = ['⚠️ יש מספר פעולות ממתינות לאישור. בחר מספר:'];
+    allPending.forEach((p, i) => {
+      lines.push(`\n*${i + 1}.* ${formatPendingForUser(p)}`);
+    });
+    lines.push('\nהשב עם מספר (1, 2...) לאישור, או "לא" לביטול הכל.');
+    return {
+      handled: true,
+      response: lines.join('\n'),
+    };
+  }
+
+  const count = cancelAllPendingConfirmations(projectId);
+  const actionNames = allPending.map((p) => p.actionId).join(', ');
+  return {
+    handled: true,
+    response: count === 1
+      ? `⚠️ הפעולה "${actionNames}" בוטלה (לא התקבל אישור/ביטול).`
+      : `⚠️ ${count} פעולות בוטלו (לא התקבל אישור/ביטול): ${actionNames}`,
+  };
 }
 
 /**
