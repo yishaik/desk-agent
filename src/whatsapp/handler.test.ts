@@ -12,6 +12,8 @@ const mockGetOwnerPhone = vi.fn();
 const mockGetOwnerLid = vi.fn();
 const mockIsConnected = vi.fn();
 
+const mockGetSelfChatJid = vi.fn();
+
 vi.mock('./client.ts', () => ({
   getWhatsAppClient: () => ({
     sendMessage: mockSendMessage,
@@ -19,6 +21,7 @@ vi.mock('./client.ts', () => ({
     getOwnerJid: mockGetOwnerJid,
     getOwnerPhone: mockGetOwnerPhone,
     getOwnerLid: mockGetOwnerLid,
+    getSelfChatJid: mockGetSelfChatJid,
     isConnected: mockIsConnected,
     isSelfJid: (jid: string | null | undefined) => {
       const ownerPhone = mockGetOwnerPhone();
@@ -67,6 +70,7 @@ beforeEach(() => {
   mockGetOwnerJid.mockReturnValue('1234567890:123@s.whatsapp.net');
   mockGetOwnerPhone.mockReturnValue('1234567890');
   mockGetOwnerLid.mockReturnValue('ABC123XYZ@lid');
+  mockGetSelfChatJid.mockReturnValue('ABC123XYZ@lid');
   mockIsConnected.mockReturnValue(true);
 });
 
@@ -386,6 +390,7 @@ describe('Per-Project Processing Lock - Issue #33', () => {
         getOwnerPhone: () => '1234567890',
         getOwnerLid: () => null,
         isSelfJid: (jid: string) => jid.includes('1234567890'),
+        getSelfChatJid: () => '1234567890@lid',
         isConnected: () => true,
         sendMessage: vi.fn().mockResolvedValue(undefined),
         sendReaction: vi.fn().mockResolvedValue(undefined),
@@ -411,7 +416,8 @@ describe('Per-Project Processing Lock - Issue #33', () => {
     });
 
     vi.doMock('../core/memory.ts', () => ({
-      saveMessage: vi.fn(),
+      saveMessage: vi.fn().mockReturnValue(true),
+      getMessage: vi.fn().mockReturnValue(null),
       listProjects: vi.fn().mockReturnValue([]),
       createProject: vi.fn(),
       getProject: vi.fn(),
@@ -426,26 +432,26 @@ describe('Per-Project Processing Lock - Issue #33', () => {
     const { handleMessage } = await import('./handler.ts');
 
     const ownerJid = '1234567890:123@s.whatsapp.net';
-    const selfChatJid = '1234567890@s.whatsapp.net';
+    const selfChatLid = '1234567890@lid';
 
     const message1 = {
       id: 'msg_1',
       from: ownerJid,
-      to: selfChatJid,
+      to: selfChatLid,
       body: 'First message',
       timestamp: Date.now(),
       isFromMe: true,
-      messageKey: { remoteJid: selfChatJid, id: 'msg_1', fromMe: true },
+      messageKey: { remoteJid: selfChatLid, id: 'msg_1', fromMe: true },
     };
 
     const message2 = {
       id: 'msg_2',
       from: ownerJid,
-      to: selfChatJid,
+      to: selfChatLid,
       body: 'Second message',
       timestamp: Date.now(),
       isFromMe: true,
-      messageKey: { remoteJid: selfChatJid, id: 'msg_2', fromMe: true },
+      messageKey: { remoteJid: selfChatLid, id: 'msg_2', fromMe: true },
     };
 
     await Promise.all([
@@ -461,16 +467,22 @@ describe('Per-Project Processing Lock - Issue #33', () => {
   });
 
   it('queue-bypass commands (/status, /help) run immediately outside queue', async () => {
+    const sendMessageMock = vi.fn().mockResolvedValue(undefined);
+    const sendReactionMock = vi.fn().mockResolvedValue(undefined);
+    
+    const mockWaClient = {
+      getOwnerJid: () => '1234567890:123@s.whatsapp.net',
+      getOwnerPhone: () => '1234567890',
+      getOwnerLid: () => '1234567890@lid',
+      isSelfJid: (jid: string) => jid.includes('1234567890'),
+      getSelfChatJid: () => '1234567890@lid',
+      isConnected: () => true,
+      sendMessage: sendMessageMock,
+      sendReaction: sendReactionMock,
+    };
+
     vi.doMock('./client.ts', () => ({
-      getWhatsAppClient: vi.fn().mockReturnValue({
-        getOwnerJid: () => '1234567890:123@s.whatsapp.net',
-        getOwnerPhone: () => '1234567890',
-        getOwnerLid: () => null,
-        isSelfJid: (jid: string) => jid.includes('1234567890'),
-        isConnected: () => true,
-        sendMessage: vi.fn().mockResolvedValue(undefined),
-        sendReaction: vi.fn().mockResolvedValue(undefined),
-      }),
+      getWhatsAppClient: vi.fn().mockReturnValue(mockWaClient),
       WhatsAppClient: class {},
     }));
 
@@ -493,7 +505,8 @@ describe('Per-Project Processing Lock - Issue #33', () => {
     });
 
     vi.doMock('../core/memory.ts', () => ({
-      saveMessage: vi.fn(),
+      saveMessage: vi.fn().mockReturnValue(true),
+      getMessage: vi.fn().mockReturnValue(null),
     }));
 
     vi.doMock('../agent/claude-code.ts', () => ({
@@ -506,24 +519,22 @@ describe('Per-Project Processing Lock - Issue #33', () => {
     }));
 
     const { handleMessage } = await import('./handler.ts');
-    const { getWhatsAppClient } = await import('./client.ts');
-    const wa = getWhatsAppClient();
 
-    const selfChatJid = '1234567890@s.whatsapp.net';
+    const selfChatLid = '1234567890@lid';
 
     const statusMessage = {
       id: 'msg_status',
       from: '1234567890:123@s.whatsapp.net',
-      to: selfChatJid,
+      to: selfChatLid,
       body: '/status',
       timestamp: Date.now(),
       isFromMe: true,
-      messageKey: { remoteJid: selfChatJid, id: 'msg_status', fromMe: true },
+      messageKey: { remoteJid: selfChatLid, id: 'msg_status', fromMe: true },
     };
 
     await handleMessage(statusMessage);
 
-    expect(wa.sendMessage).toHaveBeenCalled();
+    expect(sendMessageMock).toHaveBeenCalled();
   });
 });
 

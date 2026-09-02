@@ -364,11 +364,9 @@ export class WhatsAppClient {
       throw new Error('WhatsApp client not connected');
     }
 
-    // React in the chat the message actually lives in — the LID self-chat and
-    // the phone-JID self-chat are different conversations.
-    const targetJid = messageKey.remoteJid ?? this.resolveSelfChatJid();
+    const targetJid = this.getSelfChatJid();
     if (!targetJid) {
-      log.warn('No self-chat JID available for reaction');
+      log.debug({ messageId: messageKey.id }, 'Skipping reaction: no LID self-chat available');
       return;
     }
 
@@ -385,8 +383,12 @@ export class WhatsAppClient {
     });
   }
 
-  resolveSelfChatJid(): string | null {
-    return this.ownerJid;
+  getSelfChatJid(): string | null {
+    if (this.ownerLid && this.ownerLid.endsWith('@lid')) {
+      return this.ownerLid;
+    }
+    log.debug({ ownerLid: this.ownerLid }, 'getSelfChatJid: no valid @lid available');
+    return null;
   }
 
   async sendFile(

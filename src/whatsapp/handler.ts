@@ -245,9 +245,15 @@ export async function handleMessage(message: Message): Promise<void> {
     return;
   }
 
-  // Reply into the chat the message arrived in (LID self-chat and phone-JID
-  // self-chat are different conversations on the phone).
-  const chatJid = message.messageKey?.remoteJid ?? ownerJid;
+  // Reply ONLY to LID self-chat. Prefer inbound @lid if self-chat, else getSelfChatJid().
+  const inboundJid = message.messageKey?.remoteJid;
+  const isInboundLidSelfChat = inboundJid?.endsWith('@lid') && wa.isSelfJid(inboundJid);
+  const chatJid = isInboundLidSelfChat ? inboundJid : wa.getSelfChatJid();
+
+  if (!chatJid || !chatJid.endsWith('@lid')) {
+    log.warn({ inboundJid, chatJid }, 'No LID self-chat available, skipping message');
+    return;
+  }
 
   const projectId = settings.activeProject;
   message.projectId = projectId;

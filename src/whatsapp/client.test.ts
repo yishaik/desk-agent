@@ -81,3 +81,46 @@ describe('Disconnect reason handling', () => {
     expect(baileys.DisconnectReason.forbidden).toBe(403);
   });
 });
+
+describe('getSelfChatJid LID-only policy', () => {
+  it('returns ownerLid when it ends with @lid', async () => {
+    const { WhatsAppClient } = await import('./client.ts');
+    const client = new WhatsAppClient();
+    
+    (client as unknown as { ownerLid: string | null }).ownerLid = '123456789@lid';
+    
+    const result = client.getSelfChatJid();
+    expect(result).toBe('123456789@lid');
+  });
+
+  it('returns null when ownerLid is null', async () => {
+    const { WhatsAppClient } = await import('./client.ts');
+    const client = new WhatsAppClient();
+    
+    (client as unknown as { ownerLid: string | null }).ownerLid = null;
+    
+    const result = client.getSelfChatJid();
+    expect(result).toBeNull();
+  });
+
+  it('returns null when ownerLid does not end with @lid', async () => {
+    const { WhatsAppClient } = await import('./client.ts');
+    const client = new WhatsAppClient();
+    
+    (client as unknown as { ownerLid: string | null }).ownerLid = '123456789@s.whatsapp.net';
+    
+    const result = client.getSelfChatJid();
+    expect(result).toBeNull();
+  });
+
+  it('CRITICAL: does not fall back to ownerJid or phone JID', async () => {
+    const { WhatsAppClient } = await import('./client.ts');
+    const client = new WhatsAppClient();
+    
+    (client as unknown as { ownerJid: string | null }).ownerJid = '123456789:0@s.whatsapp.net';
+    (client as unknown as { ownerLid: string | null }).ownerLid = null;
+    
+    const result = client.getSelfChatJid();
+    expect(result).toBeNull();
+  });
+});
