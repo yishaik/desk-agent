@@ -288,6 +288,21 @@ addRoute('GET', '/settings', async (req, res) => {
   sendHtml(res, html);
 });
 
+addRoute('GET', '/api/auth/session', async (req, res) => {
+  const cookies = req.headers.cookie ?? '';
+  const cookieToken = cookies
+    .split(';')
+    .map((c) => c.trim().split('='))
+    .find(([key]) => key === 'PAIR_TOKEN')?.[1];
+
+  if (timingSafeTokenCompare(cookieToken, config.pairToken)) {
+    res.writeHead(200);
+    res.end();
+  } else {
+    sendError(res, 'Unauthorized', 401);
+  }
+});
+
 addRoute('GET', '/api/auth/providers', async (req, res) => {
   if (!isAuthenticated(req)) {
     sendError(res, 'Unauthorized', 401);

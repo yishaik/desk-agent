@@ -270,3 +270,62 @@ describe('HTTP Authentication Security (server.ts)', () => {
     expect(tokenRoute).toContain('ProjectIdValidationError');
   });
 });
+
+describe('GET /api/auth/session (Caddy forward_auth)', () => {
+  it('exists and only reads cookie, not query token or Authorization', async () => {
+    const fs = await import('node:fs');
+    const path = await import('node:path');
+    const serverCode = fs.readFileSync(path.join(__dirname, 'server.ts'), 'utf8');
+    
+    const sessionRouteMatch = serverCode.match(/addRoute\('GET', '\/api\/auth\/session'[\s\S]*?\}\);/);
+    expect(sessionRouteMatch).toBeTruthy();
+    
+    const sessionRoute = sessionRouteMatch![0];
+    
+    expect(sessionRoute).toContain("req.headers.cookie");
+    expect(sessionRoute).toContain("PAIR_TOKEN");
+    expect(sessionRoute).toContain('timingSafeTokenCompare');
+    
+    expect(sessionRoute).not.toContain('query');
+    expect(sessionRoute).not.toContain('authorization');
+    expect(sessionRoute).not.toContain('Authorization');
+    expect(sessionRoute).not.toContain('isAuthenticated');
+  });
+
+  it('returns 200 on valid cookie match', async () => {
+    const fs = await import('node:fs');
+    const path = await import('node:path');
+    const serverCode = fs.readFileSync(path.join(__dirname, 'server.ts'), 'utf8');
+    
+    const sessionRouteMatch = serverCode.match(/addRoute\('GET', '\/api\/auth\/session'[\s\S]*?\}\);/);
+    expect(sessionRouteMatch).toBeTruthy();
+    
+    const sessionRoute = sessionRouteMatch![0];
+    expect(sessionRoute).toContain('res.writeHead(200)');
+    expect(sessionRoute).toContain('res.end()');
+  });
+
+  it('returns 401 on missing or wrong cookie', async () => {
+    const fs = await import('node:fs');
+    const path = await import('node:path');
+    const serverCode = fs.readFileSync(path.join(__dirname, 'server.ts'), 'utf8');
+    
+    const sessionRouteMatch = serverCode.match(/addRoute\('GET', '\/api\/auth\/session'[\s\S]*?\}\);/);
+    expect(sessionRouteMatch).toBeTruthy();
+    
+    const sessionRoute = sessionRouteMatch![0];
+    expect(sessionRoute).toContain("sendError(res, 'Unauthorized', 401)");
+  });
+
+  it('SECURITY: does NOT call isAuthenticated (which accepts query/bearer)', async () => {
+    const fs = await import('node:fs');
+    const path = await import('node:path');
+    const serverCode = fs.readFileSync(path.join(__dirname, 'server.ts'), 'utf8');
+    
+    const sessionRouteMatch = serverCode.match(/addRoute\('GET', '\/api\/auth\/session'[\s\S]*?\}\);/);
+    expect(sessionRouteMatch).toBeTruthy();
+    
+    const sessionRoute = sessionRouteMatch![0];
+    expect(sessionRoute).not.toContain('isAuthenticated(');
+  });
+});
