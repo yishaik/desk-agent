@@ -37,7 +37,7 @@ let sharedModelRuntime: ModelRuntime | null = null;
 import {
   requiresConfirmation,
   createPendingConfirmation,
-  confirmAction,
+  formatConfirmationRequest,
 } from '../core/confirmations.ts';
 export {
   getPendingConfirmation,
@@ -97,7 +97,6 @@ const ExecuteActionSchema = Type.Object({
   actionId: Type.String({ description: 'The action ID to execute' }),
   input: Type.Record(Type.String(), Type.Unknown(), { description: 'Input parameters for the action' }),
   connectionName: Type.Optional(Type.String({ description: 'Optional connection alias' })),
-  confirmed: Type.Optional(Type.Boolean({ description: 'Set to true only after user explicitly confirmed' })),
 });
 type ExecuteActionParams = Static<typeof ExecuteActionSchema>;
 
@@ -143,7 +142,7 @@ function isActionEnabled(actionId: string): boolean {
   return !isActionDisabled(serviceId, actionId);
 }
 
-function createOpenConnectorTools(projectId: string): ToolDefinition[] {
+export function createOpenConnectorTools(projectId: string): ToolDefinition[] {
   const getClient = () => new OpenConnectorClient(projectId);
 
   const searchActionsTool: ToolDefinition<typeof SearchActionsSchema> = {
@@ -238,7 +237,7 @@ function createOpenConnectorTools(projectId: string): ToolDefinition[] {
   const executeActionTool: ToolDefinition<typeof ExecuteActionSchema> = {
     name: 'oc_execute_action',
     label: 'Execute Action',
-    description: 'Execute an Open Connector action. For send/create/delete actions, user must reply to confirm the action first.',
+    description: 'Execute an Open Connector action. Read-only actions run immediately. Mutating actions (send, reply, create, update, delete, ...) are never executed by this tool directly: it records a pending confirmation that the user approves by replying "yes" in WhatsApp, outside the model. You cannot approve on the user\'s behalf — do not call this tool again for the same action.',
     parameters: ExecuteActionSchema,
     async execute(toolCallId, params: ExecuteActionParams, signal, onUpdate, ctx) {
       if (!isActionEnabled(params.actionId)) {
@@ -254,39 +253,28 @@ function createOpenConnectorTools(projectId: string): ToolDefinition[] {
       }
 
       if (requiresConfirmation(params.actionId)) {
-        if (!params.confirmed) {
-          const confirmationId = createPendingConfirmation({
+        // Mutating actions are never executed from inside the model's turn.
+        // The pending store holds *unapproved* requests; the only thing that
+        // approves one is the owner replying "yes" in WhatsApp, resolved by
+        // whatsapp/handler.ts outside the model. There is deliberately no
+        // parameter through which the model can claim approval.
+        const confirmationId = createPendingConfirmation({
+          actionId: params.actionId,
+          input: params.input as Record<string, unknown>,
+          connectionName: params.connectionName,
+        });
+
+        return {
+          content: [{
+            type: 'text' as const,
+            text: formatConfirmationRequest(params.actionId, params.input, confirmationId),
+          }],
+          details: {
+            needsConfirmation: true,
             actionId: params.actionId,
-            input: params.input as Record<string, unknown>,
-            connectionName: params.connectionName,
-          });
-
-          return {
-            content: [{
-              type: 'text' as const,
-              text: `⚠️ Action "${params.actionId}" requires your confirmation.\n\n**Planned action:**\n- Action: ${params.actionId}\n- Input: ${JSON.stringify(params.input, null, 2)}\n\n**To approve:** Reply "yes" or "אשר" or "confirm"\n**To cancel:** Reply "no" or "בטל" or "cancel"\n\n_Confirmation ID: ${confirmationId}_`,
-            }],
-            details: { 
-              needsConfirmation: true, 
-              actionId: params.actionId,
-              confirmationId,
-            },
-          };
-        }
-
-        // Only a confirmation ID that actually exists in the pending map counts —
-        // the model cannot self-confirm with `confirmed: true`. (The normal path
-        // is the WhatsApp handler resolving a plain "yes" before it reaches here.)
-        const confirmationIdMatch = String(params.confirmed).match(/confirm_\d+_[a-z0-9]+/);
-        if (!confirmationIdMatch || !confirmAction(confirmationIdMatch[0])) {
-          return {
-            content: [{
-              type: 'text' as const,
-              text: `❌ Invalid confirmation. The model cannot self-confirm actions. Tell the user to reply "yes" (or "אשר") to the confirmation message — the reply is handled outside the model.`,
-            }],
-            details: { error: true, actionId: params.actionId, reason: 'invalid_confirmation' },
-          };
-        }
+            confirmationId,
+          },
+        };
       }
 
       const client = getClient();

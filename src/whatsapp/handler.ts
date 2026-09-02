@@ -2,6 +2,7 @@ import { createChildLogger } from '../core/logger.ts';
 import { loadSettings, updateSettings, getActiveConnectorToken } from '../core/settings.ts';
 import { saveMessage, listProjects, createProject, getProject } from '../core/memory.ts';
 import { config } from '../core/config.ts';
+import { recordExecutedAction, consumeExecutedActionNotes } from '../core/confirmations.ts';
 import type { Message, MessageKey, Settings } from '../core/types.ts';
 import { getWhatsAppClient } from './client.ts';
 import { OpenConnectorClient } from '../open-connector/client.ts';
@@ -81,12 +82,14 @@ interface CommandResult {
   response?: string;
 }
 
-async function executePendingAction(pending: {
-  actionId: string;
-  input: Record<string, unknown>;
-  connectionName?: string;
-}): Promise<CommandResult> {
-  const client = new OpenConnectorClient();
+// The only place a mutating action is ever executed: after the owner's "yes".
+// The model never sees this tool result, so a note is recorded and prefixed to
+// the next prompt (withExecutedActionNotes).
+async function executePendingAction(
+  pending: { actionId: string; input: Record<string, unknown>; connectionName?: string },
+  projectId: string
+): Promise<CommandResult> {
+  const client = new OpenConnectorClient(projectId);
   try {
     const result = await client.executeAction({
       actionId: pending.actionId,
@@ -95,25 +98,43 @@ async function executePendingAction(pending: {
     });
 
     if (!result.success) {
+      recordExecutedAction({ projectId, actionId: pending.actionId, success: false, summary: String(result.message ?? 'unknown error') });
       return {
         handled: true,
         response: `❌ Action failed: ${result.message}`,
       };
     }
 
+    recordExecutedAction({ projectId, actionId: pending.actionId, success: true, summary: JSON.stringify(result.data ?? null) });
     return {
       handled: true,
       response: `✅ Action "${pending.actionId}" executed successfully.\n\nResult:\n${JSON.stringify(result.data, null, 2)}`,
     };
   } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    recordExecutedAction({ projectId, actionId: pending.actionId, success: false, summary: message });
     return {
       handled: true,
-      response: `❌ Error: ${err instanceof Error ? err.message : String(err)}`,
+      response: `❌ Error: ${message}`,
     };
   }
 }
 
-async function checkForConfirmationResponse(text: string): Promise<CommandResult> {
+/** Prefix the prompt with what ran since the model's last turn, so it never re-executes or denies it. */
+export function withExecutedActionNotes(projectId: string, text: string): string {
+  const notes = consumeExecutedActionNotes(projectId);
+  if (notes.length === 0) return text;
+  const lines = notes.map((n) => `- ${n.actionId}: ${n.success ? 'executed successfully' : 'FAILED'} — ${n.summary}`);
+  return [
+    '[System note — not written by the user. Since your last turn the user approved these actions and they were executed outside the model:',
+    ...lines,
+    'Do not execute them again; you may refer to the results.]',
+    '',
+    text,
+  ].join('\n');
+}
+
+async function checkForConfirmationResponse(text: string, projectId: string): Promise<CommandResult> {
   cleanupOldConfirmations();
 
   const confirmIdMatch = text.match(/confirm_\d+_[a-z0-9]+/);
@@ -136,7 +157,7 @@ async function checkForConfirmationResponse(text: string): Promise<CommandResult
 
       if (isConfirm || text.trim() === confirmId) {
         confirmAction(confirmId);
-        return executePendingAction(pending);
+        return executePendingAction(pending, projectId);
       }
     }
   }
@@ -159,7 +180,7 @@ async function checkForConfirmationResponse(text: string): Promise<CommandResult
       };
     }
     confirmAction(latest.confirmationId);
-    return executePendingAction(latest);
+    return executePendingAction(latest, projectId);
   }
 
   return { handled: false };
@@ -219,7 +240,7 @@ export async function handleMessage(message: Message): Promise<void> {
     return;
   }
 
-  const confirmResponse = await checkForConfirmationResponse(message.body);
+  const confirmResponse = await checkForConfirmationResponse(message.body, projectId);
   if (confirmResponse.handled) {
     if (tracker) {
       await updateReaction(tracker, 'reading');
@@ -542,7 +563,7 @@ async function processWithPi(
   // the only path that draws on Pro/Max plan limits.
   if (isClaudeCodeConnected()) {
     log.info({ projectId: settings.activeProject, message: message.body.slice(0, 50) }, 'Processing with Claude Code');
-    const response = await runClaudeCodePrompt(settings.activeProject, message.body, {
+    const response = await runClaudeCodePrompt(settings.activeProject, withExecutedActionNotes(settings.activeProject, message.body), {
       onToolStart: (toolName) => {
         log.debug({ toolName }, 'Claude Code tool started');
         updateReaction(tracker, 'using_tools').catch(() => {});
@@ -593,8 +614,8 @@ async function processWithPi(
 
   try {
     const response = await runPromptWithCallbacks(
-      settings.activeProject, 
-      message.body,
+      settings.activeProject,
+      withExecutedActionNotes(settings.activeProject, message.body),
       {
         onTurnStart: () => {
           updateReaction(tracker, 'processing').catch(() => {});

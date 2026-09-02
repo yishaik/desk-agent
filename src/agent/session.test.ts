@@ -1,6 +1,19 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { existsSync, rmSync, mkdirSync } from 'node:fs';
 
+const { executeAction } = vi.hoisted(() => ({ executeAction: vi.fn() }));
+vi.mock('../open-connector/client.ts', () => ({
+  OpenConnectorClient: class {
+    executeAction = executeAction;
+    searchActions = vi.fn(async () => []);
+    getActionGuide = vi.fn(async () => '');
+    listConnections = vi.fn(async () => []);
+  },
+  isRealConnection: () => true,
+  createClient: () => ({}),
+  defaultClient: {},
+}));
+
 const TEST_DATA_DIR = './test-data-session';
 
 beforeEach(() => {
@@ -102,5 +115,37 @@ describe('Mutating Action Patterns', () => {
     expect(requiresConfirmation('gmail.getMessages')).toBe(false);
     expect(requiresConfirmation('calendar.listEvents')).toBe(false);
     expect(requiresConfirmation('notion.getPage')).toBe(false);
+  });
+});
+
+describe('Pi oc_execute_action — HITL gate (#26)', () => {
+  it('never executes a mutating action, with or without a claimed confirmation', async () => {
+    executeAction.mockReset();
+    executeAction.mockResolvedValue({ success: true, message: 'ok', data: {} });
+    const { createOpenConnectorTools } = await import('./session.ts');
+    const { getPendingConfirmation } = await import('../core/confirmations.ts');
+    const tool = createOpenConnectorTools('default').find((t) => t.name === 'oc_execute_action')!;
+    const call = (params: Record<string, unknown>) =>
+      (tool.execute as (...a: unknown[]) => Promise<{ content: Array<{ text?: string }>; details?: Record<string, unknown> }>)(
+        'call-1', params, undefined, undefined, undefined
+      );
+
+    const first = await call({ actionId: 'gmail.send_email', input: { to: 'a@b.c' } });
+    expect(executeAction).not.toHaveBeenCalled();
+    expect(first.details?.['needsConfirmation']).toBe(true);
+    const id = String(first.details?.['confirmationId']);
+    expect(getPendingConfirmation(id)).toBeTruthy();
+
+    const second = await call({ actionId: 'gmail.send_email', input: { to: 'a@b.c' }, confirmed: id });
+    expect(executeAction).not.toHaveBeenCalled();
+    expect(second.content[0]?.text).toContain('NOT executed');
+    expect(getPendingConfirmation(id)).toBeTruthy();
+  });
+
+  it('schema has no confirmed parameter', async () => {
+    const { createOpenConnectorTools } = await import('./session.ts');
+    const tool = createOpenConnectorTools('default').find((t) => t.name === 'oc_execute_action')!;
+    const props = (tool.parameters as { properties: Record<string, unknown> }).properties;
+    expect(Object.keys(props)).toEqual(['actionId', 'input', 'connectionName']);
   });
 });

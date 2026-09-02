@@ -232,7 +232,8 @@ function buildSystemPrompt(): string {
     `Timezone: ${settings.timezone || 'UTC'}.`,
     'You converse over WhatsApp: keep replies short, helpful, and in the user\'s language.',
     'Use the connector MCP tools (search_actions, get_action_guide, execute_action, list_connections) to work with the user\'s connected services.',
-    'Mutating actions require the user to reply "yes" in WhatsApp — never claim you executed one without a successful tool result.',
+    'Mutating actions (send, reply, create, update, delete, ...) are never executed by execute_action directly: the tool records a pending request and the user approves it by replying "yes" in WhatsApp, outside your control. You cannot approve on the user\'s behalf and must not call the tool again for the same action.',
+    'Never claim an action was executed unless a tool result or a system note in the conversation says it ran.',
     'You have no file or shell access; only the connector tools and conversation.',
   ].filter(Boolean).join('\n');
 }

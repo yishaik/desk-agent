@@ -57,6 +57,25 @@ export function requiresConfirmation(actionId: string): boolean {
   return MUTATING_ACTION_PATTERNS.some((pattern) => pattern.test(actionId));
 }
 
+/**
+ * The text both engines hand back to the model when a mutating action needs
+ * the owner's approval. The model has no way to approve — the owner replies
+ * "yes" in WhatsApp and the handler resolves it outside the model.
+ */
+export function formatConfirmationRequest(actionId: string, input: unknown, confirmationId: string): string {
+  return [
+    `⚠️ Action "${actionId}" requires the user's confirmation and was NOT executed.`,
+    '',
+    '**Planned action:**',
+    `- Action: ${actionId}`,
+    `- Input: ${JSON.stringify(input, null, 2)}`,
+    '',
+    'Describe to the user exactly what will happen and ask them to reply "yes" (or "אשר") to approve, or "no" (or "בטל") to cancel. The approval is handled outside the model — you cannot approve it yourself, and you must NOT call execute_action again for this action.',
+    '',
+    `_Confirmation ID: ${confirmationId}_`,
+  ].join('\n');
+}
+
 export function generateConfirmationId(): string {
   return `confirm_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 }
@@ -98,6 +117,55 @@ export function confirmAction(confirmationId: string): boolean {
 
 export function cancelConfirmation(confirmationId: string): boolean {
   return confirmAction(confirmationId);
+}
+
+// --- executed-action notes -------------------------------------------------
+// A confirmed action runs in the WhatsApp handler, outside the model's turn, so
+// the model never sees its tool result. The handler records a note here and the
+// next prompt to the model is prefixed with it (see whatsapp/handler.ts).
+const EXECUTED_PATH = join(config.dataDir, 'executed-actions.json');
+const EXECUTED_MAX_AGE_MS = 30 * 60 * 1000;
+
+export interface ExecutedActionNote {
+  projectId: string;
+  actionId: string;
+  success: boolean;
+  summary: string;
+  at: number;
+}
+
+function loadExecuted(): ExecutedActionNote[] {
+  try {
+    const parsed = JSON.parse(readFileSync(EXECUTED_PATH, 'utf8'));
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveExecuted(notes: ExecutedActionNote[]): void {
+  try {
+    mkdirSync(dirname(EXECUTED_PATH), { recursive: true });
+    writeFileSync(EXECUTED_PATH, JSON.stringify(notes), { mode: 0o600 });
+  } catch (err) {
+    log.error({ err }, 'Failed to persist executed-action notes');
+  }
+}
+
+export function recordExecutedAction(note: Omit<ExecutedActionNote, 'at'>): void {
+  const notes = loadExecuted().filter((n) => Date.now() - n.at < EXECUTED_MAX_AGE_MS);
+  notes.push({ ...note, summary: note.summary.slice(0, 1500), at: Date.now() });
+  saveExecuted(notes);
+}
+
+/** Returns (and clears) the notes for a project; expired notes are dropped. */
+export function consumeExecutedActionNotes(projectId: string): ExecutedActionNote[] {
+  const all = loadExecuted().filter((n) => Date.now() - n.at < EXECUTED_MAX_AGE_MS);
+  const mine = all.filter((n) => n.projectId === projectId);
+  if (mine.length > 0 || all.length !== loadExecuted().length) {
+    saveExecuted(all.filter((n) => n.projectId !== projectId));
+  }
+  return mine;
 }
 
 export function cleanupOldConfirmations(): void {
