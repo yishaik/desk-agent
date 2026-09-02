@@ -19,6 +19,9 @@ import { bareJid } from './self-chat.ts';
 
 const log = createChildLogger('whatsapp');
 
+/** One-time warn when falling back from missing @lid to own phone JID (#73). */
+let missingLidWarned = false;
+
 const VERSION_CACHE_PATH = join(config.dataDir, 'wa-version.json');
 const VERSION_FETCH_TIMEOUT_MS = 5000;
 
@@ -83,7 +86,6 @@ export class WhatsAppClient {
   private maxReconnectAttempts = 5;
   private ownerJid: string | null = null;
   private ownerLid: string | null = null;
-  private warnedNoLid = false;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 
   async connect(): Promise<void> {
@@ -211,10 +213,14 @@ export class WhatsAppClient {
           phoneNumber: this.socket?.user?.id?.split(':')[0]?.split('@')[0],
           name: this.socket?.user?.name,
         };
-        this.ownerJid = this.socket?.user?.id ?? null;
-        // "Message yourself" chats use the account's LID, not the phone JID.
-        this.ownerLid = (this.socket?.user as { lid?: string } | undefined)?.lid ?? null;
+        this.ownerJid = this.socket?.user?.id ?? this.ownerJid;
+        // Seed LID when present; do not wipe a creds.update seed if open has none yet.
+        const openLid = (this.socket?.user as { lid?: string } | undefined)?.lid;
+        if (openLid) {
+          this.ownerLid = openLid.endsWith('@lid') ? openLid : openLid.includes('@') ? openLid : `${openLid}@lid`;
+        }
         this.pairingState.selfChat = this.selfChatMode();
+        this.pairingState.lid = this.lidPresence();
         this.reconnectAttempts = 0;
 
         const settings = loadSettings();
@@ -233,12 +239,18 @@ export class WhatsAppClient {
       await saveCreds();
       // The LID can arrive after 'open' (creds sync); pick it up as soon as it exists.
       const me = this.socket?.authState?.creds?.me as { id?: string; lid?: string } | undefined;
-      if (me?.lid && me.lid !== this.ownerLid) {
-        this.ownerLid = me.lid;
-        this.pairingState.selfChat = this.selfChatMode();
-        log.info({ lid: me.lid }, 'Self-chat LID became available');
+      const userLid = (this.socket?.user as { lid?: string } | undefined)?.lid;
+      const rawLid = me?.lid || userLid;
+      if (rawLid) {
+        const normalized = rawLid.endsWith('@lid') ? rawLid : rawLid.includes('@') ? rawLid : `${rawLid}@lid`;
+        if (normalized !== this.ownerLid) {
+          this.ownerLid = normalized;
+          log.info({ lid: this.ownerLid }, 'Self-chat LID became available');
+        }
       }
       if (me?.id && !this.ownerJid) this.ownerJid = me.id;
+      this.pairingState.selfChat = this.selfChatMode();
+      this.pairingState.lid = this.lidPresence();
     });
 
     this.socket.ev.on('messages.upsert', async (m) => {
@@ -378,8 +390,13 @@ export class WhatsAppClient {
     }
 
     const targetJid = this.getSelfChatJid();
-    if (!targetJid) {
-      log.debug({ messageId: messageKey.id }, 'Skipping reaction: no self-chat available');
+    if (
+      !targetJid ||
+      targetJid.endsWith('@g.us') ||
+      targetJid.includes('@broadcast') ||
+      !this.isSelfJid(targetJid)
+    ) {
+      log.debug({ messageId: messageKey.id, targetJid }, 'Skipping reaction: no self-chat JID available');
       return;
     }
 
@@ -406,12 +423,20 @@ export class WhatsAppClient {
       return this.ownerLid;
     }
     const phone = bareJid(this.ownerJid);
-    if (phone) {
-      if (!this.warnedNoLid) {
-        this.warnedNoLid = true;
-        log.warn({ ownerJid: this.ownerJid }, 'No LID available for this account — replying via the phone JID self-chat');
+    // Own phone JID only — never group, never status@broadcast, never someone else.
+    if (phone && phone !== 'status' && !phone.includes('-')) {
+      const phoneJid = `${phone}@s.whatsapp.net`;
+      if (phoneJid.endsWith('@g.us') || phoneJid.includes('@broadcast')) {
+        return null;
       }
-      return `${phone}@s.whatsapp.net`;
+      if (!missingLidWarned) {
+        missingLidWarned = true;
+        log.warn(
+          { ownerLid: this.ownerLid, ownerJid: this.ownerJid },
+          'LID missing; falling back to own phone JID for Message-yourself'
+        );
+      }
+      return phoneJid;
     }
     log.debug('getSelfChatJid: not connected (no LID, no owner JID)');
     return null;
@@ -421,6 +446,10 @@ export class WhatsAppClient {
     if (this.ownerLid && this.ownerLid.endsWith('@lid')) return 'lid';
     if (bareJid(this.ownerJid)) return 'phone';
     return 'none';
+  }
+
+  private lidPresence(): 'present' | 'missing' {
+    return this.ownerLid && this.ownerLid.endsWith('@lid') ? 'present' : 'missing';
   }
 
   async sendFile(
@@ -445,7 +474,11 @@ export class WhatsAppClient {
   }
 
   getPairingState(): PairingState {
-    return { ...this.pairingState };
+    return {
+      ...this.pairingState,
+      selfChat: this.selfChatMode(),
+      lid: this.lidPresence(),
+    };
   }
 
   getOwnerJid(): string | null {
