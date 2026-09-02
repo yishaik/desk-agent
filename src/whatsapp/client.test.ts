@@ -114,4 +114,31 @@ describe('getSelfChatJid — LID preferred, phone JID fallback (#73)', () => {
     (client as unknown as { ownerLid: string | null }).ownerLid = null;
     expect(client.getSelfChatJid()).toBeNull();
   });
+
+  it('never returns status@broadcast or a group JID as the fallback', async () => {
+    const { WhatsAppClient } = await import('./client.ts');
+    const client = new WhatsAppClient();
+    (client as unknown as { ownerJid: string | null }).ownerJid = 'status@broadcast';
+    (client as unknown as { ownerLid: string | null }).ownerLid = null;
+    expect(client.getSelfChatJid()).toBeNull();
+
+    (client as unknown as { ownerJid: string | null }).ownerJid = '123456789-987654321@g.us';
+    expect(client.getSelfChatJid()).toBeNull();
+  });
+});
+
+describe('getPairingState lid present/missing (#73)', () => {
+  it('reports lid missing when ownerLid is null', async () => {
+    const { WhatsAppClient } = await import('./client.ts');
+    const client = new WhatsAppClient();
+    (client as unknown as { ownerLid: string | null }).ownerLid = null;
+    expect(client.getPairingState().lid).toBe('missing');
+  });
+
+  it('reports lid present when ownerLid ends with @lid', async () => {
+    const { WhatsAppClient } = await import('./client.ts');
+    const client = new WhatsAppClient();
+    (client as unknown as { ownerLid: string | null }).ownerLid = 'ABC123XYZ@lid';
+    expect(client.getPairingState().lid).toBe('present');
+  });
 });
