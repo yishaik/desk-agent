@@ -181,7 +181,7 @@ const PREFERRED_DEFAULT_MODELS: Record<string, string[]> = {
   'anthropic': ['claude-fable-5', 'claude-opus-5', 'claude-sonnet-5'],
 };
 
-function pickDefaultModel<T extends { id: string }>(providerId: string, models: T[]): T | undefined {
+function pickDefaultModel<T extends { id: string }>(providerId: string, models: readonly T[]): T | undefined {
   for (const preferred of PREFERRED_DEFAULT_MODELS[providerId] ?? []) {
     const match = models.find((m) => m.id === preferred);
     if (match) return match;
