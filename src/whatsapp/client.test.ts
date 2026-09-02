@@ -306,8 +306,170 @@ describe('S-03: Owner binding — pairing is bound to owner identity', () => {
   });
 });
 
-describe('R-08 pin WA version + U-04 unpair keep ownerPhone', () => {
-  it('does not call fetchLatestBaileysVersion and exports a pinned version', async () => {
+
+describe('unpair() keeps ownerPhone (#132)', () => {
+  it('wipes auth and reconnects but does not clear ownerPhone', async () => {
+    const { updateSettings, loadSettings } = await import('../core/settings.ts');
+    updateSettings({ ownerPhone: '972501234567' });
+
+    const { WhatsAppClient } = await import('./client.ts');
+    const client = new WhatsAppClient();
+
+    (client as unknown as { ownerJid: string | null }).ownerJid = '972501234567:0@s.whatsapp.net';
+    (client as unknown as { ownerLid: string | null }).ownerLid = '123@lid';
+    (client as unknown as { pairingState: { isPaired: boolean } }).pairingState = { isPaired: true };
+
+    const mockConnect = vi.fn().mockResolvedValue(undefined);
+    (client as unknown as { connect: typeof mockConnect }).connect = mockConnect;
+
+    await client.unpair();
+
+    expect(client.getOwnerJid()).toBeNull();
+    expect(client.getOwnerLid()).toBeNull();
+    expect(client.getPairingState().isPaired).toBe(false);
+    expect(mockConnect).toHaveBeenCalled();
+    expect(loadSettings().ownerPhone).toBe('972501234567');
+  });
+
+  it('unpair() source does not call updateSettings or logout', async () => {
+    const fs = await import('node:fs');
+    const path = await import('node:path');
+    const clientSource = fs.readFileSync(
+      path.join(process.cwd(), 'src/whatsapp/client.ts'),
+      'utf8'
+    );
+    const unpairBlock = clientSource.match(
+      /async unpair\(\)[\s\S]*?^\s{2}\}/m
+    )?.[0] || '';
+    expect(unpairBlock).toContain('wipeAuthAndReconnect');
+    expect(unpairBlock).not.toContain('updateSettings');
+    expect(unpairBlock).not.toContain('.logout(');
+  });
+});
+
+describe('requestPairingCode — no silent owner swap (#132)', () => {
+  it('rejects a phone that does not match bound ownerPhone', async () => {
+    const { updateSettings } = await import('../core/settings.ts');
+    updateSettings({ ownerPhone: '972501234567' });
+
+    const { WhatsAppClient } = await import('./client.ts');
+    const client = new WhatsAppClient();
+
+    await expect(client.requestPairingCode('972509999999')).rejects.toThrow(
+      /does not match bound owner/
+    );
+  });
+
+  it('allows a matching owner phone and stores the code', async () => {
+    const { updateSettings } = await import('../core/settings.ts');
+    updateSettings({ ownerPhone: '972501234567' });
+
+    const { WhatsAppClient } = await import('./client.ts');
+    const client = new WhatsAppClient();
+
+    const mockSocket = {
+      requestPairingCode: vi.fn().mockResolvedValue('ABCD-1234'),
+      ev: { on: vi.fn(), removeAllListeners: vi.fn() },
+      end: vi.fn(),
+    };
+    (client as unknown as { socket: typeof mockSocket }).socket = mockSocket;
+
+    const code = await client.requestPairingCode('+972-50-123-4567');
+    expect(code).toBe('ABCD-1234');
+    expect(mockSocket.requestPairingCode).toHaveBeenCalledWith('972501234567');
+    expect(client.getPairingState().pairingCode).toBe('ABCD-1234');
+  });
+});
+
+describe('captionless media is delivered to handlers (#141)', () => {
+  it('does not silent-drop an image without caption', async () => {
+    const { WhatsAppClient } = await import('./client.ts');
+    const { MEDIA_WITHOUT_TEXT_BODY } = await import('./inbound.ts');
+    const client = new WhatsAppClient();
+    const handler = vi.fn().mockResolvedValue(undefined);
+    client.onMessage(handler);
+
+    const mockSocket = {
+      ev: { on: vi.fn(), removeAllListeners: vi.fn() },
+      end: vi.fn(),
+    };
+    (client as unknown as { socket: typeof mockSocket }).socket = mockSocket;
+    (client as unknown as { setupEventHandlers: (s: () => Promise<void>) => void })
+      .setupEventHandlers(async () => {});
+
+    const onCalls = mockSocket.ev.on.mock.calls as [string, unknown][];
+    const upsert = onCalls.find((c) => c[0] === 'messages.upsert')?.[1] as
+      | ((m: unknown) => Promise<void>)
+      | undefined;
+    expect(upsert).toBeDefined();
+
+    await upsert!({
+      type: 'notify',
+      messages: [{
+        key: { remoteJid: '1234567890@s.whatsapp.net', id: 'img1', fromMe: true },
+        messageTimestamp: Math.floor(Date.now() / 1000),
+        message: { imageMessage: { mimetype: 'image/jpeg' } },
+      }],
+    });
+
+    expect(handler).toHaveBeenCalledTimes(1);
+    expect(handler.mock.calls[0]![0].body).toBe(MEDIA_WITHOUT_TEXT_BODY);
+  });
+
+  it('still uses the caption when an image has one', async () => {
+    const { WhatsAppClient } = await import('./client.ts');
+    const client = new WhatsAppClient();
+    const handler = vi.fn().mockResolvedValue(undefined);
+    client.onMessage(handler);
+
+    const mockSocket = {
+      ev: { on: vi.fn(), removeAllListeners: vi.fn() },
+      end: vi.fn(),
+    };
+    (client as unknown as { socket: typeof mockSocket }).socket = mockSocket;
+    (client as unknown as { setupEventHandlers: (s: () => Promise<void>) => void })
+      .setupEventHandlers(async () => {});
+
+    const onCalls = mockSocket.ev.on.mock.calls as [string, unknown][];
+    const upsert = onCalls.find((c) => c[0] === 'messages.upsert')?.[1] as
+      | ((m: unknown) => Promise<void>)
+      | undefined;
+
+    await upsert!({
+      type: 'notify',
+      messages: [{
+        key: { remoteJid: '1234567890@s.whatsapp.net', id: 'img2', fromMe: true },
+        messageTimestamp: Math.floor(Date.now() / 1000),
+        message: { imageMessage: { caption: 'look at this' } },
+      }],
+    });
+
+    expect(handler).toHaveBeenCalledTimes(1);
+    expect(handler.mock.calls[0]![0].body).toBe('look at this');
+  });
+});
+
+describe('pinned Baileys version (#156)', () => {
+  it('uses hardcoded pin when no cache file exists', async () => {
+    const { resolvePinnedBaileysVersion, PINNED_BAILEYS_VERSION } = await import('./client.ts');
+    expect(resolvePinnedBaileysVersion()).toEqual(PINNED_BAILEYS_VERSION);
+    expect(PINNED_BAILEYS_VERSION).toEqual([2, 3000, 1015629576]);
+  });
+
+  it('uses cache file when present', async () => {
+    const fs = await import('node:fs');
+    const path = await import('node:path');
+    const { config } = await import('../core/config.ts');
+    fs.writeFileSync(
+      path.join(config.dataDir, 'wa-version.json'),
+      JSON.stringify({ version: [2, 3000, 999], fetchedAt: '2020-01-01' })
+    );
+    // client.ts already imported config at module load; VERSION_CACHE_PATH uses that dataDir
+    const { resolvePinnedBaileysVersion } = await import('./client.ts');
+    expect(resolvePinnedBaileysVersion()).toEqual([2, 3000, 999]);
+  });
+
+  it('source does not call fetchLatestBaileysVersion', async () => {
     const fs = await import('node:fs');
     const path = await import('node:path');
     const clientSource = fs.readFileSync(
@@ -315,33 +477,43 @@ describe('R-08 pin WA version + U-04 unpair keep ownerPhone', () => {
       'utf8'
     );
     expect(clientSource).not.toContain('fetchLatestBaileysVersion');
-    expect(clientSource).toContain('PINNED_WA_VERSION');
-    expect(clientSource).toContain('async unpair');
-    expect(clientSource).toContain('MEDIA_NO_TEXT_BODY');
-    const { PINNED_WA_VERSION } = await import('./client.ts');
-    expect(PINNED_WA_VERSION).toEqual([2, 3000, 1015629576]);
+    expect(clientSource).toContain('resolvePinnedBaileysVersion');
+    expect(clientSource).not.toContain('.logout(');
   });
 
-  it('unpair wipes auth and reconnects without clearing ownerPhone', async () => {
-    const { updateSettings, loadSettings } = await import('../core/settings.ts');
-    updateSettings({ ownerPhone: '972501234567' });
-
-    const { WhatsAppClient } = await import('./client.ts');
-    const client = new WhatsAppClient();
-
-    const mockConnect = vi.fn().mockResolvedValue(undefined);
-    (client as unknown as { connect: typeof mockConnect }).connect = mockConnect;
-
-    const mockSocket = {
+  it('connect uses pinned version and does not invoke fetchLatestBaileysVersion', async () => {
+    const fetchLatestBaileysVersion = vi.fn();
+    const makeWASocket = vi.fn().mockReturnValue({
+      ev: { on: vi.fn(), removeAllListeners: vi.fn() },
       end: vi.fn(),
-      ev: { removeAllListeners: vi.fn() },
+      requestPairingCode: vi.fn(),
+    });
+
+    vi.doMock('@whiskeysockets/baileys', async (importOriginal) => {
+      const actual = await importOriginal<typeof import('@whiskeysockets/baileys')>();
+      return {
+        ...actual,
+        default: makeWASocket,
+        fetchLatestBaileysVersion,
+        useMultiFileAuthState: vi.fn().mockResolvedValue({
+          state: { creds: {}, keys: {} },
+          saveCreds: vi.fn(),
+        }),
+        makeCacheableSignalKeyStore: vi.fn((keys: unknown) => keys),
+      };
+    });
+
+    const { WhatsAppClient, PINNED_BAILEYS_VERSION } = await import('./client.ts');
+    const client = new WhatsAppClient();
+    await client.connect();
+
+    expect(fetchLatestBaileysVersion).not.toHaveBeenCalled();
+    expect(makeWASocket).toHaveBeenCalled();
+    const opts = makeWASocket.mock.calls[0]![0] as {
+      version: [number, number, number];
+      generateHighQualityLinkPreview: boolean;
     };
-    (client as unknown as { socket: typeof mockSocket }).socket = mockSocket;
-
-    await client.unpair();
-
-    expect(mockSocket.end).toHaveBeenCalledWith(undefined);
-    expect(mockConnect).toHaveBeenCalled();
-    expect(loadSettings().ownerPhone).toBe('972501234567');
+    expect(opts.version).toEqual(PINNED_BAILEYS_VERSION);
+    expect(opts.generateHighQualityLinkPreview).toBe(false);
   });
 });
