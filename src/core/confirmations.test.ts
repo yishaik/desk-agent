@@ -157,18 +157,89 @@ describe('requiresConfirmation — allow-list of read-only verbs (#27)', () => {
     for (const id of READ_ONLY) expect(requiresConfirmation(id), id).toBe(false);
   });
 
-  it('honours per-action overrides from settings', async () => {
+  it('honours per-action overrides from settings for read-only actions', async () => {
     const { setActionConfirmation } = await import('./settings.ts');
     const { requiresConfirmation } = await import('./confirmations.ts');
 
+    // 'always' on a read-only action forces confirmation
     setActionConfirmation('gmail', 'gmail.get_profile', 'always');
     expect(requiresConfirmation('gmail.get_profile')).toBe(true);
 
-    setActionConfirmation('gmail', 'gmail.create_draft', 'never');
-    expect(requiresConfirmation('gmail.create_draft')).toBe(false);
+    // Reset
+    setActionConfirmation('gmail', 'gmail.get_profile', 'auto');
+  });
+});
 
-    setActionConfirmation('gmail', 'gmail.create_draft', 'auto');
-    expect(requiresConfirmation('gmail.create_draft')).toBe(true);
+describe('S-06 (#110) — confirmation=never must NOT skip send/create/update/delete', () => {
+  const ALWAYS_CONFIRM_ACTIONS = [
+    'gmail.send_email',
+    'gmail.send_message',
+    'googlecalendar.create_event',
+    'googlecalendar.update_event',
+    'googlecalendar.delete_event',
+    'gmail.delete_draft',
+    'gmail.trash_message',
+    'gmail.reply_to_thread',
+    'slack.send_message',
+    'notion.create_page',
+    'notion.update_page',
+    'notion.delete_block',
+    'x.schedule_meeting',
+    'x.cancel_appointment',
+    'x.forward_email',
+    'x.move_file',
+  ];
+
+  it('always requires confirmation for send/create/update/delete verbs', async () => {
+    const { requiresConfirmation, isAlwaysConfirmAction } = await import('./confirmations.ts');
+    
+    for (const actionId of ALWAYS_CONFIRM_ACTIONS) {
+      expect(isAlwaysConfirmAction(actionId), `${actionId} should be always-confirm`).toBe(true);
+      expect(requiresConfirmation(actionId), `${actionId} should require confirmation`).toBe(true);
+    }
+  });
+
+  it('never override does NOT skip confirmation for mutating verbs', async () => {
+    const { setActionConfirmation } = await import('./settings.ts');
+    const { requiresConfirmation } = await import('./confirmations.ts');
+
+    // Set 'never' on a send action — must STILL require confirmation
+    setActionConfirmation('gmail', 'gmail.send_email', 'never');
+    expect(requiresConfirmation('gmail.send_email')).toBe(true);
+
+    setActionConfirmation('googlecalendar', 'googlecalendar.create_event', 'never');
+    expect(requiresConfirmation('googlecalendar.create_event')).toBe(true);
+
+    setActionConfirmation('googlecalendar', 'googlecalendar.delete_event', 'never');
+    expect(requiresConfirmation('googlecalendar.delete_event')).toBe(true);
+
+    // Reset
+    setActionConfirmation('gmail', 'gmail.send_email', 'auto');
+    setActionConfirmation('googlecalendar', 'googlecalendar.create_event', 'auto');
+    setActionConfirmation('googlecalendar', 'googlecalendar.delete_event', 'auto');
+  });
+
+  it('never override DOES skip confirmation for read-only actions', async () => {
+    const { setActionConfirmation } = await import('./settings.ts');
+    const { requiresConfirmation } = await import('./confirmations.ts');
+
+    // 'never' on a read-only action skips confirmation (this is safe)
+    setActionConfirmation('gmail', 'gmail.list_threads', 'never');
+    expect(requiresConfirmation('gmail.list_threads')).toBe(false);
+
+    // Reset
+    setActionConfirmation('gmail', 'gmail.list_threads', 'auto');
+  });
+
+  it('verb heuristic still works as fallback for non-mutating unknown actions', async () => {
+    const { requiresConfirmation, isAlwaysConfirmAction } = await import('./confirmations.ts');
+
+    // Unknown action with read-only verb — no confirmation needed
+    expect(isAlwaysConfirmAction('custom.get_status')).toBe(false);
+    expect(requiresConfirmation('custom.get_status')).toBe(false);
+
+    // Unknown action with unknown verb — requires confirmation (fail closed)
+    expect(requiresConfirmation('custom.frobnicate_thing')).toBe(true);
   });
 });
 
@@ -284,6 +355,55 @@ describe('PendingConfirmation with projectId', () => {
 
     const projectB = getAllPendingConfirmations('project-b');
     expect(projectB.length).toBe(1);
+  });
+});
+
+describe('S-04 (#108) — payloadPresentedAt tracking', () => {
+  it('markPayloadPresented sets the flag', async () => {
+    const { createPendingConfirmation, markPayloadPresented, isPayloadPresented } = await import('./confirmations.ts');
+
+    const confirmationId = createPendingConfirmation({
+      actionId: 'gmail.send_email',
+      input: { to: 'test@example.com' },
+      projectId: 'default',
+    });
+
+    // Initially not presented
+    expect(isPayloadPresented(confirmationId)).toBe(false);
+
+    // Mark as presented
+    const result = markPayloadPresented(confirmationId);
+    expect(result).toBe(true);
+
+    // Now it should be presented
+    expect(isPayloadPresented(confirmationId)).toBe(true);
+  });
+
+  it('isPayloadPresented returns false for unknown confirmation', async () => {
+    const { isPayloadPresented } = await import('./confirmations.ts');
+    expect(isPayloadPresented('confirm_nonexistent_xxx')).toBe(false);
+  });
+
+  it('markPayloadPresented returns false for unknown confirmation', async () => {
+    const { markPayloadPresented } = await import('./confirmations.ts');
+    expect(markPayloadPresented('confirm_nonexistent_xxx')).toBe(false);
+  });
+
+  it('payloadPresentedAt is preserved when loading from disk', async () => {
+    const { createPendingConfirmation, markPayloadPresented, getPendingConfirmation } = await import('./confirmations.ts');
+
+    const confirmationId = createPendingConfirmation({
+      actionId: 'gmail.send_email',
+      input: { to: 'test@example.com' },
+      projectId: 'default',
+    });
+
+    markPayloadPresented(confirmationId);
+
+    // Reload and check
+    const pending = getPendingConfirmation(confirmationId);
+    expect(pending?.payloadPresentedAt).toBeDefined();
+    expect(typeof pending?.payloadPresentedAt).toBe('number');
   });
 });
 

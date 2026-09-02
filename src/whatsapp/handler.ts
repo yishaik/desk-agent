@@ -18,6 +18,8 @@ import {
   getAllPendingConfirmations,
   cancelAllPendingConfirmations,
   formatPendingForUser,
+  markPayloadPresented,
+  isPayloadPresented,
   checkCredentialsBeforePrompt,
   recreateSessionAfterCredentialChange,
   CredentialError,
@@ -162,6 +164,28 @@ export function withExecutedActionNotes(projectId: string, text: string): string
   ].join('\n');
 }
 
+/**
+ * S-04 (#108): Helper to show the structured payload for a pending item.
+ * Marks the item as presented so subsequent confirms can execute.
+ */
+function showPayloadAndMarkPresented(
+  pending: { confirmationId: string; actionId: string; input: Record<string, unknown>; createdAt: number },
+  isSingleItem: boolean
+): string {
+  markPayloadPresented(pending.confirmationId);
+  
+  const lines = ['⚠️ לפני אישור, וודא שזה מה שרצית:'];
+  lines.push(`\n${formatPendingForUser(pending)}`);
+  
+  if (isSingleItem) {
+    lines.push('\nהשב *כן* או *אשר* לאישור, או "לא" לביטול.');
+  } else {
+    lines.push('\nהשב *כן* לאישור פעולה זו, או "לא" לביטול.');
+  }
+  
+  return lines.join('\n');
+}
+
 async function checkForConfirmationResponse(text: string, projectId: string): Promise<CommandResult> {
   cleanupOldConfirmations();
 
@@ -173,13 +197,15 @@ async function checkForConfirmationResponse(text: string, projectId: string): Pr
   const trimmedText = text.trim();
   const confirmIdMatch = trimmedText.match(/confirm_\d+_[a-z0-9]+/);
 
+  // --- Cancel handling (always allowed) ---
+  const isSimpleCancel = CANCEL_PATTERNS.some((p) => p.test(trimmedText));
+
   if (confirmIdMatch) {
     const confirmId = confirmIdMatch[0];
     const pending = getPendingConfirmation(confirmId);
 
     if (pending && pending.projectId === projectId) {
       const textWithoutId = trimmedText.replace(confirmId, '').trim();
-      const isConfirm = CONFIRM_PATTERNS.some((p) => p.test(textWithoutId));
       const isCancel = CANCEL_PATTERNS.some((p) => p.test(textWithoutId)) ||
                        textWithoutId.toLowerCase().includes('cancel') || textWithoutId.includes('בטל');
 
@@ -191,7 +217,19 @@ async function checkForConfirmationResponse(text: string, projectId: string): Pr
         };
       }
 
+      const isConfirm = CONFIRM_PATTERNS.some((p) => p.test(textWithoutId));
       if (isConfirm || textWithoutId === '') {
+        // S-04 (#108): Only execute if the handler has shown the payload.
+        // If not shown, show it now and ask for confirmation again.
+        if (!isPayloadPresented(confirmId)) {
+          return {
+            handled: true,
+            response: showPayloadAndMarkPresented(
+              { confirmationId: confirmId, ...pending },
+              allPending.length === 1
+            ),
+          };
+        }
         confirmAction(confirmId);
         return executePendingAction(pending, projectId);
       }
@@ -199,14 +237,21 @@ async function checkForConfirmationResponse(text: string, projectId: string): Pr
   }
 
   const isSimpleConfirm = CONFIRM_PATTERNS.some((p) => p.test(trimmedText));
-  const isSimpleCancel = CANCEL_PATTERNS.some((p) => p.test(trimmedText));
   const numberMatch = trimmedText.match(/^(\d+)$/);
 
+  // --- Number pick for multi-pending ---
   if (allPending.length > 1 && numberMatch && numberMatch[1]) {
     const idx = parseInt(numberMatch[1], 10) - 1;
     if (idx >= 0 && idx < allPending.length) {
       const selected = allPending[idx];
       if (selected) {
+        // S-04 (#108): Only execute if the handler has shown the payload.
+        if (!isPayloadPresented(selected.confirmationId)) {
+          return {
+            handled: true,
+            response: showPayloadAndMarkPresented(selected, false),
+          };
+        }
         confirmAction(selected.confirmationId);
         return executePendingAction(selected, projectId);
       }
@@ -229,17 +274,31 @@ async function checkForConfirmationResponse(text: string, projectId: string): Pr
   }
 
   if (isSimpleConfirm) {
-    if (allPending.length === 1 && allPending[0]) {
-      const single = allPending[0];
-      confirmAction(single.confirmationId);
-      return executePendingAction(single, projectId);
+    // S-04 (#108): Simple כן/אשר handling
+    if (allPending.length === 1) {
+      const single = allPending[0]!;
+      
+      // If payload was already shown by handler, execute on כן
+      if (isPayloadPresented(single.confirmationId)) {
+        confirmAction(single.confirmationId);
+        return executePendingAction(single, projectId);
+      }
+      
+      // First כן: show the payload and mark as presented
+      return {
+        handled: true,
+        response: showPayloadAndMarkPresented(single, true),
+      };
     }
 
+    // Multiple pending: show the list and mark all as presented
     const lines = ['⚠️ יש מספר פעולות ממתינות לאישור. בחר מספר:'];
     allPending.forEach((p, i) => {
+      markPayloadPresented(p.confirmationId);
       lines.push(`\n*${i + 1}.* ${formatPendingForUser(p)}`);
     });
     lines.push('\nהשב עם מספר (1, 2...) לאישור, או "לא" לביטול הכל.');
+
     return {
       handled: true,
       response: lines.join('\n'),

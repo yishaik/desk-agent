@@ -17,6 +17,12 @@ export interface PendingConfirmation {
   connectionName?: string;
   projectId?: string;
   createdAt: number;
+  /**
+   * S-04 (#108): Timestamp when the WhatsApp handler showed formatPendingForUser
+   * for this pending item. Execution is blocked until this is set — the customer
+   * must see the real payload (to/subject/body), not just the model's description.
+   */
+  payloadPresentedAt?: number;
 }
 
 type Store = Record<string, PendingConfirmation>;
@@ -51,6 +57,26 @@ const READ_ONLY_VERBS = new Set([
   'detect', 'parse', 'convert', 'ping', 'whoami',
 ]);
 
+// S-06 (#110): Hardcoded mutating verbs that ALWAYS require confirmation, even
+// if the operator sets confirmation=never. These are the real-world-impact
+// actions for the default inbox-calendar skill pack (Gmail + Calendar).
+// The verb heuristic stays as a fallback for other OC actions.
+const ALWAYS_CONFIRM_VERBS = new Set([
+  'send',
+  'create',
+  'update',
+  'delete',
+  'remove',
+  'trash',
+  'modify',
+  'patch',
+  'reply',
+  'forward',
+  'schedule',
+  'cancel',
+  'move',
+]);
+
 /** Leading verb of an action name: "gmail.get_message" → "get", "getMessages" → "get". */
 export function actionVerb(actionId: string): string {
   const name = actionId.includes('.') ? actionId.slice(actionId.indexOf('.') + 1) : actionId;
@@ -63,8 +89,24 @@ export function isReadOnlyAction(actionId: string): boolean {
   return READ_ONLY_VERBS.has(actionVerb(actionId));
 }
 
+/**
+ * S-06 (#110): Returns true if the action's leading verb is in the hardcoded
+ * list of mutating verbs that must ALWAYS require confirmation.
+ */
+export function isAlwaysConfirmAction(actionId: string): boolean {
+  return ALWAYS_CONFIRM_VERBS.has(actionVerb(actionId));
+}
+
 export function requiresConfirmation(actionId: string): boolean {
   const override = getActionConfirmationOverride(actionId);
+
+  // S-06 (#110): 'never' override must NOT skip confirmation for known
+  // mutating verbs (send/create/update/delete/etc). This protects against
+  // operator misconfiguration bypassing the gate for real-world writes.
+  if (isAlwaysConfirmAction(actionId)) {
+    return true;
+  }
+
   if (override === 'never') return false;
   if (override === 'always') return true;
   return !isReadOnlyAction(actionId);
@@ -130,6 +172,26 @@ export function confirmAction(confirmationId: string): boolean {
 
 export function cancelConfirmation(confirmationId: string): boolean {
   return confirmAction(confirmationId);
+}
+
+/**
+ * S-04 (#108): Mark that the WhatsApp handler has shown formatPendingForUser
+ * for this pending item. Execution is blocked until this is set.
+ */
+export function markPayloadPresented(confirmationId: string): boolean {
+  const store = load();
+  if (!store[confirmationId]) return false;
+  store[confirmationId]!.payloadPresentedAt = Date.now();
+  save(store);
+  return true;
+}
+
+/**
+ * S-04 (#108): Check if the handler has shown the payload for this pending item.
+ */
+export function isPayloadPresented(confirmationId: string): boolean {
+  const pending = load()[confirmationId];
+  return pending?.payloadPresentedAt !== undefined;
 }
 
 // --- executed-action notes -------------------------------------------------

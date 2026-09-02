@@ -637,6 +637,401 @@ describe('Confirmation Patterns (handler)', () => {
   });
 });
 
+describe('S-04 (#108) — handler must show payload before any execute', () => {
+  it('plain כן shows payload and does NOT execute on first attempt', async () => {
+    const mockFormatPendingForUser = vi.fn().mockReturnValue('📋 *gmail.send_email*\n👤 אל: test@example.com');
+    const mockConfirmAction = vi.fn().mockReturnValue(true);
+    const mockMarkPayloadPresented = vi.fn().mockReturnValue(true);
+    const mockIsPayloadPresented = vi.fn().mockReturnValue(false);
+
+    vi.doMock('../agent/session.ts', async (importOriginal) => {
+      const original = await importOriginal<typeof import('../agent/session.ts')>();
+      return {
+        ...original,
+        getAllPendingConfirmations: vi.fn().mockReturnValue([{
+          confirmationId: 'confirm_123_abc',
+          actionId: 'gmail.send_email',
+          input: { to: 'test@example.com', subject: 'Test', body: 'Hello' },
+          projectId: 'default',
+          createdAt: Date.now(),
+        }]),
+        formatPendingForUser: mockFormatPendingForUser,
+        confirmAction: mockConfirmAction,
+        markPayloadPresented: mockMarkPayloadPresented,
+        isPayloadPresented: mockIsPayloadPresented,
+        getPendingConfirmation: vi.fn().mockReturnValue(undefined),
+        cleanupOldConfirmations: vi.fn(),
+        cancelAllPendingConfirmations: vi.fn().mockReturnValue(0),
+        checkCredentialsBeforePrompt: vi.fn().mockResolvedValue({ valid: true, model: true, modelId: 'test' }),
+        runPromptWithCallbacks: vi.fn().mockResolvedValue(null),
+      };
+    });
+
+    vi.doMock('./client.ts', () => ({
+      getWhatsAppClient: vi.fn().mockReturnValue({
+        getOwnerJid: () => '1234567890:123@s.whatsapp.net',
+        getOwnerPhone: () => '1234567890',
+        getOwnerLid: () => '1234567890@lid',
+        isSelfJid: (jid: string) => jid.includes('1234567890'),
+        getSelfChatJid: () => '1234567890@lid',
+        isConnected: () => true,
+        sendMessage: vi.fn().mockResolvedValue(undefined),
+        sendReaction: vi.fn().mockResolvedValue(undefined),
+        getPairingState: () => ({ isPaired: true, selfChat: 'lid' }),
+      }),
+      WhatsAppClient: class {},
+    }));
+
+    vi.doMock('../core/settings.ts', async (importOriginal) => {
+      const original = await importOriginal<typeof import('../core/settings.ts')>();
+      return {
+        ...original,
+        loadSettings: vi.fn().mockReturnValue({
+          botName: 'TestBot',
+          ownerName: 'Test Owner',
+          timezone: 'UTC',
+          model: 'test-model',
+          apiKeyMode: 'none',
+          activeProject: 'default',
+          services: [],
+          projectTokens: {},
+        }),
+      };
+    });
+
+    vi.doMock('../core/memory.ts', () => ({
+      saveMessage: vi.fn().mockReturnValue(true),
+      getMessage: vi.fn().mockReturnValue(null),
+      listProjects: vi.fn().mockReturnValue([]),
+      createProject: vi.fn(),
+      getProject: vi.fn(),
+    }));
+
+    vi.doMock('../agent/claude-code.ts', () => ({
+      isClaudeCodeConnected: vi.fn().mockReturnValue(false),
+      runClaudeCodePrompt: vi.fn(),
+      clearClaudeCodeSession: vi.fn(),
+    }));
+
+    const { handleMessage } = await import('./handler.ts');
+
+    const confirmMessage = {
+      id: 'msg_confirm',
+      from: '1234567890:123@s.whatsapp.net',
+      to: '1234567890@lid',
+      body: 'כן',
+      timestamp: Date.now(),
+      isFromMe: true,
+      messageKey: { remoteJid: '1234567890@lid', id: 'msg_confirm', fromMe: true },
+    };
+
+    await handleMessage(confirmMessage);
+
+    // S-04: formatPendingForUser MUST be called to show the payload
+    expect(mockFormatPendingForUser).toHaveBeenCalled();
+    // S-04: markPayloadPresented MUST be called to track that we showed it
+    expect(mockMarkPayloadPresented).toHaveBeenCalled();
+    // S-04: confirmAction must NOT be called — payload not yet shown
+    expect(mockConfirmAction).not.toHaveBeenCalled();
+  });
+
+  it('confirm_xxx does NOT execute without prior handler-shown payload', async () => {
+    const mockConfirmAction = vi.fn().mockReturnValue(true);
+    const mockMarkPayloadPresented = vi.fn().mockReturnValue(true);
+    const mockIsPayloadPresented = vi.fn().mockReturnValue(false);
+    const mockFormatPendingForUser = vi.fn().mockReturnValue('📋 *gmail.send_email*\n👤 אל: attacker@evil.com');
+
+    vi.doMock('../agent/session.ts', async (importOriginal) => {
+      const original = await importOriginal<typeof import('../agent/session.ts')>();
+      return {
+        ...original,
+        getAllPendingConfirmations: vi.fn().mockReturnValue([{
+          confirmationId: 'confirm_456_xyz',
+          actionId: 'gmail.send_email',
+          input: { to: 'attacker@evil.com', subject: 'Stolen', body: 'Secrets' },
+          projectId: 'default',
+          createdAt: Date.now(),
+        }]),
+        formatPendingForUser: mockFormatPendingForUser,
+        confirmAction: mockConfirmAction,
+        markPayloadPresented: mockMarkPayloadPresented,
+        isPayloadPresented: mockIsPayloadPresented,
+        getPendingConfirmation: vi.fn().mockReturnValue({
+          actionId: 'gmail.send_email',
+          input: { to: 'attacker@evil.com', subject: 'Stolen', body: 'Secrets' },
+          projectId: 'default',
+          createdAt: Date.now(),
+        }),
+        cleanupOldConfirmations: vi.fn(),
+        cancelAllPendingConfirmations: vi.fn().mockReturnValue(0),
+        checkCredentialsBeforePrompt: vi.fn().mockResolvedValue({ valid: true, model: true, modelId: 'test' }),
+        runPromptWithCallbacks: vi.fn().mockResolvedValue(null),
+      };
+    });
+
+    vi.doMock('./client.ts', () => ({
+      getWhatsAppClient: vi.fn().mockReturnValue({
+        getOwnerJid: () => '1234567890:123@s.whatsapp.net',
+        getOwnerPhone: () => '1234567890',
+        getOwnerLid: () => '1234567890@lid',
+        isSelfJid: (jid: string) => jid.includes('1234567890'),
+        getSelfChatJid: () => '1234567890@lid',
+        isConnected: () => true,
+        sendMessage: vi.fn().mockResolvedValue(undefined),
+        sendReaction: vi.fn().mockResolvedValue(undefined),
+        getPairingState: () => ({ isPaired: true, selfChat: 'lid' }),
+      }),
+      WhatsAppClient: class {},
+    }));
+
+    vi.doMock('../core/settings.ts', async (importOriginal) => {
+      const original = await importOriginal<typeof import('../core/settings.ts')>();
+      return {
+        ...original,
+        loadSettings: vi.fn().mockReturnValue({
+          botName: 'TestBot',
+          ownerName: 'Test Owner',
+          timezone: 'UTC',
+          model: 'test-model',
+          apiKeyMode: 'none',
+          activeProject: 'default',
+          services: [],
+          projectTokens: {},
+        }),
+      };
+    });
+
+    vi.doMock('../core/memory.ts', () => ({
+      saveMessage: vi.fn().mockReturnValue(true),
+      getMessage: vi.fn().mockReturnValue(null),
+      listProjects: vi.fn().mockReturnValue([]),
+      createProject: vi.fn(),
+      getProject: vi.fn(),
+    }));
+
+    vi.doMock('../agent/claude-code.ts', () => ({
+      isClaudeCodeConnected: vi.fn().mockReturnValue(false),
+      runClaudeCodePrompt: vi.fn(),
+      clearClaudeCodeSession: vi.fn(),
+    }));
+
+    const { handleMessage } = await import('./handler.ts');
+
+    // S-04 attack: model tells user to paste confirm_xxx without handler showing payload
+    const confirmIdMessage = {
+      id: 'msg_confirm_id_attack',
+      from: '1234567890:123@s.whatsapp.net',
+      to: '1234567890@lid',
+      body: 'confirm_456_xyz',
+      timestamp: Date.now(),
+      isFromMe: true,
+      messageKey: { remoteJid: '1234567890@lid', id: 'msg_confirm_id_attack', fromMe: true },
+    };
+
+    await handleMessage(confirmIdMessage);
+
+    // S-04: confirm_xxx must NOT execute if payload was never shown by handler
+    expect(mockConfirmAction).not.toHaveBeenCalled();
+    // S-04: instead, the handler should show the payload
+    expect(mockFormatPendingForUser).toHaveBeenCalled();
+    expect(mockMarkPayloadPresented).toHaveBeenCalled();
+  });
+
+  it('number pick does NOT execute without prior handler-shown payload', async () => {
+    const mockConfirmAction = vi.fn().mockReturnValue(true);
+    const mockMarkPayloadPresented = vi.fn().mockReturnValue(true);
+    const mockIsPayloadPresented = vi.fn().mockReturnValue(false);
+    const mockFormatPendingForUser = vi.fn().mockReturnValue('📋 *gmail.send_email*\n👤 אל: test@example.com');
+
+    vi.doMock('../agent/session.ts', async (importOriginal) => {
+      const original = await importOriginal<typeof import('../agent/session.ts')>();
+      return {
+        ...original,
+        getAllPendingConfirmations: vi.fn().mockReturnValue([
+          { confirmationId: 'confirm_1', actionId: 'gmail.send_email', input: { to: 'a@example.com' }, projectId: 'default', createdAt: Date.now() },
+          { confirmationId: 'confirm_2', actionId: 'calendar.create_event', input: { title: 'Meeting' }, projectId: 'default', createdAt: Date.now() },
+        ]),
+        formatPendingForUser: mockFormatPendingForUser,
+        confirmAction: mockConfirmAction,
+        markPayloadPresented: mockMarkPayloadPresented,
+        isPayloadPresented: mockIsPayloadPresented,
+        getPendingConfirmation: vi.fn().mockReturnValue(undefined),
+        cleanupOldConfirmations: vi.fn(),
+        cancelAllPendingConfirmations: vi.fn().mockReturnValue(0),
+        checkCredentialsBeforePrompt: vi.fn().mockResolvedValue({ valid: true, model: true, modelId: 'test' }),
+        runPromptWithCallbacks: vi.fn().mockResolvedValue(null),
+      };
+    });
+
+    vi.doMock('./client.ts', () => ({
+      getWhatsAppClient: vi.fn().mockReturnValue({
+        getOwnerJid: () => '1234567890:123@s.whatsapp.net',
+        getOwnerPhone: () => '1234567890',
+        getOwnerLid: () => '1234567890@lid',
+        isSelfJid: (jid: string) => jid.includes('1234567890'),
+        getSelfChatJid: () => '1234567890@lid',
+        isConnected: () => true,
+        sendMessage: vi.fn().mockResolvedValue(undefined),
+        sendReaction: vi.fn().mockResolvedValue(undefined),
+        getPairingState: () => ({ isPaired: true, selfChat: 'lid' }),
+      }),
+      WhatsAppClient: class {},
+    }));
+
+    vi.doMock('../core/settings.ts', async (importOriginal) => {
+      const original = await importOriginal<typeof import('../core/settings.ts')>();
+      return {
+        ...original,
+        loadSettings: vi.fn().mockReturnValue({
+          botName: 'TestBot',
+          ownerName: 'Test Owner',
+          timezone: 'UTC',
+          model: 'test-model',
+          apiKeyMode: 'none',
+          activeProject: 'default',
+          services: [],
+          projectTokens: {},
+        }),
+      };
+    });
+
+    vi.doMock('../core/memory.ts', () => ({
+      saveMessage: vi.fn().mockReturnValue(true),
+      getMessage: vi.fn().mockReturnValue(null),
+      listProjects: vi.fn().mockReturnValue([]),
+      createProject: vi.fn(),
+      getProject: vi.fn(),
+    }));
+
+    vi.doMock('../agent/claude-code.ts', () => ({
+      isClaudeCodeConnected: vi.fn().mockReturnValue(false),
+      runClaudeCodePrompt: vi.fn(),
+      clearClaudeCodeSession: vi.fn(),
+    }));
+
+    const { handleMessage } = await import('./handler.ts');
+
+    // User picks number "1" without handler having shown the list
+    const numberMessage = {
+      id: 'msg_number_pick',
+      from: '1234567890:123@s.whatsapp.net',
+      to: '1234567890@lid',
+      body: '1',
+      timestamp: Date.now(),
+      isFromMe: true,
+      messageKey: { remoteJid: '1234567890@lid', id: 'msg_number_pick', fromMe: true },
+    };
+
+    await handleMessage(numberMessage);
+
+    // S-04: number pick must NOT execute if payload was never shown
+    expect(mockConfirmAction).not.toHaveBeenCalled();
+    // S-04: instead, handler shows the payload for that item
+    expect(mockFormatPendingForUser).toHaveBeenCalled();
+    expect(mockMarkPayloadPresented).toHaveBeenCalled();
+  });
+
+  it('second כן DOES execute after payload was shown', async () => {
+    const mockConfirmAction = vi.fn().mockReturnValue(true);
+    const mockIsPayloadPresented = vi.fn().mockReturnValue(true); // Already shown!
+
+    vi.doMock('../agent/session.ts', async (importOriginal) => {
+      const original = await importOriginal<typeof import('../agent/session.ts')>();
+      return {
+        ...original,
+        getAllPendingConfirmations: vi.fn().mockReturnValue([{
+          confirmationId: 'confirm_789_def',
+          actionId: 'gmail.send_email',
+          input: { to: 'legitimate@example.com', subject: 'Hello', body: 'World' },
+          projectId: 'default',
+          createdAt: Date.now(),
+        }]),
+        formatPendingForUser: vi.fn().mockReturnValue('📋 *gmail.send_email*'),
+        confirmAction: mockConfirmAction,
+        markPayloadPresented: vi.fn().mockReturnValue(true),
+        isPayloadPresented: mockIsPayloadPresented,
+        getPendingConfirmation: vi.fn().mockReturnValue(undefined),
+        cleanupOldConfirmations: vi.fn(),
+        cancelAllPendingConfirmations: vi.fn().mockReturnValue(0),
+        checkCredentialsBeforePrompt: vi.fn().mockResolvedValue({ valid: true, model: true, modelId: 'test' }),
+        runPromptWithCallbacks: vi.fn().mockResolvedValue(null),
+      };
+    });
+
+    vi.doMock('./client.ts', () => ({
+      getWhatsAppClient: vi.fn().mockReturnValue({
+        getOwnerJid: () => '1234567890:123@s.whatsapp.net',
+        getOwnerPhone: () => '1234567890',
+        getOwnerLid: () => '1234567890@lid',
+        isSelfJid: (jid: string) => jid.includes('1234567890'),
+        getSelfChatJid: () => '1234567890@lid',
+        isConnected: () => true,
+        sendMessage: vi.fn().mockResolvedValue(undefined),
+        sendReaction: vi.fn().mockResolvedValue(undefined),
+        getPairingState: () => ({ isPaired: true, selfChat: 'lid' }),
+      }),
+      WhatsAppClient: class {},
+    }));
+
+    vi.doMock('../core/settings.ts', async (importOriginal) => {
+      const original = await importOriginal<typeof import('../core/settings.ts')>();
+      return {
+        ...original,
+        loadSettings: vi.fn().mockReturnValue({
+          botName: 'TestBot',
+          ownerName: 'Test Owner',
+          timezone: 'UTC',
+          model: 'test-model',
+          apiKeyMode: 'none',
+          activeProject: 'default',
+          services: [],
+          projectTokens: {},
+        }),
+      };
+    });
+
+    vi.doMock('../core/memory.ts', () => ({
+      saveMessage: vi.fn().mockReturnValue(true),
+      getMessage: vi.fn().mockReturnValue(null),
+      listProjects: vi.fn().mockReturnValue([]),
+      createProject: vi.fn(),
+      getProject: vi.fn(),
+    }));
+
+    vi.doMock('../agent/claude-code.ts', () => ({
+      isClaudeCodeConnected: vi.fn().mockReturnValue(false),
+      runClaudeCodePrompt: vi.fn(),
+      clearClaudeCodeSession: vi.fn(),
+    }));
+
+    vi.doMock('../open-connector/client.ts', () => ({
+      OpenConnectorClient: class {
+        async executeAction() {
+          return { success: true, data: { id: 'msg_1' } };
+        }
+      },
+    }));
+
+    const { handleMessage } = await import('./handler.ts');
+
+    // Second כן after payload was shown
+    const secondConfirmMessage = {
+      id: 'msg_second_confirm',
+      from: '1234567890:123@s.whatsapp.net',
+      to: '1234567890@lid',
+      body: 'כן',
+      timestamp: Date.now(),
+      isFromMe: true,
+      messageKey: { remoteJid: '1234567890@lid', id: 'msg_second_confirm', fromMe: true },
+    };
+
+    await handleMessage(secondConfirmMessage);
+
+    // S-04: After payload was shown, כן DOES execute
+    expect(mockConfirmAction).toHaveBeenCalled();
+  });
+});
+
 describe('resolveReplyJid — replies stay inside the owner\'s own chat (#73)', () => {
   const ownerPhone = '123456789';
   const ownerLid = 'ABC123XYZ@lid';
