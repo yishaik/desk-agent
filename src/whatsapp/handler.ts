@@ -289,13 +289,17 @@ export async function handleMessage(message: Message): Promise<void> {
     return;
   }
 
-  // Reply ONLY to LID self-chat. Prefer inbound @lid if self-chat, else getSelfChatJid().
+  // Reply to inbound remoteJid when it is self-chat (LID or phone).
+  // Only if inbound is not a self-chat JID, fall back to getSelfChatJid().
+  // Never reply in other people's chats — isSelfChat() already gated this.
   const inboundJid = message.messageKey?.remoteJid;
-  const isInboundLidSelfChat = inboundJid?.endsWith('@lid') && wa.isSelfJid(inboundJid);
-  const chatJid = isInboundLidSelfChat ? inboundJid : wa.getSelfChatJid();
+  const isInboundSelfChat = Boolean(
+    inboundJid && isSelfChatJid(inboundJid, wa.getOwnerPhone(), wa.getOwnerLid())
+  );
+  const chatJid = isInboundSelfChat ? inboundJid : wa.getSelfChatJid();
 
-  if (!chatJid || !chatJid.endsWith('@lid')) {
-    log.warn({ inboundJid, chatJid }, 'No LID self-chat available, skipping message');
+  if (!chatJid) {
+    log.warn({ inboundJid }, 'No self-chat JID available (no lid and no ownerJid), skipping message');
     return;
   }
 
@@ -536,6 +540,7 @@ _שלח הודעה לעצמך כדי לדבר עם הסוכן_`,
         response: `*סטטוס מערכת*
 
 📱 WhatsApp: ${wa.isConnected() ? '✅ מחובר' : '❌ מנותק'}
+🆔 LID: ${wa.getOwnerLid() ? 'קיים' : 'חסר'}
 🤖 ספקי AI: ${hasAnyProvider ? '✅ ' + providerList : '❌ לא מחובר'}
 🧠 מודל: ${modelStatus}
 🔌 Open Connector: ${connectorHealth ? '✅ תקין' : '❌ לא זמין'}
