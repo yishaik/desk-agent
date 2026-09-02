@@ -13,6 +13,7 @@ const mockGetOwnerLid = vi.fn();
 const mockIsConnected = vi.fn();
 
 const mockGetSelfChatJid = vi.fn();
+const mockRunPromptWithCallbacks = vi.fn(async () => null);
 
 vi.mock('./client.ts', () => ({
   getWhatsAppClient: () => ({
@@ -34,7 +35,7 @@ vi.mock('./client.ts', () => ({
 }));
 
 vi.mock('../agent/session.ts', () => ({
-  runPromptWithCallbacks: vi.fn(async () => null),
+  runPromptWithCallbacks: mockRunPromptWithCallbacks,
   clearSession: vi.fn(),
   getOrCreateSession: vi.fn(async () => ({})),
   setSessionModel: vi.fn(async () => true),
@@ -46,6 +47,9 @@ vi.mock('../agent/session.ts', () => ({
   checkCredentialsBeforePrompt: vi.fn(async () => ({ valid: true, model: true, modelId: 'test' })),
   recreateSessionAfterCredentialChange: vi.fn(async () => {}),
   CredentialError: class extends Error {},
+  getAllPendingConfirmations: vi.fn(() => []),
+  cancelAllPendingConfirmations: vi.fn(() => 0),
+  formatPendingForUser: vi.fn(() => ''),
 }));
 
 vi.mock('../agent/claude-code.ts', () => ({
@@ -358,6 +362,40 @@ describe('Executed-action notes reach the model (#26)', () => {
   });
 });
 
+describe('queued /project then prompt uses the new project (#77)', () => {
+  it('runPromptWithCallbacks is called with project b after /project b', async () => {
+    const { handleMessage } = await import('./handler.ts');
+    mockRunPromptWithCallbacks.mockClear();
+
+    const projectMsg = makeMessage({
+      id: 'msg_project_b',
+      body: '/project b',
+      isFromMe: true,
+      to: 'ABC123XYZ@lid',
+      messageKey: { remoteJid: 'ABC123XYZ@lid', id: 'msg_project_b', fromMe: true },
+    });
+    const promptMsg = makeMessage({
+      id: 'msg_after_project',
+      body: 'check mail',
+      isFromMe: true,
+      to: 'ABC123XYZ@lid',
+      messageKey: { remoteJid: 'ABC123XYZ@lid', id: 'msg_after_project', fromMe: true },
+    });
+
+    await Promise.all([
+      handleMessage(projectMsg),
+      handleMessage(promptMsg),
+    ]);
+
+    expect(mockRunPromptWithCallbacks).toHaveBeenCalled();
+    const projectIds = mockRunPromptWithCallbacks.mock.calls.map((c: unknown[]) => c[0]);
+    expect(projectIds).toContain('b');
+  });
+});
+
+// NOTE: the "Per-Project Processing Lock" suite below vi.doMock()s client/session/
+// settings/memory/claude-code/auth for itself and never restores them; vitest keeps
+// the last registered factory, so suites that need the shared mocks must come first.
 describe('Per-Project Processing Lock - Issue #33', () => {
   it('concurrent handleMessage calls serialize session.prompt on same project', async () => {
     const promptCalls: { start: number; end: number; message: string }[] = [];
@@ -627,33 +665,3 @@ describe('resolveReplyJid — replies stay inside the owner\'s own chat (#73)', 
   });
 });
 
-describe('queued /project then prompt uses the new project (#77)', () => {
-  it('runPromptWithCallbacks is called with project b after /project b', async () => {
-    const session = await import('../agent/session.ts');
-    const { handleMessage } = await import('./handler.ts');
-
-    const projectMsg = makeMessage({
-      id: 'msg_project_b',
-      body: '/project b',
-      isFromMe: true,
-      to: 'ABC123XYZ@lid',
-      messageKey: { remoteJid: 'ABC123XYZ@lid', id: 'msg_project_b', fromMe: true },
-    });
-    const promptMsg = makeMessage({
-      id: 'msg_after_project',
-      body: 'check mail',
-      isFromMe: true,
-      to: 'ABC123XYZ@lid',
-      messageKey: { remoteJid: 'ABC123XYZ@lid', id: 'msg_after_project', fromMe: true },
-    });
-
-    await Promise.all([
-      handleMessage(projectMsg),
-      handleMessage(promptMsg),
-    ]);
-
-    expect(session.runPromptWithCallbacks).toHaveBeenCalled();
-    const projectIds = vi.mocked(session.runPromptWithCallbacks).mock.calls.map((c) => c[0]);
-    expect(projectIds).toContain('b');
-  });
-});

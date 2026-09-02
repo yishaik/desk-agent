@@ -10,8 +10,13 @@ const log = createChildLogger('settings');
 const SETTINGS_FILE_MODE = 0o600;
 
 export class SettingsParseError extends Error {
-  constructor(message: string, public readonly corruptPath?: string) {
+  // Note: no TS parameter properties here — Node's strip-only mode (npm start)
+  // cannot run them, and vitest (esbuild) would not notice. See boot.test.ts.
+  readonly corruptPath?: string;
+
+  constructor(message: string, corruptPath?: string) {
     super(message);
+    this.corruptPath = corruptPath;
     this.name = 'SettingsParseError';
   }
 }
