@@ -268,3 +268,16 @@ describe('extractTextFromMessages - Issue #34', () => {
     expect(result).toBe('Answer');
   });
 });
+
+describe('recreateSessionAfterCredentialChange waits for the queue (#78)', () => {
+  it('does not reset sessions while a turn is running', async () => {
+    const { enqueue } = await import('../whatsapp/queue.ts');
+    const { recreateSessionAfterCredentialChange } = await import('./session.ts');
+    const order: string[] = [];
+    const turn = enqueue(async () => { await new Promise((r) => setTimeout(r, 40)); order.push('turn done'); });
+    await recreateSessionAfterCredentialChange('default');
+    order.push('settings applied');
+    await turn;
+    expect(order).toEqual(['turn done', 'settings applied']);
+  });
+});
