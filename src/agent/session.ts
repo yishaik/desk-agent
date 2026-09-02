@@ -407,7 +407,7 @@ async function createSession(projectId: string): Promise<ProjectSession> {
 
   const agentsmdPath = `${projectCwd}/AGENTS.md`;
   if (!existsSync(agentsmdPath)) {
-    writeIdentityFiles(settings);
+    writeIdentityFiles(settings, projectId);
   }
 
   const modelRuntime = await getOrCreateModelRuntime();
@@ -524,7 +524,7 @@ export function clearAllSessions(): void {
 export async function recreateSessionAfterCredentialChange(projectId: string): Promise<void> {
   const { clearClaudeCodeSession } = await import('./claude-code.ts');
   
-  writeIdentityFiles(loadSettings());
+  writeIdentityFiles(loadSettings(), projectId);
   
   clearAllSessions();
   clearClaudeCodeSession(projectId);

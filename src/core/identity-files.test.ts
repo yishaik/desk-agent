@@ -221,6 +221,31 @@ describe('writeIdentityFiles', () => {
     expect(agentsContent).toContain('Test Bot');
   });
 
+  it('writes to specified projectId even if different from activeProject', async () => {
+    const { writeIdentityFiles } = await import('./identity-files.ts');
+    const { DEFAULT_SETTINGS } = await import('./types.ts');
+    
+    const settings = {
+      ...DEFAULT_SETTINGS,
+      botName: 'Test Bot',
+      ownerName: 'Jane Doe',
+      activeProject: 'active-project',
+    };
+    
+    writeIdentityFiles(settings, 'different-project');
+    
+    const differentProjectDir = join(TEST_DATA_DIR, 'projects', 'different-project');
+    const activeProjectDir = join(TEST_DATA_DIR, 'projects', 'active-project');
+    
+    expect(existsSync(join(differentProjectDir, 'AGENTS.md'))).toBe(true);
+    expect(existsSync(join(activeProjectDir, 'AGENTS.md'))).toBe(false);
+    
+    const agentsContent = readFileSync(join(differentProjectDir, 'AGENTS.md'), 'utf-8');
+    expect(agentsContent).toContain('# different-project');
+    expect(agentsContent).toContain('Test Bot');
+    expect(agentsContent).toContain('Jane Doe');
+  });
+
   it('creates project directory if it does not exist', async () => {
     const { writeIdentityFiles } = await import('./identity-files.ts');
     const { DEFAULT_SETTINGS } = await import('./types.ts');
