@@ -1,6 +1,7 @@
 import { createChildLogger } from '../core/logger.ts';
 import { loadSettings, updateSettings, getActiveConnectorToken } from '../core/settings.ts';
 import { saveMessage, listProjects, createProject, getProject } from '../core/memory.ts';
+import { slugifyProjectName, ProjectIdValidationError } from '../core/projects.ts';
 import { config } from '../core/config.ts';
 import { recordExecutedAction, consumeExecutedActionNotes } from '../core/confirmations.ts';
 import type { Message, MessageKey, Settings } from '../core/types.ts';
@@ -476,7 +477,19 @@ _שלח הודעה לעצמך כדי לדבר עם הסוכן_`,
       }
       
       const projectName = args.join(' ');
-      const projectId = projectName.toLowerCase().replace(/\s+/g, '-');
+      
+      let projectId: string;
+      try {
+        projectId = slugifyProjectName(projectName);
+      } catch (err) {
+        if (err instanceof ProjectIdValidationError) {
+          return {
+            handled: true,
+            response: `❌ שם פרויקט לא תקין: ${err.message}`,
+          };
+        }
+        throw err;
+      }
       
       let project = getProject(projectId);
       if (!project) {

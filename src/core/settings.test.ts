@@ -33,6 +33,33 @@ describe('Settings', () => {
     expect(existsSync(join(TEST_DATA_DIR, 'settings.json'))).toBe(true);
   });
 
+  it('SECURITY: settings file has mode 0600', async () => {
+    const fs = await import('node:fs');
+    const { loadSettings } = await import('./settings.ts');
+    
+    loadSettings();
+    
+    const stats = fs.statSync(join(TEST_DATA_DIR, 'settings.json'));
+    const mode = stats.mode & 0o777;
+    expect(mode).toBe(0o600);
+  });
+
+  it('SECURITY: atomic write - temp file is renamed', async () => {
+    const fs = await import('node:fs');
+    const { loadSettings, updateSettings } = await import('./settings.ts');
+    
+    loadSettings();
+    
+    expect(existsSync(join(TEST_DATA_DIR, 'settings.json.tmp'))).toBe(false);
+    
+    updateSettings({ botName: 'Atomic Test' });
+    
+    expect(existsSync(join(TEST_DATA_DIR, 'settings.json.tmp'))).toBe(false);
+    
+    const settings = loadSettings();
+    expect(settings.botName).toBe('Atomic Test');
+  });
+
   it('persists and reloads settings', async () => {
     const { loadSettings, updateSettings } = await import('./settings.ts');
     
@@ -181,6 +208,55 @@ describe('isActionEnabled', () => {
     
     expect(isActionEnabled('gmail', 'gmail.send_email')).toBe(false);
     expect(isActionEnabled('gmail', 'gmail.fetch_emails')).toBe(true);
+  });
+});
+
+describe('Settings Parse Error Handling', () => {
+  it('SECURITY: corrupt file is backed up and throws error', async () => {
+    const fs = await import('node:fs');
+    vi.resetModules();
+    
+    fs.mkdirSync(TEST_DATA_DIR, { recursive: true });
+    fs.writeFileSync(join(TEST_DATA_DIR, 'settings.json'), 'this is not valid json {{{', { mode: 0o600 });
+    
+    const { loadSettings, SettingsParseError } = await import('./settings.ts');
+    
+    expect(() => loadSettings()).toThrow(SettingsParseError);
+    
+    const files = fs.readdirSync(TEST_DATA_DIR);
+    const corruptBackup = files.find(f => f.startsWith('settings.json.corrupt-'));
+    expect(corruptBackup).toBeDefined();
+  });
+
+  it('SECURITY: returns last successful load on parse error', async () => {
+    const fs = await import('node:fs');
+    vi.resetModules();
+    
+    const { loadSettings, updateSettings } = await import('./settings.ts');
+    
+    updateSettings({ botName: 'Good Settings' });
+    const goodSettings = loadSettings();
+    expect(goodSettings.botName).toBe('Good Settings');
+    
+    fs.writeFileSync(join(TEST_DATA_DIR, 'settings.json'), 'corrupt data!!!', { mode: 0o600 });
+    
+    const recoveredSettings = loadSettings();
+    expect(recoveredSettings.botName).toBe('Good Settings');
+  });
+
+  it('merges with defaults for missing fields', async () => {
+    const fs = await import('node:fs');
+    vi.resetModules();
+    
+    fs.mkdirSync(TEST_DATA_DIR, { recursive: true });
+    fs.writeFileSync(join(TEST_DATA_DIR, 'settings.json'), '{"botName": "Partial"}', { mode: 0o600 });
+    
+    const { loadSettings } = await import('./settings.ts');
+    const settings = loadSettings();
+    
+    expect(settings.botName).toBe('Partial');
+    expect(settings.apiKeyMode).toBe('shared');
+    expect(settings.services).toEqual([]);
   });
 });
 

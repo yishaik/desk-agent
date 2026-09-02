@@ -28,6 +28,7 @@ import {
 } from '../core/settings.ts';
 import { requiresConfirmation } from '../core/confirmations.ts';
 import { listProjects, createProject, getProject } from '../core/memory.ts';
+import { slugifyProjectName, validateProjectId, ProjectIdValidationError } from '../core/projects.ts';
 import { getWhatsAppClient } from '../whatsapp/client.ts';
 import { createClient, isRealConnection } from '../open-connector/client.ts';
 import { 
@@ -43,6 +44,7 @@ import { writeIdentityFiles } from '../core/identity-files.ts';
 import { recreateSessionAfterCredentialChange } from '../agent/session.ts';
 import { getSettingsHtml, type SettingsPageData } from './settings-page.ts';
 import { getThemeCss } from './theme.ts';
+import { escapeHtml } from './html.ts';
 
 const log = createChildLogger('http');
 
@@ -572,7 +574,23 @@ addRoute('POST', '/api/projects', async (req, res) => {
     return;
   }
 
-  const id = body.name.toLowerCase().replace(/\s+/g, '-');
+  let id: string;
+  try {
+    id = slugifyProjectName(body.name);
+  } catch (err) {
+    if (err instanceof ProjectIdValidationError) {
+      sendError(res, err.message);
+      return;
+    }
+    throw err;
+  }
+
+  const existing = getProject(id);
+  if (existing) {
+    sendJson(res, { success: false, error: 'Project with this ID already exists' }, 409);
+    return;
+  }
+
   const project = createProject({ id, name: body.name, description: body.description });
   sendJson(res, { success: true, data: project });
 });
@@ -601,7 +619,19 @@ addRoute('PUT', '/api/projects/:id/activate', async (req, res) => {
     return;
   }
 
-  const projectId = req.url?.split('/')[3] ?? '';
+  const rawProjectId = req.url?.split('/')[3] ?? '';
+  
+  let projectId: string;
+  try {
+    projectId = validateProjectId(decodeURIComponent(rawProjectId));
+  } catch (err) {
+    if (err instanceof ProjectIdValidationError) {
+      sendError(res, err.message);
+      return;
+    }
+    throw err;
+  }
+  
   const project = getProject(projectId);
   
   if (!project) {
@@ -1953,11 +1983,11 @@ export function getWizardHtml(settings: ReturnType<typeof loadSettings>, pairing
       <form id="identityForm">
         <div class="form-group">
           <label for="ownerName">שם הבעלים *</label>
-          <input type="text" id="ownerName" name="ownerName" value="${settings.ownerName || ''}" placeholder="השם שלך" required>
+          <input type="text" id="ownerName" name="ownerName" value="${escapeHtml(settings.ownerName)}" placeholder="השם שלך" required>
         </div>
         <div class="form-group">
           <label for="businessName">שם העסק</label>
-          <input type="text" id="businessName" name="businessName" value="${settings.businessName || ''}" placeholder="שם החברה או העסק">
+          <input type="text" id="businessName" name="businessName" value="${escapeHtml(settings.businessName)}" placeholder="שם החברה או העסק">
         </div>
         <div class="form-group">
           <label for="timezone">אזור זמן</label>
@@ -1970,7 +2000,7 @@ export function getWizardHtml(settings: ReturnType<typeof loadSettings>, pairing
         </div>
         <div class="form-group">
           <label for="businessDescription">תיאור העסק</label>
-          <textarea id="businessDescription" name="businessDescription" placeholder="תאר את העסק שלך בקצרה...">${settings.businessDescription || ''}</textarea>
+          <textarea id="businessDescription" name="businessDescription" placeholder="תאר את העסק שלך בקצרה...">${escapeHtml(settings.businessDescription)}</textarea>
         </div>
         <div class="btn-group">
           <button type="submit">סיום הגדרה</button>
@@ -2021,12 +2051,17 @@ export function getWizardHtml(settings: ReturnType<typeof loadSettings>, pairing
 }
 
 export function getDashboardHtml(settings: ReturnType<typeof loadSettings>, pairingState: { isPaired: boolean; phoneNumber?: string; name?: string }): string {
+  const safeBotName = escapeHtml(settings.botName);
+  const safeName = escapeHtml(pairingState.name);
+  const safePhone = escapeHtml(pairingState.phoneNumber);
+  const safeActiveProject = escapeHtml(settings.activeProject);
+  
   return `<!DOCTYPE html>
 <html lang="he" dir="rtl">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>${settings.botName} - לוח בקרה</title>
+  <title>${safeBotName} - לוח בקרה</title>
   <style>
     ${getThemeCss()}
     
@@ -2109,12 +2144,12 @@ export function getDashboardHtml(settings: ReturnType<typeof loadSettings>, pair
 </head>
 <body>
   <nav class="navbar">
-    <h1>🤖 ${settings.botName}</h1>
+    <h1>🤖 ${safeBotName}</h1>
     <div class="nav-links">
       <a href="/settings" class="nav-link">⚙️ הגדרות</a>
       <div class="nav-status">
         <span class="status-dot ${pairingState.isPaired ? '' : 'offline'}"></span>
-        <span>${pairingState.isPaired ? `${pairingState.name || pairingState.phoneNumber}` : 'מנותק'}</span>
+        <span>${pairingState.isPaired ? `${safeName || safePhone}` : 'מנותק'}</span>
       </div>
     </div>
   </nav>
@@ -2125,11 +2160,11 @@ export function getDashboardHtml(settings: ReturnType<typeof loadSettings>, pair
         <h2>📱 WhatsApp</h2>
         <div class="stat">${pairingState.isPaired ? '✅' : '❌'}</div>
         <div class="stat-label">${pairingState.isPaired ? 'מחובר' : 'מנותק'}</div>
-        ${pairingState.phoneNumber ? `<p style="margin-top: 12px; color: var(--text-muted);">${pairingState.phoneNumber}</p>` : ''}
+        ${safePhone ? `<p style="margin-top: 12px; color: var(--text-muted);">${safePhone}</p>` : ''}
       </div>
       <div class="card">
         <h2>📁 פרויקט פעיל</h2>
-        <div class="stat" style="font-size: 24px;">${settings.activeProject}</div>
+        <div class="stat" style="font-size: 24px;">${safeActiveProject}</div>
         <div class="stat-label">מצב מפתחות: ${settings.apiKeyMode === 'shared' ? 'משותף' : 'לפי פרויקט'}</div>
       </div>
       <div class="card">
