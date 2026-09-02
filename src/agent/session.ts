@@ -456,7 +456,7 @@ async function createSession(projectId: string): Promise<ProjectSession> {
     sessionManager: SessionManager.inMemory(projectCwd),
     customTools,
     resourceLoader,
-    tools: ['read', 'oc_search_actions', 'oc_get_action_guide', 'oc_execute_action', 'oc_list_connections'],
+    tools: ['oc_search_actions', 'oc_get_action_guide', 'oc_execute_action', 'oc_list_connections'],
   });
 
   const projectSession: ProjectSession = {
