@@ -380,7 +380,7 @@ addRoute('GET', '/api/auth/login/:provider/status', async (req, res, params) => 
       }
       
       const { recreateSessionAfterCredentialChange } = await import('../agent/session.ts');
-      await recreateSessionAfterCredentialChange(settings.activeProject);
+      await recreateSessionAfterCredentialChange(settings.activeProject, { credentialsChanged: true });
     }
     
     sendJson(res, { success: true, data: status });
@@ -418,7 +418,7 @@ addRoute('POST', '/api/auth/complete', async (req, res) => {
       }
       
       const { recreateSessionAfterCredentialChange } = await import('../agent/session.ts');
-      await recreateSessionAfterCredentialChange(settings.activeProject);
+      await recreateSessionAfterCredentialChange(settings.activeProject, { credentialsChanged: true });
       
       sendJson(res, { success: true });
     } else {

@@ -41,6 +41,7 @@ import {
   type ReactionTracker,
 } from './reaction-state.ts';
 import { isSelfChatJid, resolveReplyJid } from './self-chat.ts';
+import { enqueue } from './queue.ts';
 
 const log = createChildLogger('handler');
 
@@ -50,7 +51,6 @@ const COMMAND_PREFIX = '/';
  * Serial queue for non-bypass work. One chain so /project finishes before the
  * next prompt (#77) and so two prompts cannot share a Pi session (#33).
  */
-let messageQueue: Promise<void> = Promise.resolve();
 
 /**
  * Track which projects are currently processing — used to send ⏳ to messages
@@ -339,9 +339,7 @@ export async function handleMessage(message: Message): Promise<void> {
     log.debug({ projectId, messageId: message.id }, 'Message queued behind active processing');
   }
 
-  const previousTask = messageQueue;
-  const currentTask = previousTask.then(() => processMessageQueued(message, wa, chatJid, tracker));
-  messageQueue = currentTask.catch(() => {});
+  const currentTask = enqueue(() => processMessageQueued(message, wa, chatJid, tracker));
 
   await currentTask;
 }

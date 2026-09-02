@@ -21,6 +21,7 @@ import {
 } from '../http/auth.ts';
 import { buildIdentityPrompt, writeIdentityFiles } from '../core/identity-files.ts';
 import { skillPackDirs } from '../core/skills.ts';
+import { waitForIdle } from '../whatsapp/queue.ts';
 
 const log = createChildLogger('pi-session');
 
@@ -514,16 +515,34 @@ export function clearAllSessions(): void {
   log.info('All Pi sessions and runtime cleared');
 }
 
-export async function recreateSessionAfterCredentialChange(projectId: string): Promise<void> {
-  const { clearClaudeCodeSession } = await import('./claude-code.ts');
-  
+/**
+ * Apply a settings/credential change to the live sessions (#78):
+ * - never while a turn is running: waits for the message queue to drain first;
+ * - identity/skills/model changes only drop this project's Pi session (it is
+ *   rebuilt lazily on the next message; Claude Code rebuilds its system prompt
+ *   on every run and keeps its --resume history);
+ * - credential changes reset the shared model runtime and every session.
+ */
+export async function recreateSessionAfterCredentialChange(
+  projectId: string,
+  options: { credentialsChanged?: boolean } = {}
+): Promise<void> {
+  const idle = await waitForIdle();
+  if (!idle) {
+    log.warn({ projectId }, 'Message queue still busy after 30s — applying settings change anyway');
+  }
+
   writeIdentityFiles(loadSettings(), projectId);
-  
-  clearAllSessions();
-  clearClaudeCodeSession(projectId);
-  
-  await getOrCreateSession(projectId);
-  log.info({ projectId }, 'Session recreated after credential/settings change');
+
+  if (options.credentialsChanged) {
+    const { clearClaudeCodeSession } = await import('./claude-code.ts');
+    clearAllSessions();
+    clearClaudeCodeSession(projectId);
+  } else {
+    clearSession(projectId);
+  }
+
+  log.info({ projectId, credentialsChanged: !!options.credentialsChanged }, 'Session reset after settings change');
 }
 
 export const refreshSessionAfterSettingsSave = recreateSessionAfterCredentialChange;
