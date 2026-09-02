@@ -310,7 +310,7 @@ Before going live:
 - [ ] Strong PAIR_TOKEN (32+ random bytes)
 - [ ] HTTPS enabled with valid certificate
 - [ ] Firewall blocks internal ports
-- [ ] Open Connector has ADMIN_TOKEN set
+- [ ] (Optional) CONNECTOR_ADMIN_TOKEN set if console access is needed
 - [ ] Encryption key is set and backed up securely
 - [ ] Action allow/block policies configured
 - [ ] WhatsApp session working (test message to yourself)

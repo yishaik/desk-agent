@@ -18,7 +18,7 @@ src/
 └── skills/         # Pi skills
     └── open-connector/  # OC skill documentation
 
-skills-pack/        # Reference skill configurations (manual setup required)
+skills-pack/        # Reference skill configurations (default: inbox-calendar; select in Settings)
 data/              # Runtime data (gitignored)
 ```
 
