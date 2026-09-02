@@ -328,7 +328,7 @@ describe('Pairing API leftovers (#132)', () => {
     const codeBlock = serverCode.slice(codeIdx, redactIdx);
     expect(codeBlock).toContain('isAuthenticated');
     expect(codeBlock).toContain('requestPairingCode');
-    expect(codeBlock).toContain("'/api/pairing/repair'");
+    expect(codeBlock).toContain('/api/pairing/repair');
     expect(codeBlock).toContain('403');
   });
 
