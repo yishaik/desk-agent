@@ -23,7 +23,9 @@ services:
       - OPEN_CONNECTOR_URL=http://connector:3000
       - OPEN_CONNECTOR_TOKEN=${OPEN_CONNECTOR_TOKEN}
       - CONNECTOR_ORIGIN=${CONNECTOR_ORIGIN}
-      - CONNECTOR_ADMIN_TOKEN=${CONNECTOR_ADMIN_TOKEN}
+      # S-07: Admin token is SERVER-SIDE ONLY for OAuth fallback if OC requires it.
+      # NEVER exposed to customer UI (onboarding, dashboard, settings) or child env (Claude/Pi/MCP).
+      - CONNECTOR_ADMIN_TOKEN=${CONNECTOR_ADMIN_TOKEN:-}
       - DOMAIN=${DOMAIN}
       # Public console URL shown in the wizard/settings (default: https://console.${DOMAIN})
       - CONSOLE_URL=${CONSOLE_URL:-}

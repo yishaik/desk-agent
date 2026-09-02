@@ -260,8 +260,10 @@ describe('Server HTML Source Code Requirements', () => {
       expect(serverCode).toContain('href="/settings"');
     });
 
-    it('dashboard uses טוקן not אסימון', () => {
-      expect(serverCode).toContain('שמרתי את הטוקן');
+    it('S-07: dashboard does NOT expose admin token UI (#111)', () => {
+      // Admin token display was removed - customer never sees it
+      expect(serverCode).not.toContain('dashboardAdminToken');
+      expect(serverCode).not.toContain('שמרתי את הטוקן');
     });
 
     it('dashboard does NOT have alert נשמר', () => {

@@ -953,25 +953,18 @@ addRoute('GET', '/api/connector/onboarding', async (req, res) => {
   }
 
   const consoleUrl = getConsoleUrl();
-  const hasAdminToken = !!config.connectorAdminToken;
-  const acknowledged = settings.connectorAdminTokenAcknowledged;
 
+  // S-07: Admin token is NEVER sent to the client.
+  // Customer never sees it - not in onboarding, dashboard, settings, or child env.
   const data: {
     healthy: boolean;
     consoleUrl: string;
     connectionCount: number;
-    adminToken?: string;
-    requiresAck: boolean;
   } = {
     healthy,
     consoleUrl,
     connectionCount,
-    requiresAck: hasAdminToken && !acknowledged,
   };
-
-  if (hasAdminToken && !acknowledged) {
-    data.adminToken = config.connectorAdminToken;
-  }
 
   sendJson(res, { success: true, data });
 });
@@ -2247,15 +2240,6 @@ export function getDashboardHtml(settings: ReturnType<typeof loadSettings>, pair
       <div class="card">
         <h2>🔌 Open Connector</h2>
         <div id="connectorStatus">בודק...</div>
-        <div id="connectorAdminToken" style="display: none; margin-top: 16px; background: rgba(99, 102, 241, 0.1); border: 1px solid rgba(99, 102, 241, 0.3); border-radius: 8px; padding: 12px;">
-          <h4 style="margin-bottom: 8px; color: #a5b4fc;">🔑 טוקן ניהול (חד-פעמי)</h4>
-          <p style="color: var(--text-muted); font-size: 12px; margin-bottom: 8px;">שמור את הטוקן הזה - לא יוצג שוב!</p>
-          <div style="background: var(--bg-primary); padding: 8px; border-radius: 4px; font-family: monospace; word-break: break-all; margin-bottom: 8px; font-size: 12px;">
-            <span id="dashboardAdminToken"></span>
-          </div>
-          <button onclick="copyDashboardToken()" class="secondary" style="padding: 6px 12px; font-size: 12px;">העתק</button>
-          <button onclick="ackDashboardToken()" style="padding: 6px 12px; font-size: 12px;">שמרתי את הטוקן</button>
-        </div>
       </div>
     </div>
 
@@ -2282,24 +2266,9 @@ export function getDashboardHtml(settings: ReturnType<typeof loadSettings>, pair
             פתח קונסול →
           </a>
         \`;
-        
-        if (data.adminToken) {
-          document.getElementById('connectorAdminToken').style.display = 'block';
-          document.getElementById('dashboardAdminToken').textContent = data.adminToken;
-        }
       } catch {
         document.getElementById('connectorStatus').innerHTML = '<div class="stat">❌</div><div class="stat-label">שגיאה</div>';
       }
-    }
-
-    function copyDashboardToken() {
-      const token = document.getElementById('dashboardAdminToken').textContent;
-      navigator.clipboard.writeText(token);
-    }
-
-    async function ackDashboardToken() {
-      await fetch('/api/connector/ack-admin-token', { method: 'POST' });
-      document.getElementById('connectorAdminToken').style.display = 'none';
     }
 
     loadConnectorStatus();
