@@ -209,6 +209,33 @@ describe('API Path Correctness', () => {
   });
 });
 
+describe('Health Check Path', () => {
+  it('checkHealth uses authenticated /v1/health (not bare fetch)', async () => {
+    vi.resetModules();
+    
+    const { OpenConnectorClient } = await import('./client.ts');
+    
+    const client = new OpenConnectorClient();
+    
+    const checkHealthSource = client.checkHealth.toString();
+    expect(checkHealthSource).toContain('this.request');
+    expect(checkHealthSource).toContain('/v1/health');
+    expect(checkHealthSource).not.toContain('fetch(');
+  });
+
+  it('handler /status uses OpenConnectorClient.checkHealth not standalone fetch', async () => {
+    vi.resetModules();
+    
+    const handlerSource = await import('node:fs').then(fs => 
+      fs.readFileSync('./src/whatsapp/handler.ts', 'utf-8')
+    );
+    
+    expect(handlerSource).not.toMatch(/fetch\([^)]*\/v1\/health/);
+    expect(handlerSource).not.toMatch(/checkConnectorHealth\(\)/);
+    expect(handlerSource).toContain('client.checkHealth()');
+  });
+});
+
 describe('isRealConnection helper', () => {
   it('identifies oauth2 as real connection', async () => {
     vi.resetModules();

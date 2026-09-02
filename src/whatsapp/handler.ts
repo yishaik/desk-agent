@@ -2,7 +2,6 @@ import { createChildLogger } from '../core/logger.ts';
 import { loadSettings, updateSettings, getActiveConnectorToken } from '../core/settings.ts';
 import { saveMessage, listProjects, createProject, getProject } from '../core/memory.ts';
 import { slugifyProjectName, ProjectIdValidationError } from '../core/projects.ts';
-import { config } from '../core/config.ts';
 import { recordExecutedAction, consumeExecutedActionNotes } from '../core/confirmations.ts';
 import type { Message, MessageKey, Settings } from '../core/types.ts';
 import { getWhatsAppClient, WhatsAppClient } from './client.ts';
@@ -430,7 +429,8 @@ _שלח הודעה לעצמך כדי לדבר עם הסוכן_`,
     case 'status': {
       const wa = getWhatsAppClient();
       const token = getActiveConnectorToken(settings);
-      const connectorHealth = await checkConnectorHealth();
+      const client = new OpenConnectorClient(settings.activeProject);
+      const connectorHealth = await client.checkHealth();
       
       const claudeCode = isClaudeCodeConnected();
       const credentials = await listRuntimeCredentials();
@@ -633,14 +633,6 @@ _ההתחברות מתבצעת דרך OAuth - ללא צורך ב-API key_`,
   }
 }
 
-async function checkConnectorHealth(): Promise<boolean> {
-  try {
-    const response = await fetch(`${config.openConnectorUrl}/v1/health`);
-    return response.ok;
-  } catch {
-    return false;
-  }
-}
 
 async function processWithPi(
   message: Message, 
