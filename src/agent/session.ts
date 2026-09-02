@@ -18,6 +18,7 @@ import {
   clearRuntimeCache,
   type ModelResolution,
 } from '../http/auth.ts';
+import { buildIdentityPrompt, writeIdentityFiles } from '../core/identity-files.ts';
 
 const log = createChildLogger('pi-session');
 
@@ -406,26 +407,7 @@ async function createSession(projectId: string): Promise<ProjectSession> {
 
   const agentsmdPath = `${projectCwd}/AGENTS.md`;
   if (!existsSync(agentsmdPath)) {
-    const { writeFileSync } = await import('node:fs');
-    writeFileSync(agentsmdPath, `# ${projectId}
-
-Project context for ${settings.botName}.
-
-## Owner
-${settings.ownerName || 'Not specified'}
-
-## Timezone
-${settings.timezone}
-
-## Open Connector
-Use the oc_* tools to interact with connected services:
-- oc_search_actions: Find available actions
-- oc_get_action_guide: Get action documentation  
-- oc_execute_action: Execute (requires user confirmation for mutating actions)
-- oc_list_connections: List connected services
-
-For send/create/update/delete actions, always wait for the user to confirm before executing.
-`);
+    writeIdentityFiles(settings);
   }
 
   const modelRuntime = await getOrCreateModelRuntime();

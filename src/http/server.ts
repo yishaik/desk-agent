@@ -40,6 +40,8 @@ import {
   resolveActiveModel,
 } from './auth.ts';
 import { writeIdentityFiles } from '../core/identity-files.ts';
+import { clearSession, clearAllSessions, getOrCreateSession } from '../agent/session.ts';
+import { clearClaudeCodeSession } from '../agent/claude-code.ts';
 import { getSettingsHtml, type SettingsPageData } from './settings-page.ts';
 import { getThemeCss } from './theme.ts';
 
@@ -496,6 +498,8 @@ addRoute('PUT', '/api/settings', async (req, res) => {
     sharedConnectorToken: string;
   }>>(req);
 
+  const previousSettings = loadSettings();
+
   const updates: Partial<typeof body> = {};
   if (body.botName !== undefined) updates.botName = body.botName;
   if (body.ownerName !== undefined) updates.ownerName = body.ownerName;
@@ -512,7 +516,33 @@ addRoute('PUT', '/api/settings', async (req, res) => {
   
   writeIdentityFiles(settings);
 
-  sendJson(res, { success: true, data: { ...settings, sharedConnectorToken: '***' } });
+  const identityFields = ['botName', 'ownerName', 'businessName', 'businessDescription', 'agentVoice', 'agentBoundaries', 'timezone'] as const;
+  const identityChanged = identityFields.some(
+    (field) => body[field] !== undefined && body[field] !== previousSettings[field]
+  );
+  const modelChanged = body.model !== undefined && body.model !== previousSettings.model;
+
+  let sessionRecreated = false;
+  if (modelChanged || identityChanged) {
+    try {
+      clearSession(settings.activeProject);
+      clearClaudeCodeSession(settings.activeProject);
+      await getOrCreateSession(settings.activeProject);
+      sessionRecreated = true;
+      log.info(
+        { modelChanged, identityChanged, projectId: settings.activeProject },
+        'Session recreated after settings change'
+      );
+    } catch (err) {
+      log.error({ err }, 'Failed to recreate session after settings change');
+    }
+  }
+
+  sendJson(res, { 
+    success: true, 
+    data: { ...settings, sharedConnectorToken: '***' },
+    applied: sessionRecreated,
+  });
 });
 
 addRoute('GET', '/api/projects', async (req, res) => {

@@ -6,6 +6,53 @@ import { createChildLogger } from './logger.ts';
 
 const log = createChildLogger('identity-files');
 
+/**
+ * Build the complete identity prompt text from settings.
+ * This is the single source of truth for identity content that reaches the model.
+ * Used by both Pi (AGENTS.md) and Claude Code (system prompt).
+ */
+export function buildIdentityPrompt(settings: Settings): string {
+  const parts: string[] = [];
+
+  parts.push(`You are ${settings.botName || 'Desk Agent'}, a personal WhatsApp assistant.`);
+
+  if (settings.ownerName) {
+    parts.push(`Your owner is ${settings.ownerName}.`);
+  }
+
+  if (settings.businessName) {
+    parts.push(`You work for ${settings.businessName}.`);
+  }
+
+  if (settings.businessDescription) {
+    parts.push('');
+    parts.push('## About the Business');
+    parts.push(settings.businessDescription);
+  }
+
+  if (settings.agentVoice) {
+    parts.push('');
+    parts.push('## Voice & Personality');
+    parts.push(settings.agentVoice);
+  }
+
+  if (settings.agentBoundaries) {
+    parts.push('');
+    parts.push('## Boundaries');
+    parts.push('You MUST follow these boundaries:');
+    parts.push(settings.agentBoundaries);
+  }
+
+  parts.push('');
+  parts.push('## Communication');
+  parts.push(`- Timezone: ${settings.timezone || 'UTC'}`);
+  parts.push('- Respond in the same language as the user message');
+  parts.push('- Be concise and helpful');
+  parts.push('- Ask for clarification when needed');
+
+  return parts.join('\n');
+}
+
 export function generateSoulMd(settings: Settings): string {
   const parts: string[] = [];
   
@@ -61,21 +108,8 @@ export function generateAgentsMd(settings: Settings): string {
   
   parts.push(`# ${settings.activeProject}`);
   parts.push('');
-  parts.push(`Project context for ${settings.botName || 'Desk Agent'}.`);
-  parts.push('');
-  
-  parts.push('## Owner');
-  parts.push(settings.ownerName || 'Not specified');
-  parts.push('');
-  
-  if (settings.businessName) {
-    parts.push('## Business');
-    parts.push(settings.businessName);
-    parts.push('');
-  }
-  
-  parts.push('## Timezone');
-  parts.push(settings.timezone || 'UTC');
+
+  parts.push(buildIdentityPrompt(settings));
   parts.push('');
   
   parts.push('## Open Connector');

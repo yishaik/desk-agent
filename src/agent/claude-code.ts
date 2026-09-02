@@ -19,6 +19,7 @@ import { join } from 'node:path';
 import { config } from '../core/config.ts';
 import { createChildLogger } from '../core/logger.ts';
 import { loadSettings } from '../core/settings.ts';
+import { buildIdentityPrompt } from '../core/identity-files.ts';
 
 const log = createChildLogger('claude-code');
 
@@ -226,16 +227,20 @@ function buildMcpConfig(projectId: string): string {
 
 function buildSystemPrompt(): string {
   const settings = loadSettings();
+  const identityPrompt = buildIdentityPrompt(settings);
+  
   return [
-    `You are ${settings.botName || 'a personal WhatsApp assistant'} for ${settings.ownerName || 'the owner'}${settings.businessName ? ` (${settings.businessName})` : ''}.`,
-    settings.businessDescription ? `Business: ${settings.businessDescription}` : '',
-    `Timezone: ${settings.timezone || 'UTC'}.`,
+    identityPrompt,
+    '',
+    '## WhatsApp Context',
     'You converse over WhatsApp: keep replies short, helpful, and in the user\'s language.',
+    '',
+    '## Open Connector Tools',
     'Use the connector MCP tools (search_actions, get_action_guide, execute_action, list_connections) to work with the user\'s connected services.',
     'Mutating actions (send, reply, create, update, delete, ...) are never executed by execute_action directly: the tool records a pending request and the user approves it by replying "yes" in WhatsApp, outside your control. You cannot approve on the user\'s behalf and must not call the tool again for the same action.',
     'Never claim an action was executed unless a tool result or a system note in the conversation says it ran.',
     'You have no file or shell access; only the connector tools and conversation.',
-  ].filter(Boolean).join('\n');
+  ].join('\n');
 }
 
 export async function runClaudeCodePrompt(

@@ -21,6 +21,69 @@ afterEach(() => {
   delete process.env['DATA_DIR'];
 });
 
+describe('buildIdentityPrompt', () => {
+  it('includes all identity fields when provided', async () => {
+    const { buildIdentityPrompt } = await import('./identity-files.ts');
+    const { DEFAULT_SETTINGS } = await import('./types.ts');
+    
+    const settings = {
+      ...DEFAULT_SETTINGS,
+      botName: 'Test Bot',
+      ownerName: 'John Doe',
+      businessName: 'Acme Corp',
+      businessDescription: 'We sell widgets',
+      agentVoice: 'Friendly and professional',
+      agentBoundaries: 'No financial advice',
+      timezone: 'Asia/Jerusalem',
+    };
+    
+    const content = buildIdentityPrompt(settings);
+    
+    expect(content).toContain('Test Bot');
+    expect(content).toContain('John Doe');
+    expect(content).toContain('Acme Corp');
+    expect(content).toContain('We sell widgets');
+    expect(content).toContain('Friendly and professional');
+    expect(content).toContain('No financial advice');
+    expect(content).toContain('Asia/Jerusalem');
+  });
+
+  it('includes agentBoundaries in the prompt', async () => {
+    const { buildIdentityPrompt } = await import('./identity-files.ts');
+    const { DEFAULT_SETTINGS } = await import('./types.ts');
+    
+    const settings = {
+      ...DEFAULT_SETTINGS,
+      agentBoundaries: 'Never give medical advice. Always refer to professionals.',
+    };
+    
+    const content = buildIdentityPrompt(settings);
+    
+    expect(content).toContain('## Boundaries');
+    expect(content).toContain('Never give medical advice');
+    expect(content).toContain('MUST follow these boundaries');
+  });
+
+  it('handles missing optional fields gracefully', async () => {
+    const { buildIdentityPrompt } = await import('./identity-files.ts');
+    const { DEFAULT_SETTINGS } = await import('./types.ts');
+    
+    const settings = {
+      ...DEFAULT_SETTINGS,
+      botName: 'Minimal Bot',
+      timezone: 'UTC',
+    };
+    
+    const content = buildIdentityPrompt(settings);
+    
+    expect(content).toContain('Minimal Bot');
+    expect(content).toContain('UTC');
+    expect(content).not.toContain('## About the Business');
+    expect(content).not.toContain('## Voice & Personality');
+    expect(content).not.toContain('## Boundaries');
+  });
+});
+
 describe('generateSoulMd', () => {
   it('generates SOUL.md with all identity fields', async () => {
     const { generateSoulMd } = await import('./identity-files.ts');
@@ -91,6 +154,35 @@ describe('generateAgentsMd', () => {
     expect(content).toContain('Asia/Jerusalem');
     expect(content).toContain('oc_search_actions');
     expect(content).toContain('oc_execute_action');
+  });
+
+  it('includes identity fields like voice and boundaries', async () => {
+    const { generateAgentsMd } = await import('./identity-files.ts');
+    const { DEFAULT_SETTINGS } = await import('./types.ts');
+    
+    const settings = {
+      ...DEFAULT_SETTINGS,
+      botName: 'Identity Bot',
+      ownerName: 'Jane Smith',
+      businessName: 'Smith Co',
+      businessDescription: 'A consulting business',
+      agentVoice: 'Professional and concise',
+      agentBoundaries: 'No legal advice',
+      activeProject: 'identity-test',
+      timezone: 'UTC',
+    };
+    
+    const content = generateAgentsMd(settings);
+    
+    expect(content).toContain('# identity-test');
+    expect(content).toContain('Identity Bot');
+    expect(content).toContain('Jane Smith');
+    expect(content).toContain('Smith Co');
+    expect(content).toContain('A consulting business');
+    expect(content).toContain('Professional and concise');
+    expect(content).toContain('No legal advice');
+    expect(content).toContain('## Boundaries');
+    expect(content).toContain('## Voice & Personality');
   });
 });
 
