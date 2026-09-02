@@ -93,6 +93,8 @@ function stripAnsi(s: string): string {
 }
 
 // One-shot answers to the first-run TUI prompts, whichever of them appear.
+// Tested with @anthropic-ai/claude-code@2.1.258 — bump Dockerfile
+// CLAUDE_CODE_VERSION after verifying new TUI strings still match.
 function driveOnboarding(state: SetupState): void {
   const out = state.output;
   const press = (key: string, tag: string) => {

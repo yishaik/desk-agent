@@ -13,16 +13,18 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 
 # Claude Code engine: the unmodified official binary; customers sign in with
-# their own subscription (see src/agent/claude-code.ts for the compliance note)
-RUN npm install -g @anthropic-ai/claude-code
+# their own subscription (see src/agent/claude-code.ts for the compliance note).
+# Version pinned — the TUI login driver (claude-code.ts) depends on prompt strings.
+ARG CLAUDE_CODE_VERSION=2.1.258
+RUN npm install -g @anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}
 
 WORKDIR /app
 
 # Copy package files
 COPY package*.json ./
 
-# Install dependencies
-RUN npm ci --only=production
+# Install dependencies (--omit=dev replaces deprecated --only=production)
+RUN npm ci --omit=dev
 
 # Copy source code
 COPY src/ ./src/
@@ -38,8 +40,8 @@ COPY skills-pack/ ./skills-pack/
 RUN mkdir -p /app/data/pi-agent
 
 # Set environment
-# Claude Code must not self-update inside the container — versions are pinned
-# by image builds, keeping the login TUI driver behavior predictable.
+# Claude Code must not self-update inside the container — the version is pinned
+# above (CLAUDE_CODE_VERSION), keeping the login TUI driver behavior predictable.
 ENV DISABLE_AUTOUPDATER=1
 ENV NODE_ENV=production
 ENV DATA_DIR=/app/data

@@ -313,6 +313,16 @@ docker compose build
 docker compose up -d
 ```
 
+### גרסאות מוצמדות
+
+הגרסאות של Claude Code ו-Open Connector מוצמדות כדי למנוע שבירה כשתלויות
+משתנות:
+
+- **Claude Code**: `CLAUDE_CODE_VERSION` ב-Dockerfile (כרגע `2.1.258`)
+- **Open Connector**: SHA ב-docker-compose.yml (כרגע `6788fec...`)
+
+שדרוג ידני בלבד — אחרי אימות תאימות.
+
 ## צ׳קליסט להפעלה
 
 - [ ] שרת CX23 / 4GB RAM פועל עם Docker
