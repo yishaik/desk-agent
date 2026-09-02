@@ -6,6 +6,53 @@ import { createChildLogger } from './logger.ts';
 
 const log = createChildLogger('identity-files');
 
+/**
+ * Build the complete identity prompt text from settings.
+ * This is the single source of truth for identity content that reaches the model.
+ * Used by both Pi (AGENTS.md) and Claude Code (system prompt).
+ */
+export function buildIdentityPrompt(settings: Settings): string {
+  const parts: string[] = [];
+
+  parts.push(`You are ${settings.botName || 'Desk Agent'}, a personal WhatsApp assistant.`);
+
+  if (settings.ownerName) {
+    parts.push(`Your owner is ${settings.ownerName}.`);
+  }
+
+  if (settings.businessName) {
+    parts.push(`You work for ${settings.businessName}.`);
+  }
+
+  if (settings.businessDescription) {
+    parts.push('');
+    parts.push('## About the Business');
+    parts.push(settings.businessDescription);
+  }
+
+  if (settings.agentVoice) {
+    parts.push('');
+    parts.push('## Voice & Personality');
+    parts.push(settings.agentVoice);
+  }
+
+  if (settings.agentBoundaries) {
+    parts.push('');
+    parts.push('## Boundaries');
+    parts.push('You MUST follow these boundaries:');
+    parts.push(settings.agentBoundaries);
+  }
+
+  parts.push('');
+  parts.push('## Communication');
+  parts.push(`- Timezone: ${settings.timezone || 'UTC'}`);
+  parts.push('- Respond in the same language as the user message');
+  parts.push('- Be concise and helpful');
+  parts.push('- Ask for clarification when needed');
+
+  return parts.join('\n');
+}
+
 export function generateSoulMd(settings: Settings): string {
   const parts: string[] = [];
   
@@ -56,26 +103,20 @@ export function generateSoulMd(settings: Settings): string {
   return parts.join('\n');
 }
 
-export function generateAgentsMd(settings: Settings): string {
+/**
+ * Generate AGENTS.md content for a specific project.
+ * 
+ * @param settings - Current settings (for identity content)
+ * @param projectId - The project ID to use in the header. Defaults to settings.activeProject.
+ */
+export function generateAgentsMdForProject(settings: Settings, projectId?: string): string {
+  const targetProject = projectId ?? settings.activeProject;
   const parts: string[] = [];
   
-  parts.push(`# ${settings.activeProject}`);
+  parts.push(`# ${targetProject}`);
   parts.push('');
-  parts.push(`Project context for ${settings.botName || 'Desk Agent'}.`);
-  parts.push('');
-  
-  parts.push('## Owner');
-  parts.push(settings.ownerName || 'Not specified');
-  parts.push('');
-  
-  if (settings.businessName) {
-    parts.push('## Business');
-    parts.push(settings.businessName);
-    parts.push('');
-  }
-  
-  parts.push('## Timezone');
-  parts.push(settings.timezone || 'UTC');
+
+  parts.push(buildIdentityPrompt(settings));
   parts.push('');
   
   parts.push('## Open Connector');
@@ -91,8 +132,24 @@ export function generateAgentsMd(settings: Settings): string {
   return parts.join('\n');
 }
 
-export function writeIdentityFiles(settings: Settings): void {
-  const projectDir = join(config.dataDir, 'projects', settings.activeProject);
+/**
+ * Generate AGENTS.md content for the active project.
+ * @deprecated Use generateAgentsMdForProject for explicit project targeting.
+ */
+export function generateAgentsMd(settings: Settings): string {
+  return generateAgentsMdForProject(settings, settings.activeProject);
+}
+
+/**
+ * Write identity files (SOUL.md and AGENTS.md) to a project directory.
+ * 
+ * @param settings - Current settings
+ * @param projectId - Optional project ID to write to. Defaults to settings.activeProject.
+ *                    Use this when creating a session for a non-active project.
+ */
+export function writeIdentityFiles(settings: Settings, projectId?: string): void {
+  const targetProject = projectId ?? settings.activeProject;
+  const projectDir = join(config.dataDir, 'projects', targetProject);
   
   if (!existsSync(projectDir)) {
     mkdirSync(projectDir, { recursive: true });
@@ -102,11 +159,11 @@ export function writeIdentityFiles(settings: Settings): void {
   const agentsMdPath = join(projectDir, 'AGENTS.md');
   
   const soulContent = generateSoulMd(settings);
-  const agentsContent = generateAgentsMd(settings);
+  const agentsContent = generateAgentsMdForProject(settings, targetProject);
   
   writeFileSync(soulMdPath, soulContent, 'utf-8');
-  log.info({ path: soulMdPath }, 'Wrote SOUL.md');
+  log.info({ path: soulMdPath, projectId: targetProject }, 'Wrote SOUL.md');
   
   writeFileSync(agentsMdPath, agentsContent, 'utf-8');
-  log.info({ path: agentsMdPath }, 'Wrote AGENTS.md');
+  log.info({ path: agentsMdPath, projectId: targetProject }, 'Wrote AGENTS.md');
 }

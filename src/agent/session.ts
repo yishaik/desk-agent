@@ -18,6 +18,7 @@ import {
   clearRuntimeCache,
   type ModelResolution,
 } from '../http/auth.ts';
+import { buildIdentityPrompt, writeIdentityFiles } from '../core/identity-files.ts';
 
 const log = createChildLogger('pi-session');
 
@@ -406,26 +407,7 @@ async function createSession(projectId: string): Promise<ProjectSession> {
 
   const agentsmdPath = `${projectCwd}/AGENTS.md`;
   if (!existsSync(agentsmdPath)) {
-    const { writeFileSync } = await import('node:fs');
-    writeFileSync(agentsmdPath, `# ${projectId}
-
-Project context for ${settings.botName}.
-
-## Owner
-${settings.ownerName || 'Not specified'}
-
-## Timezone
-${settings.timezone}
-
-## Open Connector
-Use the oc_* tools to interact with connected services:
-- oc_search_actions: Find available actions
-- oc_get_action_guide: Get action documentation  
-- oc_execute_action: Execute (requires user confirmation for mutating actions)
-- oc_list_connections: List connected services
-
-For send/create/update/delete actions, always wait for the user to confirm before executing.
-`);
+    writeIdentityFiles(settings, projectId);
   }
 
   const modelRuntime = await getOrCreateModelRuntime();
@@ -527,11 +509,35 @@ export function clearAllSessions(): void {
   log.info('All Pi sessions and runtime cleared');
 }
 
+/**
+ * Recreate the Pi session after credential or settings change.
+ * 
+ * Contract with Settings UI: this export must remain stable.
+ * Settings UI calls this after updateSettings + writeIdentityFiles.
+ * 
+ * - clearAllSessions() is required so ModelRuntime is not left on the old model
+ * - Identity files (AGENTS.md) should be written BEFORE calling this
+ * - Claude Code session is also cleared for the project
+ * 
+ * Calling twice is idempotent (recreate is safe).
+ */
 export async function recreateSessionAfterCredentialChange(projectId: string): Promise<void> {
+  const { clearClaudeCodeSession } = await import('./claude-code.ts');
+  
+  writeIdentityFiles(loadSettings(), projectId);
+  
   clearAllSessions();
+  clearClaudeCodeSession(projectId);
+  
   await getOrCreateSession(projectId);
-  log.info({ projectId }, 'Session recreated after credential change');
+  log.info({ projectId }, 'Session recreated after credential/settings change');
 }
+
+/**
+ * Alias for recreateSessionAfterCredentialChange.
+ * Use when refreshing session after settings save (model or identity change).
+ */
+export const refreshSessionAfterSettingsSave = recreateSessionAfterCredentialChange;
 
 export function getSession(projectId: string): ProjectSession | undefined {
   return activeSessions.get(projectId);
