@@ -9,12 +9,13 @@ const log = createChildLogger('confirmations');
 // File-backed so the WhatsApp handler (agent process) and the connector MCP
 // server (a Claude Code subprocess) share one pending-confirmation store.
 const STORE_PATH = join(config.dataDir, 'pending-confirmations.json');
-const MAX_AGE_MS = 10 * 60 * 1000;
+const MAX_AGE_MS = 3 * 60 * 1000;
 
 export interface PendingConfirmation {
   actionId: string;
   input: Record<string, unknown>;
   connectionName?: string;
+  projectId?: string;
   createdAt: number;
 }
 
@@ -192,3 +193,88 @@ export function cleanupOldConfirmations(): void {
   }
   if (changed) save(store);
 }
+
+/** Get all pending confirmations for a project (or all if projectId undefined). */
+export function getAllPendingConfirmations(
+  projectId?: string
+): Array<PendingConfirmation & { confirmationId: string }> {
+  const store = load();
+  const results: Array<PendingConfirmation & { confirmationId: string }> = [];
+  for (const [confirmationId, pending] of Object.entries(store)) {
+    if (projectId === undefined || pending.projectId === projectId) {
+      results.push({ confirmationId, ...pending });
+    }
+  }
+  return results.sort((a, b) => a.createdAt - b.createdAt);
+}
+
+/** Cancel all pending confirmations for a project. Returns count cancelled. */
+export function cancelAllPendingConfirmations(projectId?: string): number {
+  const store = load();
+  let count = 0;
+  for (const [id, pending] of Object.entries(store)) {
+    if (projectId === undefined || pending.projectId === projectId) {
+      delete store[id];
+      count++;
+    }
+  }
+  if (count > 0) save(store);
+  return count;
+}
+
+/** Format pending confirmation input as a human-readable summary. */
+export function formatPendingForUser(pending: PendingConfirmation): string {
+  const { actionId, input } = pending;
+  const lines: string[] = [];
+  
+  lines.push(`📋 *${actionId}*`);
+  
+  if (input['to']) lines.push(`👤 אל: ${input['to']}`);
+  if (input['recipient']) lines.push(`👤 אל: ${input['recipient']}`);
+  if (input['email']) lines.push(`👤 אל: ${input['email']}`);
+  if (input['subject']) lines.push(`📌 נושא: ${input['subject']}`);
+  if (input['title']) lines.push(`📌 כותרת: ${input['title']}`);
+  if (input['name']) lines.push(`📛 שם: ${input['name']}`);
+  
+  if (input['body']) {
+    const body = String(input['body']);
+    const truncated = body.length > 100 ? body.slice(0, 100) + '...' : body;
+    lines.push(`📝 תוכן: ${truncated}`);
+  }
+  if (input['message']) {
+    const msg = String(input['message']);
+    const truncated = msg.length > 100 ? msg.slice(0, 100) + '...' : msg;
+    lines.push(`📝 הודעה: ${truncated}`);
+  }
+  if (input['content']) {
+    const content = String(input['content']);
+    const truncated = content.length > 100 ? content.slice(0, 100) + '...' : content;
+    lines.push(`📝 תוכן: ${truncated}`);
+  }
+  
+  if (input['start'] || input['startTime'] || input['start_time']) {
+    const start = input['start'] || input['startTime'] || input['start_time'];
+    lines.push(`🕐 התחלה: ${start}`);
+  }
+  if (input['end'] || input['endTime'] || input['end_time']) {
+    const end = input['end'] || input['endTime'] || input['end_time'];
+    lines.push(`🕐 סיום: ${end}`);
+  }
+  
+  if (lines.length === 1) {
+    const keys = Object.keys(input).slice(0, 3);
+    for (const key of keys) {
+      const val = input[key];
+      const strVal = typeof val === 'string' ? val : JSON.stringify(val);
+      const truncated = strVal.length > 50 ? strVal.slice(0, 50) + '...' : strVal;
+      lines.push(`• ${key}: ${truncated}`);
+    }
+    if (Object.keys(input).length > 3) {
+      lines.push(`_...ועוד ${Object.keys(input).length - 3} שדות_`);
+    }
+  }
+  
+  return lines.join('\n');
+}
+
+export { MAX_AGE_MS };

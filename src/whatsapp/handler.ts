@@ -17,6 +17,9 @@ import {
   confirmAction,
   cancelConfirmation,
   cleanupOldConfirmations,
+  getAllPendingConfirmations,
+  cancelAllPendingConfirmations,
+  formatPendingForUser,
   checkCredentialsBeforePrompt,
   recreateSessionAfterCredentialChange,
   CredentialError,
@@ -94,7 +97,7 @@ async function updateReaction(
 }
 
 const CONFIRM_PATTERNS = [
-  /^(yes|כן|אשר|confirm|ok|אוקיי|בסדר)$/i,
+  /^(yes|כן|אשר|confirm)$/i,
 ];
 
 const CANCEL_PATTERNS = [
@@ -106,9 +109,6 @@ interface CommandResult {
   response?: string;
 }
 
-// The only place a mutating action is ever executed: after the owner's "yes".
-// The model never sees this tool result, so a note is recorded and prefixed to
-// the next prompt (withExecutedActionNotes).
 async function executePendingAction(
   pending: { actionId: string; input: Record<string, unknown>; connectionName?: string },
   projectId: string
@@ -161,53 +161,95 @@ export function withExecutedActionNotes(projectId: string, text: string): string
 async function checkForConfirmationResponse(text: string, projectId: string): Promise<CommandResult> {
   cleanupOldConfirmations();
 
-  const confirmIdMatch = text.match(/confirm_\d+_[a-z0-9]+/);
+  const allPending = getAllPendingConfirmations(projectId);
+  if (allPending.length === 0) {
+    return { handled: false };
+  }
+
+  const trimmedText = text.trim();
+  const confirmIdMatch = trimmedText.match(/confirm_\d+_[a-z0-9]+/);
+  
   if (confirmIdMatch) {
     const confirmId = confirmIdMatch[0];
     const pending = getPendingConfirmation(confirmId);
 
-    if (pending) {
-      const isConfirm = CONFIRM_PATTERNS.some((p) => p.test(text.replace(confirmId, '').trim()));
-      const isCancel = CANCEL_PATTERNS.some((p) => p.test(text.replace(confirmId, '').trim())) ||
-                       text.toLowerCase().includes('cancel') || text.includes('בטל');
+    if (pending && pending.projectId === projectId) {
+      const textWithoutId = trimmedText.replace(confirmId, '').trim();
+      const isConfirm = CONFIRM_PATTERNS.some((p) => p.test(textWithoutId));
+      const isCancel = CANCEL_PATTERNS.some((p) => p.test(textWithoutId)) ||
+                       textWithoutId.toLowerCase().includes('cancel') || textWithoutId.includes('בטל');
 
       if (isCancel) {
         cancelConfirmation(confirmId);
         return {
           handled: true,
-          response: `❌ Action "${pending.actionId}" cancelled.`,
+          response: `❌ הפעולה "${pending.actionId}" בוטלה.`,
         };
       }
 
-      if (isConfirm || text.trim() === confirmId) {
+      if (isConfirm || textWithoutId === '') {
         confirmAction(confirmId);
         return executePendingAction(pending, projectId);
       }
     }
   }
 
-  // The confirmation prompt tells the user to reply a plain "yes"/"אשר" —
-  // resolve that against the most recent pending confirmation.
-  const isSimpleConfirm = CONFIRM_PATTERNS.some((p) => p.test(text.trim()));
-  const isSimpleCancel = CANCEL_PATTERNS.some((p) => p.test(text.trim()));
+  const isSimpleConfirm = CONFIRM_PATTERNS.some((p) => p.test(trimmedText));
+  const isSimpleCancel = CANCEL_PATTERNS.some((p) => p.test(trimmedText));
+  const numberMatch = trimmedText.match(/^(\d+)$/);
 
-  if (isSimpleConfirm || isSimpleCancel) {
-    const latest = getLatestPendingConfirmation();
-    if (!latest) {
-      return { handled: false };
+  if (allPending.length > 1 && numberMatch && numberMatch[1]) {
+    const idx = parseInt(numberMatch[1], 10) - 1;
+    if (idx >= 0 && idx < allPending.length) {
+      const selected = allPending[idx];
+      if (selected) {
+        confirmAction(selected.confirmationId);
+        return executePendingAction(selected, projectId);
+      }
     }
-    if (isSimpleCancel) {
-      cancelConfirmation(latest.confirmationId);
-      return {
-        handled: true,
-        response: `❌ Action "${latest.actionId}" cancelled.`,
-      };
-    }
-    confirmAction(latest.confirmationId);
-    return executePendingAction(latest, projectId);
+    return {
+      handled: true,
+      response: `❌ מספר לא תקין. בחר מספר בין 1 ל-${allPending.length}, או השב "לא" לביטול הכל.`,
+    };
   }
 
-  return { handled: false };
+  if (isSimpleCancel) {
+    const count = cancelAllPendingConfirmations(projectId);
+    const actionNames = allPending.map((p) => p.actionId).join(', ');
+    return {
+      handled: true,
+      response: count === 1
+        ? `❌ הפעולה "${actionNames}" בוטלה.`
+        : `❌ ${count} פעולות בוטלו: ${actionNames}`,
+    };
+  }
+
+  if (isSimpleConfirm) {
+    if (allPending.length === 1 && allPending[0]) {
+      const single = allPending[0];
+      confirmAction(single.confirmationId);
+      return executePendingAction(single, projectId);
+    }
+    
+    const lines = ['⚠️ יש מספר פעולות ממתינות לאישור. בחר מספר:'];
+    allPending.forEach((p, i) => {
+      lines.push(`\n*${i + 1}.* ${formatPendingForUser(p)}`);
+    });
+    lines.push('\nהשב עם מספר (1, 2...) לאישור, או "לא" לביטול הכל.');
+    return {
+      handled: true,
+      response: lines.join('\n'),
+    };
+  }
+
+  const count = cancelAllPendingConfirmations(projectId);
+  const actionNames = allPending.map((p) => p.actionId).join(', ');
+  return {
+    handled: true,
+    response: count === 1
+      ? `⚠️ הפעולה "${actionNames}" בוטלה (לא התקבל אישור/ביטול).`
+      : `⚠️ ${count} פעולות בוטלו (לא התקבל אישור/ביטול): ${actionNames}`,
+  };
 }
 
 /**
@@ -245,8 +287,6 @@ export async function handleMessage(message: Message): Promise<void> {
     return;
   }
 
-  // Reply into the chat the message arrived in (LID self-chat and phone-JID
-  // self-chat are different conversations on the phone).
   const chatJid = message.messageKey?.remoteJid ?? ownerJid;
 
   const projectId = settings.activeProject;
@@ -255,8 +295,6 @@ export async function handleMessage(message: Message): Promise<void> {
 
   const tracker = message.messageKey ? createReactionTracker(message.messageKey) : null;
 
-  // Queue-bypass commands (/status, /help, etc.) can run immediately without
-  // waiting for a queued model prompt to finish — they're read-only.
   if (message.body.startsWith(COMMAND_PREFIX)) {
     const commandName = message.body.slice(COMMAND_PREFIX.length).split(' ')[0]?.toLowerCase();
     if (commandName && QUEUE_BYPASS_COMMANDS.has(commandName)) {
@@ -265,12 +303,8 @@ export async function handleMessage(message: Message): Promise<void> {
     }
   }
 
-  // Everything else (model prompts, confirmations, non-bypass commands) goes
-  // through the per-project queue to prevent concurrent model access (#33).
   const wasActive = activeProcessing.has(projectId);
 
-  // If the model is already working on this project, send ⏳ immediately so
-  // the user knows their message is queued, not lost.
   if (wasActive && tracker) {
     await safeReaction(tracker.messageKey!, 'queued');
     log.debug({ projectId, messageId: message.id }, 'Message queued behind active processing');
@@ -278,7 +312,7 @@ export async function handleMessage(message: Message): Promise<void> {
 
   const previousTask = projectQueues.get(projectId) ?? Promise.resolve();
   const currentTask = previousTask.then(() => processMessageQueued(message, settings, wa, chatJid, tracker));
-  projectQueues.set(projectId, currentTask.catch(() => {})); // swallow errors in queue chain
+  projectQueues.set(projectId, currentTask.catch(() => {}));
 
   await currentTask;
 }
@@ -322,14 +356,11 @@ async function processMessageQueued(
   activeProcessing.add(projectId);
 
   try {
-    // Non-bypass commands (like /project, /model) need the queue.
     if (message.body.startsWith(COMMAND_PREFIX)) {
       await handleCommandDirect(message, settings, wa, chatJid, tracker);
       return;
     }
 
-    // Confirmations ("yes", "כן") must be in the queue — they interact with
-    // pending-confirmation state that may be mid-update by a model prompt.
     const confirmResponse = await checkForConfirmationResponse(message.body, projectId);
     if (confirmResponse.handled) {
       if (tracker) {
@@ -352,7 +383,6 @@ async function processMessageQueued(
         await updateReaction(tracker, 'finished');
         await sendSplitMessage(chatJid, response, message.id);
       } else {
-        // Never fail silently — the user is staring at a chat with no reply.
         await updateReaction(tracker, 'error');
         await wa.sendMessage(chatJid, '⚠️ לא התקבלה תשובה מהמודל. נסה שוב, ואם זה חוזר — בדוק את חיבור ה-AI בהגדרות.');
       }
@@ -456,8 +486,6 @@ _שלח הודעה לעצמך כדי לדבר עם הסוכן_`,
       ].filter(Boolean).join(', ');
       const hasAnyProvider = claudeCode || credentials.length > 0;
 
-      // Claude Code is the active engine whenever it's connected; the pi
-      // model resolution is only relevant otherwise.
       let modelStatus: string;
       if (claudeCode) {
         modelStatus = '✅ Claude Code — מנוע פעיל (מכסת המנוי)';
@@ -664,8 +692,6 @@ async function processWithPi(
 ): Promise<string | null> {
   await updateReaction(tracker, 'processing');
 
-  // Claude Code (customer's own subscription login) takes precedence — it is
-  // the only path that draws on Pro/Max plan limits.
   if (isClaudeCodeConnected()) {
     log.info({ projectId: settings.activeProject, message: message.body.slice(0, 50) }, 'Processing with Claude Code');
     const response = await runClaudeCodePrompt(settings.activeProject, withExecutedActionNotes(settings.activeProject, message.body), {

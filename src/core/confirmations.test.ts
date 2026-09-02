@@ -1,18 +1,87 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { existsSync, rmSync, mkdirSync } from 'node:fs';
+import { existsSync, rmSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
 
 const TEST_DATA_DIR = './test-data-confirmations';
 
 beforeEach(() => {
   vi.resetModules();
   process.env['DATA_DIR'] = TEST_DATA_DIR;
-  if (existsSync(TEST_DATA_DIR)) rmSync(TEST_DATA_DIR, { recursive: true });
+  if (existsSync(TEST_DATA_DIR)) {
+    rmSync(TEST_DATA_DIR, { recursive: true });
+  }
   mkdirSync(TEST_DATA_DIR, { recursive: true });
 });
 
 afterEach(() => {
-  if (existsSync(TEST_DATA_DIR)) rmSync(TEST_DATA_DIR, { recursive: true });
+  if (existsSync(TEST_DATA_DIR)) {
+    rmSync(TEST_DATA_DIR, { recursive: true });
+  }
   delete process.env['DATA_DIR'];
+});
+
+describe('Confirmation Patterns', () => {
+  const CONFIRM_PATTERNS = [
+    /^(yes|כן|אשר|confirm)$/i,
+  ];
+
+  const CANCEL_PATTERNS = [
+    /^(no|לא|בטל|cancel|ביטול)$/i,
+  ];
+
+  it('ok does NOT match confirm patterns', () => {
+    const text = 'ok';
+    const matches = CONFIRM_PATTERNS.some((p) => p.test(text.trim()));
+    expect(matches).toBe(false);
+  });
+
+  it('אוקיי does NOT match confirm patterns', () => {
+    const text = 'אוקיי';
+    const matches = CONFIRM_PATTERNS.some((p) => p.test(text.trim()));
+    expect(matches).toBe(false);
+  });
+
+  it('בסדר does NOT match confirm patterns', () => {
+    const text = 'בסדר';
+    const matches = CONFIRM_PATTERNS.some((p) => p.test(text.trim()));
+    expect(matches).toBe(false);
+  });
+
+  it('כן DOES match confirm patterns', () => {
+    const text = 'כן';
+    const matches = CONFIRM_PATTERNS.some((p) => p.test(text.trim()));
+    expect(matches).toBe(true);
+  });
+
+  it('אשר DOES match confirm patterns', () => {
+    const text = 'אשר';
+    const matches = CONFIRM_PATTERNS.some((p) => p.test(text.trim()));
+    expect(matches).toBe(true);
+  });
+
+  it('yes DOES match confirm patterns', () => {
+    const text = 'yes';
+    const matches = CONFIRM_PATTERNS.some((p) => p.test(text.trim()));
+    expect(matches).toBe(true);
+  });
+
+  it('confirm DOES match confirm patterns', () => {
+    const text = 'confirm';
+    const matches = CONFIRM_PATTERNS.some((p) => p.test(text.trim()));
+    expect(matches).toBe(true);
+  });
+
+  it('לא DOES match cancel patterns', () => {
+    const text = 'לא';
+    const matches = CANCEL_PATTERNS.some((p) => p.test(text.trim()));
+    expect(matches).toBe(true);
+  });
+
+  it('no DOES match cancel patterns', () => {
+    const text = 'no';
+    const matches = CANCEL_PATTERNS.some((p) => p.test(text.trim()));
+    expect(matches).toBe(true);
+  });
 });
 
 describe('formatConfirmationRequest', () => {
@@ -37,7 +106,6 @@ describe('executed-action notes', () => {
     expect(mine).toHaveLength(1);
     expect(mine[0]).toMatchObject({ actionId: 'gmail.send_email', success: true, summary: '{"id":"m1"}' });
 
-    // consumed — gone on the second read; the other project's note is untouched
     expect(consumeExecutedActionNotes('default')).toHaveLength(0);
     expect(consumeExecutedActionNotes('other')).toHaveLength(1);
   });
@@ -51,17 +119,14 @@ describe('executed-action notes', () => {
 
 describe('requiresConfirmation — allow-list of read-only verbs (#27)', () => {
   const MUTATING = [
-    // real Open Connector action ids the old deny-list let through
     'gmail.reply_email', 'gmail.reply_to_thread', 'gmail.move_to_trash', 'gmail.move_thread_to_trash',
     'gmail.untrash_message', 'gmail.batch_modify_messages', 'gmail.add_label_to_email',
     'gmail.modify_thread_labels', 'gmail.patch_label', 'gmail.stop_watch',
     'notion.append_block', 'notion.append_block_children', 'notion.move_page',
     'slack.reply_message', 'slack.schedule_message', 'slack.upload_file', 'slack.add_reaction',
     'slack.open_conversation',
-    // still covered
     'gmail.send_email', 'gmail.send', 'gmail.create_draft', 'gmail.delete_draft',
     'googlecalendar.update_event', 'slack.post_message', 'slack.postMessage',
-    // unknown verbs fail safe
     'foo.frobnicate_thing', 'foo.x', 'foo.SEND',
   ];
   const READ_ONLY = [
@@ -104,5 +169,197 @@ describe('requiresConfirmation — allow-list of read-only verbs (#27)', () => {
 
     setActionConfirmation('gmail', 'gmail.create_draft', 'auto');
     expect(requiresConfirmation('gmail.create_draft')).toBe(true);
+  });
+});
+
+describe('Confirmation TTL', () => {
+  it('MAX_AGE_MS is 3 minutes (180000ms)', async () => {
+    const { MAX_AGE_MS } = await import('./confirmations.ts');
+    expect(MAX_AGE_MS).toBe(3 * 60 * 1000);
+  });
+
+  it('cleanupOldConfirmations removes expired entries', async () => {
+    const { 
+      createPendingConfirmation, 
+      getPendingConfirmation,
+      cleanupOldConfirmations,
+    } = await import('./confirmations.ts');
+
+    const confirmationId = createPendingConfirmation({
+      actionId: 'gmail.sendEmail',
+      input: { to: 'test@example.com' },
+      projectId: 'test-project',
+    });
+
+    expect(getPendingConfirmation(confirmationId)).toBeDefined();
+
+    const storePath = join(TEST_DATA_DIR, 'pending-confirmations.json');
+    const store = JSON.parse(readFileSync(storePath, 'utf8'));
+    store[confirmationId].createdAt = Date.now() - 4 * 60 * 1000;
+    writeFileSync(storePath, JSON.stringify(store), { mode: 0o600 });
+
+    cleanupOldConfirmations();
+
+    expect(getPendingConfirmation(confirmationId)).toBeUndefined();
+  });
+});
+
+describe('PendingConfirmation with projectId', () => {
+  it('stores projectId in pending confirmation', async () => {
+    const { createPendingConfirmation, getPendingConfirmation } = await import('./confirmations.ts');
+
+    const confirmationId = createPendingConfirmation({
+      actionId: 'gmail.sendEmail',
+      input: { to: 'test@example.com' },
+      projectId: 'my-project',
+    });
+
+    const pending = getPendingConfirmation(confirmationId);
+    expect(pending?.projectId).toBe('my-project');
+  });
+
+  it('getAllPendingConfirmations filters by projectId', async () => {
+    const { createPendingConfirmation, getAllPendingConfirmations } = await import('./confirmations.ts');
+
+    createPendingConfirmation({
+      actionId: 'gmail.sendEmail',
+      input: { to: 'a@example.com' },
+      projectId: 'project-a',
+    });
+
+    createPendingConfirmation({
+      actionId: 'slack.postMessage',
+      input: { channel: '#general' },
+      projectId: 'project-b',
+    });
+
+    createPendingConfirmation({
+      actionId: 'calendar.createEvent',
+      input: { title: 'Meeting' },
+      projectId: 'project-a',
+    });
+
+    const projectA = getAllPendingConfirmations('project-a');
+    expect(projectA.length).toBe(2);
+    expect(projectA.every((p) => p.projectId === 'project-a')).toBe(true);
+
+    const projectB = getAllPendingConfirmations('project-b');
+    expect(projectB.length).toBe(1);
+    expect(projectB[0]?.projectId).toBe('project-b');
+
+    const all = getAllPendingConfirmations();
+    expect(all.length).toBe(3);
+  });
+
+  it('cancelAllPendingConfirmations removes all for project', async () => {
+    const { 
+      createPendingConfirmation, 
+      getAllPendingConfirmations,
+      cancelAllPendingConfirmations,
+    } = await import('./confirmations.ts');
+
+    createPendingConfirmation({
+      actionId: 'gmail.sendEmail',
+      input: { to: 'a@example.com' },
+      projectId: 'project-a',
+    });
+
+    createPendingConfirmation({
+      actionId: 'slack.postMessage',
+      input: { channel: '#general' },
+      projectId: 'project-b',
+    });
+
+    createPendingConfirmation({
+      actionId: 'calendar.createEvent',
+      input: { title: 'Meeting' },
+      projectId: 'project-a',
+    });
+
+    const count = cancelAllPendingConfirmations('project-a');
+    expect(count).toBe(2);
+
+    const projectA = getAllPendingConfirmations('project-a');
+    expect(projectA.length).toBe(0);
+
+    const projectB = getAllPendingConfirmations('project-b');
+    expect(projectB.length).toBe(1);
+  });
+});
+
+describe('formatPendingForUser', () => {
+  it('formats email action nicely', async () => {
+    const { formatPendingForUser } = await import('./confirmations.ts');
+
+    const summary = formatPendingForUser({
+      actionId: 'gmail.sendEmail',
+      input: {
+        to: 'boss@company.com',
+        subject: 'Meeting Request',
+        body: 'Hi, I would like to schedule a meeting to discuss the project progress.',
+      },
+      createdAt: Date.now(),
+    });
+
+    expect(summary).toContain('gmail.sendEmail');
+    expect(summary).toContain('boss@company.com');
+    expect(summary).toContain('Meeting Request');
+    expect(summary).toContain('Hi, I would like');
+    expect(summary).not.toContain('JSON');
+  });
+
+  it('formats calendar event nicely', async () => {
+    const { formatPendingForUser } = await import('./confirmations.ts');
+
+    const summary = formatPendingForUser({
+      actionId: 'calendar.createEvent',
+      input: {
+        title: 'Team Sync',
+        start: '2024-01-15T10:00:00',
+        end: '2024-01-15T11:00:00',
+      },
+      createdAt: Date.now(),
+    });
+
+    expect(summary).toContain('calendar.createEvent');
+    expect(summary).toContain('Team Sync');
+    expect(summary).toContain('2024-01-15T10:00:00');
+  });
+
+  it('truncates long body text', async () => {
+    const { formatPendingForUser } = await import('./confirmations.ts');
+
+    const longBody = 'A'.repeat(200);
+    const summary = formatPendingForUser({
+      actionId: 'gmail.sendEmail',
+      input: {
+        to: 'test@test.com',
+        body: longBody,
+      },
+      createdAt: Date.now(),
+    });
+
+    expect(summary.length).toBeLessThan(longBody.length + 100);
+    expect(summary).toContain('...');
+  });
+
+  it('shows generic fields for unknown action types', async () => {
+    const { formatPendingForUser } = await import('./confirmations.ts');
+
+    const summary = formatPendingForUser({
+      actionId: 'custom.doSomething',
+      input: {
+        fieldA: 'valueA',
+        fieldB: 'valueB',
+        fieldC: 'valueC',
+        fieldD: 'valueD',
+      },
+      createdAt: Date.now(),
+    });
+
+    expect(summary).toContain('custom.doSomething');
+    expect(summary).toContain('fieldA');
+    expect(summary).toContain('valueA');
+    expect(summary).toContain('ועוד');
   });
 });
