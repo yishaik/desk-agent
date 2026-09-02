@@ -20,6 +20,7 @@ import { config } from '../core/config.ts';
 import { createChildLogger } from '../core/logger.ts';
 import { loadSettings } from '../core/settings.ts';
 import { buildIdentityPrompt } from '../core/identity-files.ts';
+import { renderSkillsPrompt } from '../core/skills.ts';
 
 const log = createChildLogger('claude-code');
 
@@ -284,7 +285,9 @@ function buildSystemPrompt(): string {
     'Mutating actions (send, reply, create, update, delete, ...) are never executed by execute_action directly: the tool records a pending request and the user approves it by replying "yes" in WhatsApp, outside your control. You cannot approve on the user\'s behalf and must not call the tool again for the same action.',
     'Never claim an action was executed unless a tool result or a system note in the conversation says it ran.',
     'You have no file or shell access; only the connector tools and conversation.',
-  ].join('\n');
+    '',
+    renderSkillsPrompt(settings.skillPacks),
+  ].join('\n').trimEnd();
 }
 
 export async function runClaudeCodePrompt(
