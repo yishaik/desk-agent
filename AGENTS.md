@@ -11,25 +11,27 @@ src/
 ├── core/           # Config, types, settings, memory
 ├── whatsapp/       # Baileys client, message handling (uses Pi sessions)
 ├── http/           # Express-like HTTP server, Web UI
+├── agent/          # Pi session, OC tools (oc_search/guide/execute/list)
 └── open-connector/ # Open Connector API client (token resolution)
 
 .pi/
-├── extensions/     # Pi extensions
-│   └── open-connector/  # OC tools: search, guide, execute
 └── skills/         # Pi skills
     └── open-connector/  # OC skill documentation
 
-skills-pack/        # Pre-built skill configurations (for reference)
+skills-pack/        # Reference skill configurations (manual setup required)
 data/              # Runtime data (gitignored)
 ```
+
+**Note:** Open Connector tools (`oc_search_actions`, `oc_get_action_guide`, `oc_execute_action`, `oc_list_connections`) are defined inline in `src/agent/session.ts`, not as a Pi extension.
 
 ## Pi Integration
 
 The handler uses Pi Coding Agent SDK for:
 - **Sessions** - Each project gets a separate Pi session
-- **Extensions** - Custom tools via `.pi/extensions/`
 - **Skills** - On-demand capabilities via `.pi/skills/`
 - **Model runtime** - Multi-provider LLM support
+
+Open Connector tools are registered directly in `src/agent/session.ts` as custom tools, not as Pi extensions.
 
 ### Customer AI Login
 
@@ -37,12 +39,6 @@ Customers log in via browser OAuth in the Web UI Settings page:
 - Click Connect next to ChatGPT or Claude
 - Authorize in browser popup
 - Pi session is created with the provider default model
-
-### Developer/Operator Options
-
-For development and debugging only (not customer-facing):
-- `pi /login` - Terminal-based subscription login
-- `MODEL_API_KEY` env - Direct API key bypass
 
 ## Code Style
 

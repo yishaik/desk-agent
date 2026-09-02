@@ -63,11 +63,14 @@ After onboarding, the **Settings** page lets you:
 
 - **Baileys** client with QR code pairing
 - **LID Message-yourself** for sending (self-chat only)
-- **Quoted replies** when responding to specific messages
-- **Composing/paused** indicators while AI is thinking
-- **Read receipts** after processing
+- **Emoji reactions** to indicate processing status (reading → processing/thinking/tools → done/error)
 - **Graceful disconnect** on restart (socket.end, not logout - preserves pairing)
 - **515 error handling** after scan reconnects with existing creds (no wipe)
+
+**Not implemented:**
+- Quoted replies (parameter exists but unused)
+- Composing/typing indicators
+- Read receipts
 
 ## Web UI
 
@@ -196,11 +199,13 @@ Key points:
 
 ## Skill Packs
 
-Pre-built configurations for common tasks. See `skills-pack/` directory:
+Reference configurations for common tasks. See `skills-pack/` directory:
 
 - **inbox-calendar** - Email and calendar management
 - **light-crm** - Contact tracking and follow-ups
 - **storefront-faq** - Answer business questions
+
+**Note:** Skill packs are reference templates. They are not automatically loaded — see `skills-pack/README.md` for manual setup instructions.
 
 ## License
 
