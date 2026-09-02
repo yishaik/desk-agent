@@ -1060,3 +1060,93 @@ describe('resolveReplyJid — replies stay inside the owner\'s own chat (#73)', 
   });
 });
 
+describe('U-12 / R-07 leftovers — media, unknown slash, stale skip', () => {
+  function selfChat(overrides: Partial<Message>): Message {
+    return makeMessage({
+      from: '1234567890:123@s.whatsapp.net',
+      to: 'ABC123XYZ@lid',
+      isFromMe: true,
+      messageKey: { remoteJid: 'ABC123XYZ@lid', id: overrides.id ?? 'msg_leftover', fromMe: true },
+      ...overrides,
+    });
+  }
+
+  it('skips inbound self-chat older than 10 minutes and quotes a Hebrew notice', async () => {
+    const { handleMessage } = await import('./handler.ts');
+    const old = selfChat({
+      id: 'msg_stale',
+      body: 'hello from yesterday',
+      timestamp: Math.floor(Date.now() / 1000) - 11 * 60,
+      messageKey: { remoteJid: 'ABC123XYZ@lid', id: 'msg_stale', fromMe: true },
+    });
+    await handleMessage(old);
+    expect(mockRunPromptWithCallbacks).not.toHaveBeenCalled();
+    expect(mockSendMessage).toHaveBeenCalledWith(
+      'ABC123XYZ@lid',
+      expect.stringContaining('הודעה ישנה'),
+      expect.objectContaining({ id: 'msg_stale' }),
+    );
+  });
+
+  it('replies in Hebrew for captionless media and does not send it to the model', async () => {
+    const { handleMessage } = await import('./handler.ts');
+    const media = selfChat({
+      id: 'msg_media',
+      body: '__desk_agent_media_no_text__',
+      timestamp: Math.floor(Date.now() / 1000),
+      messageKey: { remoteJid: 'ABC123XYZ@lid', id: 'msg_media', fromMe: true },
+    });
+    await handleMessage(media);
+    expect(mockRunPromptWithCallbacks).not.toHaveBeenCalled();
+    expect(mockSendMessage).toHaveBeenCalledWith(
+      'ABC123XYZ@lid',
+      expect.stringContaining('מדיה'),
+      expect.objectContaining({ id: 'msg_media' }),
+    );
+  });
+
+  it('does not reply to captionless media in someone else\'s chat', async () => {
+    const { handleMessage } = await import('./handler.ts');
+    await handleMessage(makeMessage({
+      id: 'msg_foreign_media',
+      from: '1234567890:123@s.whatsapp.net',
+      to: '555000111@s.whatsapp.net',
+      body: '__desk_agent_media_no_text__',
+      isFromMe: true,
+      timestamp: Math.floor(Date.now() / 1000),
+      messageKey: { remoteJid: '555000111@s.whatsapp.net', id: 'msg_foreign_media', fromMe: true },
+    }));
+    expect(mockSendMessage).not.toHaveBeenCalled();
+    expect(mockRunPromptWithCallbacks).not.toHaveBeenCalled();
+  });
+
+  it('unknown slash including leftover /login falls through to the model, not "פקודה לא מוכרת"', async () => {
+    mockRunPromptWithCallbacks.mockResolvedValueOnce('ok from model');
+    const { handleMessage } = await import('./handler.ts');
+    await handleMessage(selfChat({
+      id: 'msg_login',
+      body: '/login',
+      timestamp: Math.floor(Date.now() / 1000),
+      messageKey: { remoteJid: 'ABC123XYZ@lid', id: 'msg_login', fromMe: true },
+    }));
+    expect(mockRunPromptWithCallbacks).toHaveBeenCalled();
+    const texts = mockSendMessage.mock.calls.map((c) => String(c[1]));
+    expect(texts.some((s) => s.includes('פקודה לא מוכרת'))).toBe(false);
+  });
+
+  it('/help lists confirmation words and does not list /login', async () => {
+    const { handleMessage } = await import('./handler.ts');
+    await handleMessage(selfChat({
+      id: 'msg_help',
+      body: '/help',
+      timestamp: Math.floor(Date.now() / 1000),
+      messageKey: { remoteJid: 'ABC123XYZ@lid', id: 'msg_help', fromMe: true },
+    }));
+    expect(mockSendMessage).toHaveBeenCalled();
+    const help = mockSendMessage.mock.calls.map((c) => String(c[1])).join('\n');
+    expect(help).toContain('כן');
+    expect(help).toContain('אשר');
+    expect(help).toContain('בטל');
+    expect(help).not.toContain('/login');
+  });
+});

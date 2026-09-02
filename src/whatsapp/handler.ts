@@ -65,6 +65,15 @@ const activeProcessing = new Set<string>();
  * pending-confirmation state that may be mid-update.
  */
 const QUEUE_BYPASS_COMMANDS = new Set(['help', 'status', 'projects', 'services', 'settings']);
+const KNOWN_COMMANDS = new Set([...QUEUE_BYPASS_COMMANDS, 'project', 'model']);
+const MEDIA_NO_TEXT_BODY = '__desk_agent_media_no_text__';
+const MAX_INBOUND_AGE_SEC = 10 * 60;
+
+function messageAgeSec(timestamp: number): number {
+  const nowMs = Date.now();
+  if (timestamp > 1e12) return Math.floor((nowMs - timestamp) / 1000);
+  return Math.floor(nowMs / 1000) - timestamp;
+}
 
 async function safeReaction(messageKey: MessageKey, state: ReactionState): Promise<void> {
   try {
@@ -374,6 +383,26 @@ export async function handleMessage(message: Message): Promise<void> {
     return;
   }
 
+  const ageSec = messageAgeSec(message.timestamp);
+  if (ageSec > MAX_INBOUND_AGE_SEC) {
+    log.info({ messageId: message.id, ageSec }, 'Skipping stale inbound self-chat message');
+    await wa.sendMessage(
+      chatJid,
+      'דילגתי על הודעה ישנה (נשלחה בזמן ניתוק).',
+      message.messageKey,
+    );
+    return;
+  }
+
+  if (message.body === MEDIA_NO_TEXT_BODY) {
+    await wa.sendMessage(
+      chatJid,
+      'קיבלתי מדיה בלי טקסט. שלח הודעה כתובה, או הוסף כיתוב לתמונה/קובץ.',
+      message.messageKey,
+    );
+    return;
+  }
+
   const tracker = message.messageKey ? createReactionTracker(message.messageKey) : null;
 
   // Queue-bypass commands (/status, /help, etc.) can run immediately without
@@ -442,10 +471,14 @@ async function processMessageQueued(
   activeProcessing.add(projectId);
 
   try {
-    // Non-bypass commands (like /project, /model) need the queue.
+    // Known non-bypass commands (/project, /model) need the queue.
+    // Unknown slash text falls through to the model (U-12).
     if (message.body.startsWith(COMMAND_PREFIX)) {
-      await handleCommandDirect(message, settings, wa, chatJid, tracker);
-      return;
+      const commandName = message.body.slice(COMMAND_PREFIX.length).split(' ')[0]?.toLowerCase();
+      if (commandName && KNOWN_COMMANDS.has(commandName)) {
+        await handleCommandDirect(message, settings, wa, chatJid, tracker);
+        return;
+      }
     }
 
     // Confirmations ("yes", "כן") must be in the queue — they interact with
@@ -554,6 +587,8 @@ async function handleCommand(text: string, settings: Settings): Promise<CommandR
 /services - רשימת שירותים מחוברים
 /settings - הצג הגדרות
 /model [name] - החלף מודל
+
+*אישור פעולות:* כן / אשר / confirm / yes — אישור. לא / בטל / cancel — ביטול.
 
 *פעולות Open Connector:*
 שאל "מה אני יכול לעשות עם Gmail?" או "שלח מייל ל..."
@@ -735,33 +770,6 @@ _היכנס לממשק הניהול לשינוי הגדרות_`,
           response: `✅ מודל שונה ל: *${model}* (ישתנה בהודעה הבאה)`,
         };
       }
-    }
-
-    case 'login': {
-      const credentials = await listRuntimeCredentials();
-      
-      if (credentials.length > 0) {
-        const providers = credentials.map(c => `✅ ${c.providerId} (${c.type})`).join('\n');
-        return {
-          handled: true,
-          response: `*ספקי AI מחוברים*
-
-${providers}
-
-_לניהול חיבורים - היכנס להגדרות ב-Web UI_`,
-        };
-      }
-      
-      return {
-        handled: true,
-        response: `*לא מחובר ספק AI*
-
-היכנס להגדרות ב-Web UI וחבר ספק:
-- Anthropic (Claude Pro/Max)
-- OpenAI (ChatGPT Plus/Pro)
-
-_ההתחברות מתבצעת דרך OAuth - ללא צורך ב-API key_`,
-      };
     }
 
     default:

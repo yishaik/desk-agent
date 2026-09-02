@@ -623,6 +623,28 @@ addRoute('POST', '/api/pairing/repair', async (req, res) => {
   }
 });
 
+addRoute('POST', '/api/pairing/unpair', async (req, res) => {
+  if (!isAuthenticated(req)) {
+    sendError(res, 'Unauthorized', 401);
+    return;
+  }
+
+  const wa = getWhatsAppClient();
+  const ownerPhone = loadSettings().ownerPhone;
+
+  try {
+    await wa.unpair();
+    sendJson(res, {
+      success: true,
+      message: 'הצימוד אופס. סרוק את קוד ה-QR עם אותו מספר.',
+      ownerPhone,
+    });
+  } catch (err) {
+    log.error({ err }, 'Unpair failed');
+    sendError(res, 'שגיאה באיפוס הצימוד', 500);
+  }
+});
+
 function redactSettings(settings: ReturnType<typeof loadSettings>): ReturnType<typeof loadSettings> {
   return {
     ...settings,

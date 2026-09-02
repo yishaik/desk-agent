@@ -1,14 +1,13 @@
 import makeWASocket, {
   DisconnectReason,
   useMultiFileAuthState,
-  fetchLatestBaileysVersion,
   makeCacheableSignalKeyStore,
   proto,
 } from '@whiskeysockets/baileys';
 import type { WASocket } from '@whiskeysockets/baileys';
 import { Boom } from '@hapi/boom';
 import { join } from 'node:path';
-import { existsSync, mkdirSync, rmSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, rmSync, readFileSync } from 'node:fs';
 import qrcode from 'qrcode-terminal';
 import pino from 'pino';
 import { config } from '../core/config.ts';
@@ -20,7 +19,9 @@ import { bareJid } from './self-chat.ts';
 const log = createChildLogger('whatsapp');
 
 const VERSION_CACHE_PATH = join(config.dataDir, 'wa-version.json');
-const VERSION_FETCH_TIMEOUT_MS = 5000;
+/** Pinned WA protocol version (#156). Do not hit GitHub on boot. */
+export const PINNED_WA_VERSION: [number, number, number] = [2, 3000, 1015629576];
+export const MEDIA_NO_TEXT_BODY = '__desk_agent_media_no_text__';
 
 interface VersionCache {
   version: [number, number, number];
@@ -28,49 +29,19 @@ interface VersionCache {
 }
 
 async function fetchVersionWithFallback(): Promise<[number, number, number]> {
-  const loadCached = (): [number, number, number] | null => {
-    try {
-      if (existsSync(VERSION_CACHE_PATH)) {
-        const data = JSON.parse(readFileSync(VERSION_CACHE_PATH, 'utf8')) as VersionCache;
+  try {
+    if (existsSync(VERSION_CACHE_PATH)) {
+      const data = JSON.parse(readFileSync(VERSION_CACHE_PATH, 'utf8')) as VersionCache;
+      if (data.version) {
+        log.debug({ version: data.version }, 'Using cached Baileys version (no GitHub fetch)');
         return data.version;
       }
-    } catch {
-      // Ignore read errors
     }
-    return null;
-  };
-
-  const saveCache = (version: [number, number, number]): void => {
-    try {
-      const cache: VersionCache = { version, fetchedAt: new Date().toISOString() };
-      writeFileSync(VERSION_CACHE_PATH, JSON.stringify(cache, null, 2));
-    } catch {
-      // Ignore write errors
-    }
-  };
-
-  try {
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), VERSION_FETCH_TIMEOUT_MS);
-
-    const { version } = await fetchLatestBaileysVersion({ signal: controller.signal });
-    clearTimeout(timeoutId);
-
-    saveCache(version);
-    log.debug({ version }, 'Fetched Baileys version');
-    return version;
-  } catch (err) {
-    log.warn({ err }, 'Failed to fetch Baileys version, trying cache');
-
-    const cached = loadCached();
-    if (cached) {
-      log.info({ version: cached }, 'Using cached Baileys version');
-      return cached;
-    }
-
-    log.warn('No cached version available, using hardcoded fallback');
-    return [2, 3000, 1015629576];
+  } catch {
+    // Ignore read errors
   }
+  log.info({ version: PINNED_WA_VERSION }, 'Using pinned Baileys version (no GitHub fetch)');
+  return PINNED_WA_VERSION;
 }
 
 export type MessageHandler = (message: Message) => Promise<void>;
@@ -341,9 +312,12 @@ export class WhatsAppClient {
   private extractMessageBody(message: proto.IMessage): string | null {
     if (message.conversation) return message.conversation;
     if (message.extendedTextMessage?.text) return message.extendedTextMessage.text;
-    if (message.imageMessage?.caption) return message.imageMessage.caption;
-    if (message.videoMessage?.caption) return message.videoMessage.caption;
-    if (message.documentMessage?.caption) return message.documentMessage.caption;
+    if (message.imageMessage) return message.imageMessage.caption || MEDIA_NO_TEXT_BODY;
+    if (message.videoMessage) return message.videoMessage.caption || MEDIA_NO_TEXT_BODY;
+    if (message.documentMessage) return message.documentMessage.caption || MEDIA_NO_TEXT_BODY;
+    if (message.audioMessage || message.stickerMessage || message.locationMessage || message.contactMessage) {
+      return MEDIA_NO_TEXT_BODY;
+    }
     return null;
   }
 
@@ -351,7 +325,7 @@ export class WhatsAppClient {
     this.messageHandlers.push(handler);
   }
 
-  async sendMessage(jid: string, text: string): Promise<void> {
+  async sendMessage(jid: string, text: string, quoted?: MessageKey): Promise<void> {
     if (!this.socket) {
       throw new Error('WhatsApp client not connected');
     }
@@ -359,8 +333,21 @@ export class WhatsAppClient {
     const MAX_LENGTH = 4096;
     const parts = this.splitMessage(text, MAX_LENGTH);
 
+    const quotedOpts = quoted
+      ? {
+          quoted: {
+            key: {
+              remoteJid: quoted.remoteJid,
+              id: quoted.id,
+              fromMe: quoted.fromMe,
+              participant: quoted.participant,
+            },
+          },
+        }
+      : undefined;
+
     for (const part of parts) {
-      await this.socket.sendMessage(jid, { text: part });
+      await this.socket.sendMessage(jid, { text: part }, quotedOpts);
       if (parts.length > 1) {
         await new Promise((r) => setTimeout(r, 500));
       }
@@ -532,6 +519,29 @@ export class WhatsAppClient {
     rmSync(authDir, { recursive: true, force: true });
     log.info('Wiped WhatsApp auth for repair');
 
+    await this.connect();
+  }
+
+  /** Same-number re-pair: wipe auth + QR, keep ownerPhone. Never logout. */
+  async unpair(): Promise<void> {
+    log.info('Starting unpair (keep ownerPhone)');
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
+    if (this.socket) {
+      this.removeSocketListeners();
+      this.socket.end(undefined);
+      this.socket = null;
+    }
+    this.pairingState = { isPaired: false };
+    this.ownerJid = null;
+    this.ownerLid = null;
+    this.warnedNoLid = false;
+    this.reconnectAttempts = 0;
+    const authDir = join(config.dataDir, 'whatsapp-auth');
+    rmSync(authDir, { recursive: true, force: true });
+    log.info('Wiped WhatsApp auth for unpair');
     await this.connect();
   }
 }
