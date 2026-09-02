@@ -577,7 +577,8 @@ addRoute('GET', '/api/pairing', async (req, res) => {
   if (!state.isPaired && state.qrCode) {
     qrDataUrl = await QRCode.toDataURL(state.qrCode, { width: 280, margin: 1 });
   }
-  sendJson(res, { success: true, data: { ...state, qrDataUrl } });
+  const lid: 'present' | 'missing' = wa.getOwnerLid() ? 'present' : 'missing';
+  sendJson(res, { success: true, data: { ...state, qrDataUrl, lid } });
 });
 
 function redactSettings(settings: ReturnType<typeof loadSettings>): ReturnType<typeof loadSettings> {
@@ -2191,7 +2192,7 @@ export function getWizardHtml(settings: ReturnType<typeof loadSettings>, pairing
 </html>`;
 }
 
-export function getDashboardHtml(settings: ReturnType<typeof loadSettings>, pairingState: { isPaired: boolean; phoneNumber?: string; name?: string }): string {
+export function getDashboardHtml(settings: ReturnType<typeof loadSettings>, pairingState: { isPaired: boolean; phoneNumber?: string; name?: string; lid?: 'present' | 'missing' }): string {
   const safeBotName = escapeHtml(settings.botName);
   const safeName = escapeHtml(pairingState.name);
   const safePhone = escapeHtml(pairingState.phoneNumber);
@@ -2301,6 +2302,7 @@ export function getDashboardHtml(settings: ReturnType<typeof loadSettings>, pair
         <h2>📱 WhatsApp</h2>
         <div class="stat">${pairingState.isPaired ? '✅' : '❌'}</div>
         <div class="stat-label">${pairingState.isPaired ? 'מחובר' : 'מנותק'}</div>
+        <div class="stat-label">LID: ${pairingState.lid === 'present' ? 'קיים' : 'חסר'}</div>
         ${safePhone ? `<p style="margin-top: 12px; color: var(--text-muted);">${safePhone}</p>` : ''}
       </div>
       <div class="card">
