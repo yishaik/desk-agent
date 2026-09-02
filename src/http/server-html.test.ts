@@ -219,6 +219,12 @@ describe('Server HTML Source Code Requirements', () => {
       expect(serverCode).toContain('href="/settings"');
     });
 
+    it('dashboard shows LID present/missing Hebrew hint', () => {
+      expect(serverCode).toContain("pairingState.lid === 'present'");
+      expect(serverCode).toContain('LID:');
+      expect(serverCode).toContain('מזהה LID חסר');
+    });
+
     it('dashboard uses טוקן not אסימון', () => {
       expect(serverCode).toContain('שמרתי את הטוקן');
     });
