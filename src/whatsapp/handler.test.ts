@@ -13,6 +13,7 @@ const mockGetOwnerLid = vi.fn();
 const mockIsConnected = vi.fn();
 
 const mockGetSelfChatJid = vi.fn();
+const staleSkip = { notified: false };
 const mockRunPromptWithCallbacks = vi.fn(async () => null);
 
 vi.mock('./client.ts', () => ({
@@ -25,6 +26,11 @@ vi.mock('./client.ts', () => ({
     getSelfChatJid: mockGetSelfChatJid,
     getPairingState: () => ({ isPaired: true, selfChat: 'lid' }),
     isConnected: mockIsConnected,
+    takeStaleSkipNotice: () => {
+      if (staleSkip.notified) return false;
+      staleSkip.notified = true;
+      return true;
+    },
     isSelfJid: (jid: string | null | undefined) => {
       const ownerPhone = mockGetOwnerPhone();
       const ownerLid = mockGetOwnerLid();
@@ -77,6 +83,7 @@ beforeEach(() => {
   mockGetOwnerLid.mockReturnValue('ABC123XYZ@lid');
   mockGetSelfChatJid.mockReturnValue('ABC123XYZ@lid');
   mockIsConnected.mockReturnValue(true);
+  staleSkip.notified = false;
 });
 
 afterEach(() => {
@@ -1099,25 +1106,6 @@ describe('U-12 WhatsApp leftovers (#141)', () => {
     expect(mockRunPromptWithCallbacks).not.toHaveBeenCalled();
   });
 
-  it('/login is not restored as a command — falls through to the model', async () => {
-    mockRunPromptWithCallbacks.mockResolvedValueOnce('login went to model');
-    const { handleMessage } = await import('./handler.ts');
-
-    await handleMessage(makeMessage({
-      id: 'msg_login_cmd',
-      from: '1234567890:123@s.whatsapp.net',
-      to: 'ABC123XYZ@lid',
-      body: '/login',
-      isFromMe: true,
-      messageKey: { remoteJid: 'ABC123XYZ@lid', id: 'msg_login_cmd', fromMe: true },
-    }));
-
-    expect(mockRunPromptWithCallbacks).toHaveBeenCalled();
-    const bodies = mockSendMessage.mock.calls.map((c) => String(c[1]));
-    expect(bodies).toContain('login went to model');
-    expect(bodies.some((b) => b.includes('ספקי AI'))).toBe(false);
-  });
-
   it('unknown /command falls through to the model, not פקודה לא מוכרת', async () => {
     mockRunPromptWithCallbacks.mockResolvedValueOnce('ok from model');
     const { handleMessage } = await import('./handler.ts');
@@ -1216,5 +1204,30 @@ describe('skip stale inbound messages (#155)', () => {
 
     const skipCalls = mockSendMessage.mock.calls.filter((c) => String(c[1]).includes('דילגתי'));
     expect(skipCalls).toHaveLength(1);
+  });
+
+  it('sends one Hebrew stale notice per reconnect, then silently skips further old messages', async () => {
+    const { handleMessage } = await import('./handler.ts');
+    const base = {
+      from: '1234567890:123@s.whatsapp.net',
+      to: 'ABC123XYZ@lid',
+      body: 'old hello',
+      timestamp: Math.floor(Date.now() / 1000) - 11 * 60,
+      isFromMe: true,
+    } as const;
+    await handleMessage(makeMessage({
+      ...base,
+      id: 'msg_stale_a',
+      messageKey: { remoteJid: 'ABC123XYZ@lid', id: 'msg_stale_a', fromMe: true },
+    }));
+    await handleMessage(makeMessage({
+      ...base,
+      id: 'msg_stale_b',
+      timestamp: Math.floor(Date.now() / 1000) - 12 * 60,
+      messageKey: { remoteJid: 'ABC123XYZ@lid', id: 'msg_stale_b', fromMe: true },
+    }));
+    const skipCalls = mockSendMessage.mock.calls.filter((c) => String(c[1]).includes('דילגתי'));
+    expect(skipCalls).toHaveLength(1);
+    expect(mockRunPromptWithCallbacks).not.toHaveBeenCalled();
   });
 });

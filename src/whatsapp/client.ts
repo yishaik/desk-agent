@@ -15,33 +15,46 @@ import { createChildLogger } from '../core/logger.ts';
 import { loadSettings, updateSettings } from '../core/settings.ts';
 import type { PairingState, Message, MessageKey } from '../core/types.ts';
 import { bareJid } from './self-chat.ts';
+import { extractMessageBody } from './inbound.ts';
 
 const log = createChildLogger('whatsapp');
 
 const VERSION_CACHE_PATH = join(config.dataDir, 'wa-version.json');
-/** Pinned WA protocol version (#156). Do not hit GitHub on boot. */
-export const PINNED_WA_VERSION: [number, number, number] = [2, 3000, 1015629576];
-export const MEDIA_NO_TEXT_BODY = '__desk_agent_media_no_text__';
+
+export const PINNED_BAILEYS_VERSION: [number, number, number] = [2, 3000, 1015629576];
 
 interface VersionCache {
   version: [number, number, number];
   fetchedAt: string;
 }
 
-async function fetchVersionWithFallback(): Promise<[number, number, number]> {
+/**
+ * Pin the Baileys protocol version so boot does not require GitHub (#156).
+ * Prefer a previously cached file when present; otherwise the hardcoded pin.
+ */
+export function resolvePinnedBaileysVersion(): [number, number, number] {
   try {
     if (existsSync(VERSION_CACHE_PATH)) {
       const data = JSON.parse(readFileSync(VERSION_CACHE_PATH, 'utf8')) as VersionCache;
-      if (data.version) {
-        log.debug({ version: data.version }, 'Using cached Baileys version (no GitHub fetch)');
-        return data.version;
+      if (
+        Array.isArray(data.version) &&
+        data.version.length === 3 &&
+        data.version.every((n) => typeof n === 'number')
+      ) {
+        log.info({ version: data.version }, 'Using cached Baileys version');
+        return data.version as [number, number, number];
       }
     }
   } catch {
     // Ignore read errors
   }
-  log.info({ version: PINNED_WA_VERSION }, 'Using pinned Baileys version (no GitHub fetch)');
-  return PINNED_WA_VERSION;
+
+  log.info({ version: PINNED_BAILEYS_VERSION }, 'Using pinned Baileys version');
+  return PINNED_BAILEYS_VERSION;
+}
+
+function digitsOnly(value: string | undefined | null): string {
+  return (value ?? '').replace(/\D/g, '');
 }
 
 export type MessageHandler = (message: Message) => Promise<void>;
@@ -56,7 +69,7 @@ export class WhatsAppClient {
   private ownerLid: string | null = null;
   private warnedNoLid = false;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
-  /** One Hebrew stale-skip notice per reconnect (#155 CHANGE THIS). */
+  /** One Hebrew stale-skip notice per reconnect (PR 160 CHANGE THIS). */
   private staleSkipNotified = false;
 
   async connect(): Promise<void> {
@@ -76,7 +89,7 @@ export class WhatsAppClient {
     }
 
     const { state, saveCreds } = await useMultiFileAuthState(authDir);
-    const version = await fetchVersionWithFallback();
+    const version = resolvePinnedBaileysVersion();
 
     const baileysLogger = pino({ level: 'silent' });
 
@@ -261,7 +274,7 @@ export class WhatsAppClient {
       return;
     }
 
-    const body = this.extractMessageBody(msg.message);
+    const body = extractMessageBody(msg.message);
     if (!body) return;
 
     const messageKey: MessageKey = {
@@ -312,19 +325,7 @@ export class WhatsAppClient {
     return false;
   }
 
-  private extractMessageBody(message: proto.IMessage): string | null {
-    if (message.conversation) return message.conversation;
-    if (message.extendedTextMessage?.text) return message.extendedTextMessage.text;
-    if (message.imageMessage) return message.imageMessage.caption || MEDIA_NO_TEXT_BODY;
-    if (message.videoMessage) return message.videoMessage.caption || MEDIA_NO_TEXT_BODY;
-    if (message.documentMessage) return message.documentMessage.caption || MEDIA_NO_TEXT_BODY;
-    if (message.audioMessage || message.stickerMessage || message.locationMessage || message.contactMessage) {
-      return MEDIA_NO_TEXT_BODY;
-    }
-    return null;
-  }
-
-  /** True once per reconnect; caller should send the Hebrew skip notice only then. */
+  /** True once per reconnect; caller sends the Hebrew skip notice only then. */
   takeStaleSkipNotice(): boolean {
     if (this.staleSkipNotified) return false;
     this.staleSkipNotified = true;
@@ -342,7 +343,6 @@ export class WhatsAppClient {
 
     const MAX_LENGTH = 4096;
     const parts = this.splitMessage(text, MAX_LENGTH);
-
     const quotedOpts = quoted
       ? {
           quoted: {
@@ -352,18 +352,20 @@ export class WhatsAppClient {
               fromMe: quoted.fromMe,
               participant: quoted.participant,
             },
-          },
+            message: { conversation: text },
+          } as proto.IWebMessageInfo,
         }
       : undefined;
 
-    for (const part of parts) {
-      await this.socket.sendMessage(jid, { text: part }, quotedOpts);
+    for (let i = 0; i < parts.length; i++) {
+      const part = parts[i]!;
+      await this.socket.sendMessage(jid, { text: part }, i === 0 ? quotedOpts : undefined);
       if (parts.length > 1) {
         await new Promise((r) => setTimeout(r, 500));
       }
     }
 
-    log.debug({ jid, parts: parts.length }, 'Message sent');
+    log.debug({ jid, parts: parts.length, quoted: !!quoted }, 'Message sent');
   }
 
   private splitMessage(text: string, maxLength: number): string[] {
@@ -501,58 +503,85 @@ export class WhatsAppClient {
   }
 
   /**
+   * Wipe auth and reconnect for a fresh QR. Uses socket.end(undefined) only — never a session logout.
+   * Does NOT touch settings.ownerPhone — callers that need a new owner
+   * (repair) must clear it themselves before calling.
+   */
+  private async wipeAuthAndReconnect(reason: 'repair' | 'unpair'): Promise<void> {
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
+
+    if (this.socket) {
+      this.removeSocketListeners();
+      this.socket.end(undefined);
+      this.socket = null;
+    }
+
+    this.pairingState = { isPaired: false };
+    this.ownerJid = null;
+    this.ownerLid = null;
+    this.warnedNoLid = false;
+    this.reconnectAttempts = 0;
+
+    const authDir = join(config.dataDir, 'whatsapp-auth');
+    rmSync(authDir, { recursive: true, force: true });
+    log.info({ reason }, 'Wiped WhatsApp auth');
+
+    await this.connect();
+  }
+
+  /**
    * Explicit owner repair: wipe auth and reconnect for a fresh QR.
    * The caller must clear settings.ownerPhone before calling this to allow
    * a new phone to become the owner. This is the only allowed owner-change path.
    */
   async repair(): Promise<void> {
     log.info('Starting explicit owner repair');
-
-    if (this.reconnectTimer) {
-      clearTimeout(this.reconnectTimer);
-      this.reconnectTimer = null;
-    }
-
-    if (this.socket) {
-      this.removeSocketListeners();
-      this.socket.end(undefined);
-      this.socket = null;
-    }
-
-    this.pairingState = { isPaired: false };
-    this.ownerJid = null;
-    this.ownerLid = null;
-    this.warnedNoLid = false;
-    this.reconnectAttempts = 0;
-
-    const authDir = join(config.dataDir, 'whatsapp-auth');
-    rmSync(authDir, { recursive: true, force: true });
-    log.info('Wiped WhatsApp auth for repair');
-
-    await this.connect();
+    await this.wipeAuthAndReconnect('repair');
   }
 
-  /** Same-number re-pair: wipe auth + QR, keep ownerPhone. Never logout. */
+  /**
+   * Disconnect and get a fresh QR while keeping the bound ownerPhone.
+   * The next pair must still be the same number (mismatch wipe still applies).
+   */
   async unpair(): Promise<void> {
-    log.info('Starting unpair (keep ownerPhone)');
-    if (this.reconnectTimer) {
-      clearTimeout(this.reconnectTimer);
-      this.reconnectTimer = null;
+    log.info('Starting unpair (ownerPhone unchanged)');
+    await this.wipeAuthAndReconnect('unpair');
+  }
+
+  /**
+   * Request a pairing code for the given phone. If ownerPhone is already set,
+   * the number must match — no silent owner swap.
+   */
+  async requestPairingCode(phone: string): Promise<string> {
+    const normalized = digitsOnly(phone);
+    if (!normalized) {
+      throw new Error('Missing phone number for pairing code');
     }
-    if (this.socket) {
-      this.removeSocketListeners();
-      this.socket.end(undefined);
-      this.socket = null;
+
+    const ownerPhone = loadSettings().ownerPhone;
+    if (ownerPhone && normalized !== digitsOnly(ownerPhone)) {
+      throw new Error(
+        `Phone ${normalized} does not match bound owner ${ownerPhone}`
+      );
     }
-    this.pairingState = { isPaired: false };
-    this.ownerJid = null;
-    this.ownerLid = null;
-    this.warnedNoLid = false;
-    this.reconnectAttempts = 0;
-    const authDir = join(config.dataDir, 'whatsapp-auth');
-    rmSync(authDir, { recursive: true, force: true });
-    log.info('Wiped WhatsApp auth for unpair');
-    await this.connect();
+
+    if (!this.socket) {
+      await this.connect();
+    }
+    if (!this.socket) {
+      throw new Error('WhatsApp client not initialized');
+    }
+
+    const code = await this.socket.requestPairingCode(normalized);
+    this.pairingState = {
+      ...this.pairingState,
+      pairingCode: code,
+    };
+    log.info('Requested WhatsApp pairing code');
+    return code;
   }
 }
 

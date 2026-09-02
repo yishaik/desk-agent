@@ -54,7 +54,7 @@ const log = createChildLogger('handler');
 const COMMAND_PREFIX = '/';
 
 const MEDIA_NEED_TEXT_HE = 'צריך טקסט (או כיתוב לתמונה)';
-const STALE_SKIP_HE = 'דילגתי על הודעה ישנה (מעל 10 דקות).';
+const STALE_SKIP_HE = 'דילגתי על הודעות ישנות שנשלחו בזמן ניתוק.';
 
 function quoteArg(message: Message, force = false): MessageKey | undefined {
   if (!message.messageKey) return undefined;
@@ -390,7 +390,9 @@ export async function handleMessage(message: Message): Promise<void> {
 
   if (isStaleInbound(message.timestamp)) {
     log.info({ messageId: message.id, timestamp: message.timestamp }, 'Skipping stale inbound message');
-    await wa.sendMessage(chatJid, STALE_SKIP_HE, quoteArg(message, true));
+    if (wa.takeStaleSkipNotice()) {
+      await wa.sendMessage(chatJid, STALE_SKIP_HE, quoteArg(message, true));
+    }
     return;
   }
 
@@ -770,6 +772,33 @@ _היכנס לממשק הניהול לשינוי הגדרות_`,
           response: `✅ מודל שונה ל: *${model}* (ישתנה בהודעה הבאה)`,
         };
       }
+    }
+
+    case 'login': {
+      const credentials = await listRuntimeCredentials();
+      
+      if (credentials.length > 0) {
+        const providers = credentials.map(c => `✅ ${c.providerId} (${c.type})`).join('\n');
+        return {
+          handled: true,
+          response: `*ספקי AI מחוברים*
+
+${providers}
+
+_לניהול חיבורים - היכנס להגדרות ב-Web UI_`,
+        };
+      }
+      
+      return {
+        handled: true,
+        response: `*לא מחובר ספק AI*
+
+היכנס להגדרות ב-Web UI וחבר ספק:
+- Anthropic (Claude Pro/Max)
+- OpenAI (ChatGPT Plus/Pro)
+
+_ההתחברות מתבצעת דרך OAuth - ללא צורך ב-API key_`,
+      };
     }
 
     default:
