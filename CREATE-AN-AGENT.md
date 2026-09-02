@@ -207,7 +207,7 @@ docker compose logs -f
 הלקוח מחבר את Gmail ו-Google Calendar מדף **Settings** בממשק הסוכן:
 1. לחיצה על **התחבר** ליד Gmail או Google Calendar
 2. נפתח חלון OAuth — הלקוח מאשר גישה בחשבון Google שלו
-3. החיבור מופיע בטולים
+3. החיבור מופיע בכלים
 
 ### שירותים אחרים (אופציונלי)
 
@@ -235,7 +235,7 @@ docker compose logs -f
 - **Open Connector** - סטטוס ושירותים מחוברים
 - **WhatsApp** - סטטוס ו-re-pair אם נדרש
 
-לכלים נוספים, קיים קישור (אופציונלי) לקונסולת Open Connector בכתובת `https://console.{DOMAIN}`.
+לכלים נוספים, קיים קישור (אופציונלי) לקונסולת Open Connector בכתובת `https://console.{DOMAIN}` (בעברית: "כלים נוספים").
 
 ### עמוד כלים
 

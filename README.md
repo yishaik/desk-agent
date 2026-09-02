@@ -30,7 +30,7 @@ After onboarding, the **Settings** page lets you:
 - **Connect Gmail and Google Calendar** via the Connect buttons (OAuth popup)
 - Check WhatsApp status and re-pair if disconnected
 
-For other integrations or advanced configuration, operators can use the Open Connector console at `https://console.your-domain.com` (optional, extra tools).
+For other integrations or advanced configuration, operators can use the Open Connector console at `https://console.your-domain.com` (optional, extra tools — Hebrew UI: "כלים נוספים").
 
 ## Architecture
 
