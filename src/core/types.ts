@@ -85,6 +85,7 @@ export interface PairingState {
   phoneNumber?: string;
   name?: string;
   error?: string;
+  lid?: 'present' | 'missing';
 }
 
 export const DEFAULT_SETTINGS: Settings = {
