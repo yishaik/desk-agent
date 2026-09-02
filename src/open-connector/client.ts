@@ -117,11 +117,9 @@ export class OpenConnectorClient {
     options: RequestInit = {},
     timeoutMs: number = DEFAULT_TIMEOUT_MS
   ): Promise<T> {
-    // Console endpoints (/api/*) require the admin token; runtime endpoints
-    // (/v1/*) take the runtime token.
-    const token = path.startsWith('/api/')
-      ? (config.connectorAdminToken ?? this.getToken())
-      : this.getToken();
+    // S-07: Agent uses runtime token for all Open Connector calls.
+    // Admin token is reserved for the console host only.
+    const token = this.getToken();
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
       ...(options.headers as Record<string, string> | undefined),
@@ -244,9 +242,8 @@ export class OpenConnectorClient {
 
   async getActionGuide(actionId: string): Promise<string> {
     validateId(actionId, 'action id');
-    // /api/* is admin scope on the connector — the runtime token gets a 401.
-    // Use request() for consistent auth + timeout handling, but we need text, not JSON.
-    const token = config.connectorAdminToken ?? this.getToken();
+    // S-07: Agent uses runtime token for all calls, including action guides.
+    const token = this.getToken();
     const url = `${this.baseUrl}/api/actions/${encodeURIComponent(actionId)}/agent.md`;
     log.debug({ url, method: 'GET' }, 'API request');
 

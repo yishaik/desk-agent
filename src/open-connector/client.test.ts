@@ -356,3 +356,52 @@ describe('Path traversal protection (#30)', () => {
   });
 });
 
+describe('S-07: Admin token isolation (#111)', () => {
+  it('client.ts does NOT reference connectorAdminToken in request logic', async () => {
+    vi.resetModules();
+    const fs = await import('node:fs');
+    const code = fs.readFileSync('./src/open-connector/client.ts', 'utf-8');
+    
+    // The request() method should NOT prefer connectorAdminToken
+    expect(code).not.toMatch(/path\.startsWith\(['"]\/api/);
+    expect(code).not.toMatch(/connectorAdminToken\s*\?\?/);
+  });
+
+  it('request method uses only runtime token (getToken)', async () => {
+    vi.resetModules();
+    const fs = await import('node:fs');
+    const code = fs.readFileSync('./src/open-connector/client.ts', 'utf-8');
+    
+    // Find the request method and verify it uses this.getToken() directly
+    const requestMethod = code.match(/private async request<T>\([^)]+\)[\s\S]*?const token = ([^;]+);/);
+    expect(requestMethod).not.toBeNull();
+    expect(requestMethod![1]).toBe('this.getToken()');
+  });
+
+  it('getActionGuide uses only runtime token', async () => {
+    vi.resetModules();
+    const fs = await import('node:fs');
+    const code = fs.readFileSync('./src/open-connector/client.ts', 'utf-8');
+    
+    // getActionGuide should use this.getToken(), not config.connectorAdminToken
+    const getActionGuide = code.match(/async getActionGuide\([^)]+\)[\s\S]*?const token = ([^;]+);/);
+    expect(getActionGuide).not.toBeNull();
+    expect(getActionGuide![1]).toBe('this.getToken()');
+  });
+
+  it('docker-compose.yml does NOT pass CONNECTOR_ADMIN_TOKEN to agent', async () => {
+    vi.resetModules();
+    const fs = await import('node:fs');
+    const dockerCompose = fs.readFileSync('./docker-compose.yml', 'utf-8');
+    
+    // Find the agent service section
+    const agentSection = dockerCompose.match(/services:\s*\n\s*#.*\n\s*agent:[\s\S]*?(?=\n\s*#.*connector:|$)/);
+    expect(agentSection).not.toBeNull();
+    
+    // CONNECTOR_ADMIN_TOKEN should NOT appear as an env var in agent section
+    // (it can appear as a comment explaining why it was removed)
+    const agentEnv = agentSection![0];
+    expect(agentEnv).not.toMatch(/^\s*-\s*CONNECTOR_ADMIN_TOKEN=/m);
+  });
+});
+
