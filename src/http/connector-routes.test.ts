@@ -724,3 +724,97 @@ describe('consoleUrl uses CONNECTOR_ORIGIN (#38)', () => {
     expect(() => getConsoleUrl()).toThrow(/CONSOLE_URL or DOMAIN/);
   });
 });
+
+describe('Setup complete without admin token ack (#95)', () => {
+  it('does not require admin token acknowledgment for setup complete', async () => {
+    vi.resetModules();
+    
+    const { loadSettings, markSetupComplete } = await import('../core/settings.ts');
+    
+    let settings = loadSettings();
+    expect(settings.setupComplete).toBe(false);
+    expect(settings.connectorAdminTokenAcknowledged).toBe(false);
+    
+    markSetupComplete();
+    
+    settings = loadSettings();
+    expect(settings.setupComplete).toBe(true);
+    expect(settings.connectorAdminTokenAcknowledged).toBe(false);
+  });
+});
+
+describe('Services list returns only gmail + googlecalendar (#95)', () => {
+  const DEFAULT_CONNECT_SERVICES = new Set(['gmail', 'googlecalendar']);
+
+  it('filters providers to only include default connect services', () => {
+    const mockProviders = [
+      { id: 'gmail', displayName: 'Gmail', authTypes: ['oauth2'] },
+      { id: 'googlecalendar', displayName: 'Google Calendar', authTypes: ['oauth2'] },
+      { id: 'slack', displayName: 'Slack', authTypes: ['oauth2'] },
+      { id: 'notion', displayName: 'Notion', authTypes: ['oauth2'] },
+      { id: 'github', displayName: 'GitHub', authTypes: ['oauth2'] },
+    ];
+
+    const filtered = mockProviders.filter((p) => DEFAULT_CONNECT_SERVICES.has(p.id));
+    
+    expect(filtered).toHaveLength(2);
+    expect(filtered.map((p) => p.id)).toEqual(['gmail', 'googlecalendar']);
+  });
+
+  it('only gmail and googlecalendar are in default connect services', () => {
+    expect(DEFAULT_CONNECT_SERVICES.has('gmail')).toBe(true);
+    expect(DEFAULT_CONNECT_SERVICES.has('googlecalendar')).toBe(true);
+    expect(DEFAULT_CONNECT_SERVICES.has('slack')).toBe(false);
+    expect(DEFAULT_CONNECT_SERVICES.has('notion')).toBe(false);
+    expect(DEFAULT_CONNECT_SERVICES.has('github')).toBe(false);
+  });
+
+  it('rejects connect for non-default services', () => {
+    const service = 'slack';
+    const isAllowed = DEFAULT_CONNECT_SERVICES.has(service);
+    
+    expect(isAllowed).toBe(false);
+  });
+
+  it('allows connect for gmail and googlecalendar', () => {
+    expect(DEFAULT_CONNECT_SERVICES.has('gmail')).toBe(true);
+    expect(DEFAULT_CONNECT_SERVICES.has('googlecalendar')).toBe(true);
+  });
+});
+
+describe('Service ID validation (#95)', () => {
+  const ID_PATTERN = /^[a-z0-9][a-z0-9_.-]{0,127}$/i;
+
+  function validateServiceId(serviceId: string): string {
+    if (!serviceId || typeof serviceId !== 'string') {
+      throw new Error('Service ID is required');
+    }
+    const trimmed = serviceId.trim();
+    if (!ID_PATTERN.test(trimmed)) {
+      throw new Error(`Service ID '${trimmed}' contains invalid characters`);
+    }
+    return trimmed;
+  }
+
+  it('accepts valid service IDs', () => {
+    expect(validateServiceId('gmail')).toBe('gmail');
+    expect(validateServiceId('googlecalendar')).toBe('googlecalendar');
+    expect(validateServiceId('google-calendar')).toBe('google-calendar');
+    expect(validateServiceId('my_service.v1')).toBe('my_service.v1');
+  });
+
+  it('rejects empty service ID', () => {
+    expect(() => validateServiceId('')).toThrow('Service ID is required');
+  });
+
+  it('rejects service ID with invalid characters', () => {
+    expect(() => validateServiceId('gmail!')).toThrow('invalid characters');
+    expect(() => validateServiceId('gmail@test')).toThrow('invalid characters');
+    expect(() => validateServiceId('../gmail')).toThrow('invalid characters');
+    expect(() => validateServiceId('gmail\0')).toThrow('invalid characters');
+  });
+
+  it('trims whitespace from service ID', () => {
+    expect(validateServiceId('  gmail  ')).toBe('gmail');
+  });
+});

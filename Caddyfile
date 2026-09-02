@@ -1,25 +1,53 @@
 # Desk Agent — public routing.
 #
 # Two hosts:
-#   {$CONSOLE_DOMAIN}  the Open Connector console (whole origin -> connector). The SPA
-#                      uses absolute paths (/assets, /api/runs, /api/auth/session, ...)
-#                      and a BrowserRouter without basename, so it must own its host.
-#                      OC's own admin-token login gates it (token shown once in the wizard).
-#   {$DOMAIN}          the agent UI/API. Only the OAuth callback is proxied to the
+#   {$CONSOLE_DOMAIN}  the Open Connector console for advanced configuration.
+#                      Protected by forward_auth to the agent — only authenticated
+#                      users (with PAIR_TOKEN cookie) can access. The SPA uses absolute
+#                      paths and a BrowserRouter without basename, so it must own its host.
+#   {$DOMAIN}          the agent UI/API. Only OAuth endpoints are proxied to the
 #                      connector; every other connector endpoint stays internal.
+#
+# Security: Do NOT expose /mcp, /v1, /openapi, /files, /runs, or /connector/ on the
+# main domain. These are internal APIs or handled by the console domain.
+
 {$CONSOLE_DOMAIN:console.localhost} {
+    forward_auth agent:3001 {
+        uri /api/auth/session
+    }
     reverse_proxy connector:3000
     header {
         X-Content-Type-Options nosniff
         X-Frame-Options DENY
         Referrer-Policy strict-origin-when-cross-origin
-        Strict-Transport-Security "max-age=31536000"
+        Strict-Transport-Security "max-age=31536000; includeSubDomains"
+    }
+
+    log {
+        output file /data/console-access.log {
+            roll_size 10mb
+            roll_keep 5
+        }
+        format filter {
+            wrap json
+            fields {
+                request>uri query {
+                    delete token
+                }
+            }
+        }
     }
 }
 
 {$DOMAIN:localhost} {
     # OAuth redirect target (CONNECTOR_ORIGIN/oauth/callback) — must be public.
     handle /oauth/* {
+        reverse_proxy connector:3000
+    }
+
+    # OAuth admin API — needed for starting OAuth flows from the agent.
+    # The agent uses CONNECTOR_ADMIN_TOKEN server-side; customers don't see it.
+    handle /api/oauth/* {
         reverse_proxy connector:3000
     }
 
@@ -32,7 +60,7 @@
         X-Content-Type-Options nosniff
         X-Frame-Options DENY
         Referrer-Policy strict-origin-when-cross-origin
-        Strict-Transport-Security "max-age=31536000"
+        Strict-Transport-Security "max-age=31536000; includeSubDomains"
     }
 
     # Logging with token query parameter filtered out
