@@ -83,27 +83,9 @@ describe('Confirmation Gate', () => {
   });
 });
 
-describe('Mutating Action Patterns', () => {
-  it('matches gmail.sendEmail pattern', () => {
-    const patterns = [
-      /\.send[A-Z_]/i,
-      /\.create[A-Z_]/i,
-      /\.update[A-Z_]/i,
-      /\.delete[A-Z_]/i,
-      /\.remove[A-Z_]/i,
-      /\.post[A-Z_]/i,
-      /\.publish[A-Z_]/i,
-      /send[A-Z]/i,
-      /create[A-Z]/i,
-      /update[A-Z]/i,
-      /delete[A-Z]/i,
-      /remove[A-Z]/i,
-      /post[A-Z]/i,
-      /publish[A-Z]/i,
-    ];
-
-    const requiresConfirmation = (actionId: string) => 
-      patterns.some((pattern) => pattern.test(actionId));
+describe('Confirmation gate uses the real classifier (#27)', () => {
+  it('holds mutating actions and lets read-only ones through', async () => {
+    const { requiresConfirmation } = await import('../core/confirmations.ts');
 
     expect(requiresConfirmation('gmail.sendEmail')).toBe(true);
     expect(requiresConfirmation('gmail.send_email')).toBe(true);
@@ -111,7 +93,7 @@ describe('Mutating Action Patterns', () => {
     expect(requiresConfirmation('slack.postMessage')).toBe(true);
     expect(requiresConfirmation('notion.updatePage')).toBe(true);
     expect(requiresConfirmation('github.deleteIssue')).toBe(true);
-    
+
     expect(requiresConfirmation('gmail.getMessages')).toBe(false);
     expect(requiresConfirmation('calendar.listEvents')).toBe(false);
     expect(requiresConfirmation('notion.getPage')).toBe(false);

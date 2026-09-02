@@ -188,6 +188,34 @@ export function setActionEnabled(serviceId: string, actionId: string, enabled: b
   return settings;
 }
 
+export type ConfirmationMode = 'auto' | 'always' | 'never';
+
+/** Owner/operator override of the confirmation gate for one action ('auto' removes the override). */
+export function setActionConfirmation(serviceId: string, actionId: string, mode: ConfirmationMode): Settings {
+  const settings = loadSettings();
+  let service = settings.services.find((s) => s.id === serviceId);
+  if (!service) {
+    service = { id: serviceId, name: serviceId, enabled: true, disabledActions: [], connectedAt: new Date().toISOString() };
+    settings.services.push(service);
+  }
+  const overrides: Record<string, 'always' | 'never'> = { ...service.confirmationOverrides };
+  if (mode === 'auto') {
+    delete overrides[actionId];
+  } else {
+    overrides[actionId] = mode;
+  }
+  service.confirmationOverrides = overrides;
+  saveSettings(settings);
+  log.info({ serviceId, actionId, mode }, 'Set action confirmation mode');
+  return settings;
+}
+
+export function getActionConfirmationOverride(actionId: string): ConfirmationMode {
+  const serviceId = actionId.split('.')[0] ?? '';
+  const service = loadSettings().services.find((s) => s.id === serviceId);
+  return service?.confirmationOverrides?.[actionId] ?? 'auto';
+}
+
 export function markSetupComplete(): Settings {
   const settings = loadSettings();
   settings.setupComplete = true;
