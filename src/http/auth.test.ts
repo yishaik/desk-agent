@@ -246,4 +246,27 @@ describe('HTTP Authentication Security (server.ts)', () => {
     expect(serverCode).toContain("addRoute('POST', '/logout'");
     expect(serverCode).toContain('PAIR_TOKEN=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0');
   });
+
+  it('SECURITY: POST /auth returns 413 on oversized body, not 401', async () => {
+    const fs = await import('node:fs');
+    const path = await import('node:path');
+    const serverCode = fs.readFileSync(path.join(__dirname, 'server.ts'), 'utf8');
+    
+    expect(serverCode).toContain('class BodyTooLargeError');
+    expect(serverCode).toMatch(/addRoute\('POST', '\/auth'[\s\S]*?BodyTooLargeError[\s\S]*?413/);
+  });
+
+  it('SECURITY: PUT /api/projects/:id/token validates projectId', async () => {
+    const fs = await import('node:fs');
+    const path = await import('node:path');
+    const serverCode = fs.readFileSync(path.join(__dirname, 'server.ts'), 'utf8');
+    
+    const tokenRouteMatch = serverCode.match(/addRoute\('PUT', '\/api\/projects\/:id\/token'[\s\S]*?sendJson\(res, \{ success: true \}\);[\s\S]*?\}\);/);
+    expect(tokenRouteMatch).toBeTruthy();
+    
+    const tokenRoute = tokenRouteMatch![0];
+    expect(tokenRoute).toContain('validateProjectId');
+    expect(tokenRoute).toContain('decodeURIComponent');
+    expect(tokenRoute).toContain('ProjectIdValidationError');
+  });
 });

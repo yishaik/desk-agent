@@ -154,6 +154,13 @@ function redirect(res: ServerResponse, url: string): void {
 
 const MAX_BODY_SIZE = 64 * 1024;
 
+class BodyTooLargeError extends Error {
+  constructor() {
+    super('Request body too large');
+    this.name = 'BodyTooLargeError';
+  }
+}
+
 async function parseBody<T>(req: IncomingMessage): Promise<T> {
   return new Promise((resolve, reject) => {
     let body = '';
@@ -163,7 +170,7 @@ async function parseBody<T>(req: IncomingMessage): Promise<T> {
       size += chunk.length;
       if (size > MAX_BODY_SIZE) {
         req.destroy();
-        reject(new Error('Request body too large'));
+        reject(new BodyTooLargeError());
         return;
       }
       body += chunk;
@@ -463,7 +470,17 @@ addRoute('POST', '/api/ai/sync-model', async (req, res) => {
 });
 
 addRoute('POST', '/auth', async (req, res) => {
-  const body = await parseBody<{ token?: string }>(req).catch(() => ({ token: undefined }));
+  let body: { token?: string };
+  try {
+    body = await parseBody<{ token?: string }>(req);
+  } catch (err) {
+    if (err instanceof BodyTooLargeError) {
+      sendError(res, 'Request body too large', 413);
+      return;
+    }
+    body = { token: undefined };
+  }
+  
   const token = body.token;
 
   if (timingSafeTokenCompare(token, config.pairToken)) {
@@ -646,8 +663,20 @@ addRoute('PUT', '/api/projects/:id/token', async (req, res) => {
     return;
   }
 
+  const rawProjectId = req.url?.split('/')[3] ?? '';
+  
+  let projectId: string;
+  try {
+    projectId = validateProjectId(decodeURIComponent(rawProjectId));
+  } catch (err) {
+    if (err instanceof ProjectIdValidationError) {
+      sendError(res, err.message);
+      return;
+    }
+    throw err;
+  }
+
   const body = await parseBody<{ token?: string }>(req);
-  const projectId = req.url?.split('/')[3] ?? '';
 
   if (body.token) {
     setProjectToken(projectId, body.token);
