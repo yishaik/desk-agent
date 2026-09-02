@@ -184,6 +184,18 @@ Set `CONNECTOR_ORIGIN=https://your-domain.com` so OAuth callbacks route correctl
 - **Set `mem_limit`** on Pi container to prevent OOM killing WhatsApp
 - **Use healthcheck restarts** for automatic recovery
 
+### Version Pinning
+
+Both Claude Code and Open Connector are pinned to tested versions to prevent
+overnight breakage when dependencies release incompatible changes:
+
+- **Claude Code**: `CLAUDE_CODE_VERSION` ARG in Dockerfile (currently `2.1.258`)
+- **Open Connector**: Git SHA in docker-compose.yml (currently `6788fec...`)
+
+Bump these after verifying compatibility — the TUI login driver depends on
+Claude Code's prompt strings and the agent depends on Open Connector's response
+schemas.
+
 ## Security
 
 See [SECURITY.md](SECURITY.md) for the threat model.

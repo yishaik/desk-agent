@@ -44,10 +44,12 @@ services:
       start_period: 30s
 
   # Open Connector - Auth gateway for SaaS apps
-  # Built from yishaik/open-connector fork (has token-grant + action-policy features)
+  # Built from yishaik/open-connector fork (has token-grant + action-policy features).
+  # SHA pinned — response schemas changed in the past (e.g. 113a569); keep in sync
+  # with tested agent code. Bump SHA after verifying OC changes are compatible.
   connector:
     build:
-      context: https://github.com/yishaik/open-connector.git
+      context: https://github.com/yishaik/open-connector.git#6788fec3190ceb7132086167358213f6a314dc32
       dockerfile: docker/Dockerfile
     # Alternative: clone locally and use local path:
     # build:
