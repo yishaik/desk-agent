@@ -58,10 +58,11 @@ curl -fsSL https://get.docker.com | sh
 
 ## שלב 2: הגדרת DNS
 
-הצבע את הדומיין שלך לכתובת ה-IP של השרת:
+הצבע שני A records לאותו שרת — הדומיין של הסוכן ו-host נפרד לקונסולת Open Connector (ה-SPA לא יכול לרוץ תחת `/connector/` על ה-apex):
 
 ```
-A    agent.example.com    → 1.2.3.4
+A    agent.example.com          → 1.2.3.4
+A    console.agent.example.com  → 1.2.3.4
 ```
 
 אם משתמשים ב-Cloudflare — כבו את ה-proxy (עננה אפורה) כדי ש-Caddy יוכל להנפיק תעודות בעצמו.
@@ -91,12 +92,17 @@ PAIR_TOKEN=$(openssl rand -hex 32)
 # מפתח הצפנה לסיסמאות
 CONNECTOR_ENCRYPTION_KEY=$(openssl rand -hex 32)
 
-# הדומיין שלך
+# הדומיין שלך (apex / agent host)
 DOMAIN=agent.example.com
 
 # חשוב! URL ציבורי ל-OAuth callbacks
 # Caddy מנתב /oauth/* ל-connector
 CONNECTOR_ORIGIN=https://agent.example.com
+
+# host נפרד לקונסולת Open Connector (ברירת מחדל: console.$DOMAIN)
+CONSOLE_DOMAIN=console.agent.example.com
+# אופציונלי — דורס את כתובת הקונסול (ברירת מחדל: https://$CONSOLE_DOMAIN)
+# CONSOLE_URL=https://console.agent.example.com
 ```
 
 > **הערה:** טוקן Open Connector נוצר אחרי ההפעלה הראשונה בממשק.
@@ -326,8 +332,8 @@ docker compose up -d
 ## צ׳קליסט להפעלה
 
 - [ ] שרת CX23 / 4GB RAM פועל עם Docker
-- [ ] DNS מצביע לשרת
-- [ ] .env מוגדר (PAIR_TOKEN, CONNECTOR_ENCRYPTION_KEY, DOMAIN, CONNECTOR_ORIGIN)
+- [ ] DNS: שני A records (`DOMAIN` ו-`CONSOLE_DOMAIN` / `console.<domain>`) מצביעים לשרת
+- [ ] .env מוגדר (PAIR_TOKEN, CONNECTOR_ENCRYPTION_KEY, DOMAIN, CONNECTOR_ORIGIN, CONSOLE_DOMAIN)
 - [ ] `docker compose up -d` הצליח
 - [ ] HTTPS פועל (אין אזהרת תעודה)
 - [ ] ממשק ניהול נגיש
