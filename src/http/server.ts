@@ -40,8 +40,7 @@ import {
   resolveActiveModel,
 } from './auth.ts';
 import { writeIdentityFiles } from '../core/identity-files.ts';
-import { clearSession, clearAllSessions, getOrCreateSession } from '../agent/session.ts';
-import { clearClaudeCodeSession } from '../agent/claude-code.ts';
+import { recreateSessionAfterCredentialChange } from '../agent/session.ts';
 import { getSettingsHtml, type SettingsPageData } from './settings-page.ts';
 import { getThemeCss } from './theme.ts';
 
@@ -525,9 +524,7 @@ addRoute('PUT', '/api/settings', async (req, res) => {
   let sessionRecreated = false;
   if (modelChanged || identityChanged) {
     try {
-      clearSession(settings.activeProject);
-      clearClaudeCodeSession(settings.activeProject);
-      await getOrCreateSession(settings.activeProject);
+      await recreateSessionAfterCredentialChange(settings.activeProject);
       sessionRecreated = true;
       log.info(
         { modelChanged, identityChanged, projectId: settings.activeProject },

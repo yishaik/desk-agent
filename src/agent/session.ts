@@ -509,11 +509,35 @@ export function clearAllSessions(): void {
   log.info('All Pi sessions and runtime cleared');
 }
 
+/**
+ * Recreate the Pi session after credential or settings change.
+ * 
+ * Contract with Settings UI: this export must remain stable.
+ * Settings UI calls this after updateSettings + writeIdentityFiles.
+ * 
+ * - clearAllSessions() is required so ModelRuntime is not left on the old model
+ * - Identity files (AGENTS.md) should be written BEFORE calling this
+ * - Claude Code session is also cleared for the project
+ * 
+ * Calling twice is idempotent (recreate is safe).
+ */
 export async function recreateSessionAfterCredentialChange(projectId: string): Promise<void> {
+  const { clearClaudeCodeSession } = await import('./claude-code.ts');
+  
+  writeIdentityFiles(loadSettings());
+  
   clearAllSessions();
+  clearClaudeCodeSession(projectId);
+  
   await getOrCreateSession(projectId);
-  log.info({ projectId }, 'Session recreated after credential change');
+  log.info({ projectId }, 'Session recreated after credential/settings change');
 }
+
+/**
+ * Alias for recreateSessionAfterCredentialChange.
+ * Use when refreshing session after settings save (model or identity change).
+ */
+export const refreshSessionAfterSettingsSave = recreateSessionAfterCredentialChange;
 
 export function getSession(projectId: string): ProjectSession | undefined {
   return activeSessions.get(projectId);
