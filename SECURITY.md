@@ -137,6 +137,16 @@ AI provider login uses OAuth in the browser:
 
 If the OAuth session expires, Settings shows a reconnect prompt. The credentials are managed by the Pi runtime, not stored in plain text.
 
+## Service OAuth Security (Gmail, Calendar)
+
+Gmail and Google Calendar connect via OAuth from the Settings page:
+- User clicks the Connect button next to Gmail or Google Calendar
+- Browser popup opens to Google OAuth consent screen
+- User authorizes access with their Google account
+- Callback returns to the agent; tokens are stored in Open Connector (encrypted)
+
+The agent never sees raw Google credentials — only action metadata and execution results. If the OAuth session expires, Settings shows a reconnect prompt.
+
 ## WhatsApp Session Security
 
 ### Session Storage

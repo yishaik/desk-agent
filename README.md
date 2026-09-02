@@ -27,8 +27,10 @@ After `docker compose up`, the Web UI guides you through:
 After onboarding, the **Settings** page lets you:
 - Review and edit identity (name, business, timezone)
 - Reconnect ChatGPT or Claude if needed
-- Manage Open Connector connections
+- **Connect Gmail and Google Calendar** via the Connect buttons (OAuth popup)
 - Check WhatsApp status and re-pair if disconnected
+
+For other integrations or advanced configuration, operators can use the Open Connector console at `https://console.your-domain.com` (optional, extra tools).
 
 ## Architecture
 
@@ -80,7 +82,7 @@ The Web UI provides:
 2. **Setup Wizard** - First-boot onboarding flow
 3. **Dashboard** - Status overview
 4. **Settings** - Identity, AI login, Open Connector, WhatsApp
-5. **Tools** - Shows CONNECTED Open Connector services only (logo cards + human-readable actions). Empty state links to OC console.
+5. **Tools** - Shows CONNECTED Open Connector services only (logo cards + human-readable actions). Empty state links to Settings for Gmail/Calendar Connect, or the OC console (`https://console.{DOMAIN}`) for other integrations.
 
 Access the UI at `https://your-domain.com/?token=YOUR_PAIR_TOKEN`
 
