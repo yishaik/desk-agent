@@ -774,33 +774,6 @@ _היכנס לממשק הניהול לשינוי הגדרות_`,
       }
     }
 
-    case 'login': {
-      const credentials = await listRuntimeCredentials();
-      
-      if (credentials.length > 0) {
-        const providers = credentials.map(c => `✅ ${c.providerId} (${c.type})`).join('\n');
-        return {
-          handled: true,
-          response: `*ספקי AI מחוברים*
-
-${providers}
-
-_לניהול חיבורים - היכנס להגדרות ב-Web UI_`,
-        };
-      }
-      
-      return {
-        handled: true,
-        response: `*לא מחובר ספק AI*
-
-היכנס להגדרות ב-Web UI וחבר ספק:
-- Anthropic (Claude Pro/Max)
-- OpenAI (ChatGPT Plus/Pro)
-
-_ההתחברות מתבצעת דרך OAuth - ללא צורך ב-API key_`,
-      };
-    }
-
     default:
       return { handled: false };
   }

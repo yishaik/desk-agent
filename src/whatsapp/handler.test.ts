@@ -14,7 +14,7 @@ const mockIsConnected = vi.fn();
 
 const mockGetSelfChatJid = vi.fn();
 const staleSkip = { notified: false };
-const mockRunPromptWithCallbacks = vi.fn(async () => null);
+const mockRunPromptWithCallbacks = vi.fn(async (): Promise<string | null> => null);
 
 vi.mock('./client.ts', () => ({
   getWhatsAppClient: () => ({
@@ -1104,6 +1104,25 @@ describe('U-12 WhatsApp leftovers (#141)', () => {
 
     expect(mockSendMessage).not.toHaveBeenCalled();
     expect(mockRunPromptWithCallbacks).not.toHaveBeenCalled();
+  });
+
+  it('/login is not restored as a command — falls through to the model', async () => {
+    mockRunPromptWithCallbacks.mockResolvedValueOnce('login went to model');
+    const { handleMessage } = await import('./handler.ts');
+
+    await handleMessage(makeMessage({
+      id: 'msg_login_cmd',
+      from: '1234567890:123@s.whatsapp.net',
+      to: 'ABC123XYZ@lid',
+      body: '/login',
+      isFromMe: true,
+      messageKey: { remoteJid: 'ABC123XYZ@lid', id: 'msg_login_cmd', fromMe: true },
+    }));
+
+    expect(mockRunPromptWithCallbacks).toHaveBeenCalled();
+    const bodies = mockSendMessage.mock.calls.map((c) => String(c[1]));
+    expect(bodies).toContain('login went to model');
+    expect(bodies.some((b) => b.includes('ספקי AI'))).toBe(false);
   });
 
   it('unknown /command falls through to the model, not פקודה לא מוכרת', async () => {
