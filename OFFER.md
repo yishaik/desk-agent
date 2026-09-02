@@ -27,7 +27,7 @@
 3. **התקנת המערכת** - תוך שעה
 4. **חיבור WhatsApp** - סריקת QR בממשק
 5. **חיבור AI** - התחברות ל-ChatGPT או Claude בדפדפן
-6. **חיבור שירותים** - Gmail, Calendar, מה שצריך
+6. **חיבור שירותים (אופציונלי)** - Gmail, Calendar מדף Settings
 
 ### מה מקבלים
 
@@ -87,7 +87,7 @@
    - סריקת QR ל-WhatsApp
    - התחברות ל-ChatGPT או Claude (OAuth בדפדפן)
    - הגדרת שם, עסק, אזור זמן
-5. **חיבור שירותים** - Gmail ו-Calendar מדף Settings (כפתורי "התחבר" → OAuth popup)
+5. **חיבור שירותים (אופציונלי)** - Gmail ו-Calendar מדף Settings (כפתורי "התחבר" → OAuth popup)
 6. **הדרכה** - איך להשתמש
 
 **זמן:** כשעה-שעתיים
@@ -99,7 +99,7 @@
 - [ ] דומיין (או שאקנה בשבילך)
 - [ ] גישה ל-DNS של הדומיין
 - [ ] מנוי ChatGPT Plus או Claude Pro (להתחברות בממשק)
-- [ ] חשבון Google (לחיבור Gmail/Calendar)
+- [ ] (אופציונלי) חשבון Google לחיבור Gmail/Calendar דרך Settings
 - [ ] WhatsApp על הטלפון
 
 ## שאלות נפוצות
