@@ -164,6 +164,53 @@ describe('getSettingsHtml', () => {
     expect(html).toContain('providersContainer');
   });
 
+  it('filters out anthropic provider from the provider list', () => {
+    const html = getSettingsHtml(createTestData());
+    
+    // The JavaScript filters out anthropic from the provider list
+    expect(html).toContain("data.filter(p => p.id !== 'anthropic')");
+  });
+
+  it('does not offer anthropic extra-usage connect', () => {
+    const html = getSettingsHtml(createTestData());
+    
+    // No references to anthropic extra usage or ToS-violating path
+    expect(html).not.toContain('extra usage');
+    expect(html).not.toContain('extra-usage');
+  });
+
+  it('does not display PAIR_TOKEN in provider connection', () => {
+    const html = getSettingsHtml(createTestData());
+    
+    // No PAIR_TOKEN in the provider connection flow
+    expect(html).not.toContain("PAIR_TOKEN=");
+    expect(html).not.toMatch(/body:.*PAIR_TOKEN/);
+  });
+
+  it('does not offer npx pi /login path', () => {
+    const html = getSettingsHtml(createTestData());
+    
+    expect(html).not.toContain('npx pi');
+    expect(html).not.toContain('npx @');
+  });
+
+  it('does not contain API key input form for providers', () => {
+    const html = getSettingsHtml(createTestData());
+    
+    // Provider section should not have API key input
+    expect(html).not.toMatch(/api[_-]?key.*input/i);
+    expect(html).not.toContain('sk-ant-');
+    expect(html).not.toContain('sk-proj-');
+  });
+
+  it('shows provider-specific instructions for Claude Code paste modal', () => {
+    const html = getSettingsHtml(createTestData());
+    
+    // Claude Code specific instruction about copying the code Claude shows
+    expect(html).toContain("providerId === 'claude-code'");
+    expect(html).toContain('קוד ש-Claude מציג');
+  });
+
   it('includes zinc/indigo theme colors', () => {
     const html = getSettingsHtml(createTestData());
     

@@ -299,6 +299,24 @@ addRoute('GET', '/api/auth/login/:provider/status', async (req, res, params) => 
 
   try {
     const status = await getLoginStatusAsync(provider);
+    
+    // On success, persist the model and recreate session
+    if (status.status === 'success') {
+      const settings = loadSettings();
+      const defaultModel = provider === 'claude-code' 
+        ? 'claude-code/default' 
+        : provider === 'openai-codex'
+          ? 'openai-codex/gpt-5.3-codex'
+          : settings.model;
+      
+      if (settings.model !== defaultModel) {
+        updateSettings({ model: defaultModel });
+      }
+      
+      const { recreateSessionAfterCredentialChange } = await import('../agent/session.ts');
+      await recreateSessionAfterCredentialChange(settings.activeProject);
+    }
+    
     sendJson(res, { success: true, data: status });
   } catch (err) {
     log.error({ err }, 'Login status error');
@@ -321,6 +339,21 @@ addRoute('POST', '/api/auth/complete', async (req, res) => {
   try {
     const result = await completeLogin(body.provider, body.codeOrRedirectUrl);
     if (result.success) {
+      // On successful login, persist the model and recreate session
+      const settings = loadSettings();
+      const defaultModel = body.provider === 'claude-code' 
+        ? 'claude-code/default' 
+        : body.provider === 'openai-codex'
+          ? 'openai-codex/gpt-5.3-codex'
+          : settings.model;
+      
+      if (settings.model !== defaultModel) {
+        updateSettings({ model: defaultModel });
+      }
+      
+      const { recreateSessionAfterCredentialChange } = await import('../agent/session.ts');
+      await recreateSessionAfterCredentialChange(settings.activeProject);
+      
       sendJson(res, { success: true });
     } else {
       sendError(res, result.error || 'Failed to complete login');
@@ -1582,29 +1615,18 @@ export function getWizardHtml(settings: ReturnType<typeof loadSettings>, pairing
           <div class="provider-info">
             <span class="provider-icon">⭐</span>
             <div>
-              <div class="provider-name">Claude — מנוי Pro/Max (מומלץ)</div>
+              <div class="provider-name">Claude (מנוי)</div>
               <div class="provider-status" id="claude-code-status">בודק...</div>
             </div>
           </div>
           <button id="claude-code-btn" onclick="connectProvider('claude-code')">התחבר</button>
-        </div>
-
-        <div class="provider-card">
-          <div class="provider-info">
-            <span class="provider-icon">🤖</span>
-            <div>
-              <div class="provider-name">Claude (Anthropic · extra usage)</div>
-              <div class="provider-status" id="anthropic-status">בודק...</div>
-            </div>
-          </div>
-          <button id="anthropic-btn" onclick="connectProvider('anthropic')">התחבר</button>
         </div>
         
         <div class="provider-card">
           <div class="provider-info">
             <span class="provider-icon">💬</span>
             <div>
-              <div class="provider-name">ChatGPT (OpenAI)</div>
+              <div class="provider-name">ChatGPT</div>
               <div class="provider-status" id="openai-codex-status">בודק...</div>
             </div>
           </div>

@@ -78,10 +78,20 @@ describe('Server HTML Source Code Requirements', () => {
     });
 
     it('provider element IDs match API provider IDs', () => {
-      expect(serverCode).toContain('id="anthropic-status"');
-      expect(serverCode).toContain('id="anthropic-btn"');
+      // anthropic is hidden from the wizard (Settings: hide Pi anthropic)
+      expect(serverCode).not.toContain('id="anthropic-status"');
+      expect(serverCode).not.toContain('id="anthropic-btn"');
+      // ChatGPT (openai-codex) and Claude Code should be present
       expect(serverCode).toContain('id="openai-codex-status"');
       expect(serverCode).toContain('id="openai-codex-btn"');
+      expect(serverCode).toContain('id="claude-code-status"');
+      expect(serverCode).toContain('id="claude-code-btn"');
+    });
+
+    it('wizard does NOT offer anthropic extra-usage provider', () => {
+      // Pi extra-usage anthropic path is hidden per issue #52
+      expect(serverCode).not.toContain("connectProvider('anthropic')");
+      expect(serverCode).not.toContain('extra usage');
     });
 
     it('step 2 uses hasAiProvider from listProviders, not settings.model', () => {

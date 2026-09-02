@@ -175,10 +175,40 @@ describe('Auth Module', () => {
     }
   });
 
+  it('listProviders includes claude-code provider', async () => {
+    const { listProviders } = await import('./auth.ts');
+    
+    const providers = await listProviders();
+    const claudeCode = providers.find(p => p.id === 'claude-code');
+    
+    expect(claudeCode).toBeDefined();
+    expect(claudeCode?.name).toContain('Claude');
+    expect(claudeCode?.name).toContain('מנוי');
+  });
+
+  it('listProviders does NOT include anthropic (Pi extra-usage)', async () => {
+    const { listProviders } = await import('./auth.ts');
+    
+    const providers = await listProviders();
+    const anthropic = providers.find(p => p.id === 'anthropic');
+    
+    expect(anthropic).toBeUndefined();
+  });
+
+  it('listProviders includes openai-codex (ChatGPT)', async () => {
+    const { listProviders } = await import('./auth.ts');
+    
+    const providers = await listProviders();
+    const chatgpt = providers.find(p => p.id === 'openai-codex');
+    
+    expect(chatgpt).toBeDefined();
+    expect(chatgpt?.name).toBe('ChatGPT');
+  });
+
   it('logout returns result structure', async () => {
     const { logout } = await import('./auth.ts');
     
-    const result = await logout('anthropic');
+    const result = await logout('claude-code');
     
     expect(result).toHaveProperty('success');
     expect(typeof result.success).toBe('boolean');
