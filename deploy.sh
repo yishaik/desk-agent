@@ -142,9 +142,17 @@ fi
 
 # --- 7. Done ---------------------------------------------------------------
 PAIR_TOKEN="$(grep '^PAIR_TOKEN=' .env | cut -d= -f2)"
-say "Deployed! Open the setup wizard:"
+
+say "Deployed!"
 echo
-echo "    https://${DOMAIN}/?token=${PAIR_TOKEN}"
+echo "Open the setup wizard in your browser:"
+echo "    https://${DOMAIN}/"
+echo
+echo "When prompted, enter the PAIR_TOKEN from .env (shown below once)."
+echo "This token is NOT printed to logs — copy it now or retrieve from .env later."
+echo
+# Display token to terminal only (not captured in script logs or Caddy access logs)
+printf '    PAIR_TOKEN: %s\n' "$PAIR_TOKEN"
 echo
 echo "Console (after setup, login with the admin token shown once in the wizard):"
 echo "    https://${CONSOLE_DOMAIN}"

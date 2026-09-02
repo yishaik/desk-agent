@@ -233,10 +233,16 @@ docker compose logs -f
 
 Caddy מטפל ב-TLS וב-routing:
 
-```
-https://your-domain.com/*        → agent:3001
-https://your-domain.com/oauth/*  → connector:3000
-```
+| דומיין | נתיב | יעד | הערות |
+|--------|------|-----|-------|
+| `{$DOMAIN}` | `/oauth/*`, `/api/oauth/*` | `connector:3000` | רק OAuth |
+| `{$DOMAIN}` | `/*` | `agent:3001` | כל השאר |
+| `{$CONSOLE_DOMAIN}` | `/*` | `connector:3000` | קונסול OC (סאבדומיין נפרד) |
+
+**אבטחה:** הדומיין הציבורי (`{$DOMAIN}`) **לא** חושף APIs של Open Connector
+(`/v1/*`, `/mcp`, `/api/connections` וכו׳). תעבורת agent-to-connector
+משתמשת ברשת Docker הפנימית (`http://connector:3000`). קונסולת Open Connector
+נמצאת ב-`{$CONSOLE_DOMAIN}` (reverse_proxy מלא — זה למפעילים בלבד).
 
 ודא ש-`CONNECTOR_ORIGIN` מכיל את ה-URL הציבורי כדי ש-OAuth callbacks יגיעו לקונקטור.
 

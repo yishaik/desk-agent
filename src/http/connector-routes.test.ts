@@ -624,27 +624,24 @@ describe('Actions endpoint returns human-readable actions', () => {
 });
 
 describe('Skills Pack Service IDs', () => {
-  it('uses correct service IDs in inbox-calendar.json', () => {
-    const skillsPath = './skills-pack/inbox-calendar.json';
+  it('uses correct service IDs in inbox-calendar SKILL.md', () => {
+    const skillsPath = './skills-pack/inbox-calendar/SKILL.md';
     const content = readFileSync(skillsPath, 'utf-8');
-    const skill = JSON.parse(content);
     
-    expect(skill.requiredServices).toContain('gmail');
-    expect(skill.requiredServices).toContain('googlecalendar');
-    expect(skill.requiredServices).not.toContain('google-calendar');
+    expect(content).toContain('**gmail**');
+    expect(content).toContain('**googlecalendar**');
+    expect(content).not.toContain('google-calendar');
   });
 
-  it('uses correct action names in inbox-calendar.json', () => {
-    const skillsPath = './skills-pack/inbox-calendar.json';
+  it('uses correct action names in inbox-calendar SKILL.md', () => {
+    const skillsPath = './skills-pack/inbox-calendar/SKILL.md';
     const content = readFileSync(skillsPath, 'utf-8');
-    const skill = JSON.parse(content);
     
-    expect(skill.actions).toContain('gmail.fetch_emails');
-    expect(skill.actions).toContain('gmail.search_threads');
-    expect(skill.actions).toContain('googlecalendar.list_events');
+    expect(content).toContain('gmail.fetch_emails');
+    expect(content).toContain('gmail.search_threads');
+    expect(content).toContain('googlecalendar.list_events');
     
-    expect(skill.actions).not.toContain('gmail.list_messages');
-    expect(skill.actions).not.toContain('gmail.search_messages');
-    expect(skill.actions).not.toContain('google-calendar.list_events');
+    expect(content).not.toContain('gmail.list_messages');
+    expect(content).not.toContain('google-calendar.list_events');
   });
 });

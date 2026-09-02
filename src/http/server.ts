@@ -215,10 +215,17 @@ addRoute('GET', '/settings', async (req, res) => {
   const pairingState = wa.getPairingState();
   const connector = createClient(settings.activeProject);
 
+  let consoleUrl: string;
+  try {
+    consoleUrl = getConsoleUrl();
+  } catch {
+    consoleUrl = '';
+  }
+
   let connectorStatus = {
     healthy: false,
     connectionCount: 0,
-    consoleUrl: config.openConnectorUrl,
+    consoleUrl,
   };
 
   try {
@@ -228,7 +235,7 @@ addRoute('GET', '/settings', async (req, res) => {
       connectorStatus = {
         healthy: true,
         connectionCount: connections.length,
-        consoleUrl: config.openConnectorUrl,
+        consoleUrl,
       };
     }
   } catch {

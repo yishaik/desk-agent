@@ -326,4 +326,31 @@ describe('getSettingsHtml', () => {
     
     expect(html).toContain('MAX_ACTIONS = 40');
   });
+
+  it('consoleUrl should not contain connector:3000 (#38)', () => {
+    const publicConsoleUrl = 'https://oc.example.com';
+    const html = getSettingsHtml(createTestData({
+      connectorStatus: {
+        healthy: true,
+        connectionCount: 1,
+        consoleUrl: publicConsoleUrl,
+      },
+    }));
+    
+    expect(html).toContain(`href="${publicConsoleUrl}"`);
+    expect(html).not.toContain('connector:3000');
+    expect(html).not.toContain('localhost:3000');
+  });
+
+  it('uses empty href when consoleUrl is missing', () => {
+    const html = getSettingsHtml(createTestData({
+      connectorStatus: {
+        healthy: true,
+        connectionCount: 1,
+        consoleUrl: '',
+      },
+    }));
+    
+    expect(html).toContain('href="#"');
+  });
 });

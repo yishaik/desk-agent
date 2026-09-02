@@ -5,67 +5,37 @@
 # Open Connector console on its own subdomain. The console SPA loads assets
 # from absolute paths (/assets/...) and shares /api/auth/* paths with the
 # agent, so it cannot be served under a sub-path of the main domain.
+# Full reverse_proxy is OK here — the console subdomain is NOT public-facing.
 {$CONSOLE_DOMAIN:console.localhost} {
     reverse_proxy connector:3000
 }
 
 {$DOMAIN:localhost} {
-    # Open Connector console - accessible at /connector/
-    handle_path /connector/* {
-        reverse_proxy connector:3000
-    }
-    
-    # OAuth callback from Google and other providers - must go to connector FIRST
+    # OAuth callback from Google and other providers — must reach connector
     # Google redirect_uri is https://{DOMAIN}/oauth/callback
     handle /oauth/callback {
         reverse_proxy connector:3000
     }
-    
+
     # Catch any leftover OAuth paths that shouldn't hit the agent
     handle /oauth/* {
         reverse_proxy connector:3000
     }
-    
-    # Open Connector OAuth API routes - must go to connector BEFORE agent /api/*
+
+    # Open Connector OAuth API routes — must reach connector BEFORE agent /api/*
     handle /api/oauth/* {
         reverse_proxy connector:3000
     }
-    
-    # Open Connector MCP endpoint
-    handle /mcp {
-        reverse_proxy connector:3000
-    }
-    handle /mcp/* {
-        reverse_proxy connector:3000
-    }
-    
-    # Open Connector API routes
-    handle /v1/* {
-        reverse_proxy connector:3000
-    }
-    handle /api/connections* {
-        reverse_proxy connector:3000
-    }
-    handle /api/providers* {
-        reverse_proxy connector:3000
-    }
-    handle /api/actions/* {
-        reverse_proxy connector:3000
-    }
-    handle /api/runs* {
-        reverse_proxy connector:3000
-    }
-    handle /api/files/* {
-        reverse_proxy connector:3000
-    }
-    handle /openapi.json {
-        reverse_proxy connector:3000
-    }
-    handle /docs {
-        reverse_proxy connector:3000
-    }
 
-    # Agent Web UI and API
+    # -------------------------------------------------------------------------
+    # SECURITY: All other Open Connector routes are NOT exposed on the public
+    # domain. Agent-to-connector traffic uses docker-internal http://connector:3000.
+    # The console SPA lives on {$CONSOLE_DOMAIN}. Do not add /v1/*, /mcp,
+    # /api/connections, /api/providers, /api/actions, /api/runs, /api/files,
+    # /openapi.json, or /docs here.
+    # -------------------------------------------------------------------------
+
+    # Agent Web UI and API — all other requests go to the agent
     handle /api/* {
         reverse_proxy agent:3001
     }
@@ -83,15 +53,23 @@
     header {
         X-Content-Type-Options nosniff
         X-Frame-Options DENY
-        X-XSS-Protection "1; mode=block"
         Referrer-Policy strict-origin-when-cross-origin
+        Strict-Transport-Security "max-age=31536000"
     }
 
-    # Logging
+    # Logging with token query parameter filtered out
     log {
         output file /data/access.log {
             roll_size 10mb
             roll_keep 5
+        }
+        format filter {
+            wrap json
+            fields {
+                request>uri query {
+                    delete token
+                }
+            }
         }
     }
 }

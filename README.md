@@ -173,8 +173,17 @@ All configuration is via environment variables. See `.env.example` for the full 
 ### Caddy Configuration
 
 Caddy handles TLS and routing:
-- `https://your-domain.com/*` → `agent:3001`
-- `https://your-domain.com/oauth/*` → `connector:3000`
+
+| Domain | Path | Target | Notes |
+|--------|------|--------|-------|
+| `{$DOMAIN}` | `/oauth/*`, `/api/oauth/*` | `connector:3000` | OAuth flows only |
+| `{$DOMAIN}` | `/*` | `agent:3001` | Everything else |
+| `{$CONSOLE_DOMAIN}` | `/*` | `connector:3000` | Console SPA (separate subdomain) |
+
+**Security:** The public domain (`{$DOMAIN}`) does NOT expose connector runtime/admin APIs
+(`/v1/*`, `/mcp`, `/api/connections`, etc.). Agent-to-connector traffic uses the internal
+Docker network (`http://connector:3000`). The Open Connector console SPA lives on
+`{$CONSOLE_DOMAIN}` (full reverse proxy is OK there — it's operator-only).
 
 Set `CONNECTOR_ORIGIN=https://your-domain.com` so OAuth callbacks route correctly.
 
