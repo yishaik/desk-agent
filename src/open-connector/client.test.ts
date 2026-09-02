@@ -405,3 +405,163 @@ describe('S-07: Admin token isolation (#111)', () => {
   });
 });
 
+describe('S-07: OAuth flows work WITHOUT admin token (#111 product lock)', () => {
+  let originalFetch: typeof globalThis.fetch;
+  let capturedRequests: Array<{ url: string; options: RequestInit }>;
+
+  beforeEach(() => {
+    originalFetch = globalThis.fetch;
+    capturedRequests = [];
+    
+    globalThis.fetch = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const url = typeof input === 'string' ? input : input.toString();
+      capturedRequests.push({ url, options: init ?? {} });
+      
+      // Mock successful OAuth start response
+      if (url.includes('/api/oauth/authorizations')) {
+        return new Response(JSON.stringify({
+          authorizationUrl: 'https://accounts.google.com/o/oauth2/auth?client_id=test',
+          state: 'test-state-123',
+        }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      }
+      
+      // Mock successful connections list
+      if (url.includes('/api/connections') && !init?.method) {
+        return new Response(JSON.stringify({
+          success: true,
+          data: [{ service: 'gmail', connectionName: 'default', authType: 'oauth2' }],
+        }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      }
+      
+      // Mock successful disconnect
+      if (url.includes('/api/connections/') && init?.method === 'DELETE') {
+        return new Response(JSON.stringify({ success: true }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
+      
+      return new Response('Not found', { status: 404 });
+    });
+  });
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+    delete process.env['CONNECTOR_ADMIN_TOKEN'];
+  });
+
+  it('gmail OAuth start returns authorizationUrl with runtime token only (no admin token)', async () => {
+    // Simulate agent env: runtime token present, admin token ABSENT
+    process.env['OPEN_CONNECTOR_TOKEN'] = 'runtime-token-xyz';
+    delete process.env['CONNECTOR_ADMIN_TOKEN'];
+    
+    vi.resetModules();
+    
+    const { updateSettings } = await import('../core/settings.ts');
+    updateSettings({ sharedConnectorToken: 'runtime-token-xyz' });
+    
+    const { OpenConnectorClient } = await import('./client.ts');
+    const client = new OpenConnectorClient();
+    
+    const result = await client.startOAuth('gmail');
+    
+    expect(result.authorizationUrl).toContain('https://accounts.google.com');
+    expect(result.state).toBeDefined();
+    
+    // Verify the request used runtime token, not admin token
+    const oauthRequest = capturedRequests.find(r => r.url.includes('/api/oauth/authorizations'));
+    expect(oauthRequest).toBeDefined();
+    expect(oauthRequest!.options.headers).toBeDefined();
+    const headers = oauthRequest!.options.headers as Record<string, string>;
+    expect(headers['Authorization']).toBe('Bearer runtime-token-xyz');
+  });
+
+  it('googlecalendar OAuth start returns authorizationUrl with runtime token only', async () => {
+    process.env['OPEN_CONNECTOR_TOKEN'] = 'runtime-token-calendar';
+    delete process.env['CONNECTOR_ADMIN_TOKEN'];
+    
+    vi.resetModules();
+    
+    const { updateSettings } = await import('../core/settings.ts');
+    updateSettings({ sharedConnectorToken: 'runtime-token-calendar' });
+    
+    const { OpenConnectorClient } = await import('./client.ts');
+    const client = new OpenConnectorClient();
+    
+    const result = await client.startOAuth('googlecalendar');
+    
+    expect(result.authorizationUrl).toContain('https://accounts.google.com');
+    
+    const oauthRequest = capturedRequests.find(r => r.url.includes('/api/oauth/authorizations'));
+    expect(oauthRequest).toBeDefined();
+    const headers = oauthRequest!.options.headers as Record<string, string>;
+    expect(headers['Authorization']).toBe('Bearer runtime-token-calendar');
+  });
+
+  it('listConnections uses runtime token when admin token is absent', async () => {
+    process.env['OPEN_CONNECTOR_TOKEN'] = 'runtime-list-token';
+    delete process.env['CONNECTOR_ADMIN_TOKEN'];
+    
+    vi.resetModules();
+    
+    const { updateSettings } = await import('../core/settings.ts');
+    updateSettings({ sharedConnectorToken: 'runtime-list-token' });
+    
+    const { OpenConnectorClient } = await import('./client.ts');
+    const client = new OpenConnectorClient();
+    
+    const connections = await client.listConnections();
+    
+    expect(connections).toBeDefined();
+    expect(Array.isArray(connections)).toBe(true);
+    
+    const listRequest = capturedRequests.find(r => r.url.includes('/api/connections') && !r.options.method);
+    expect(listRequest).toBeDefined();
+    const headers = listRequest!.options.headers as Record<string, string>;
+    expect(headers['Authorization']).toBe('Bearer runtime-list-token');
+  });
+
+  it('disconnectService uses runtime token when admin token is absent', async () => {
+    process.env['OPEN_CONNECTOR_TOKEN'] = 'runtime-disconnect-token';
+    delete process.env['CONNECTOR_ADMIN_TOKEN'];
+    
+    vi.resetModules();
+    
+    const { updateSettings } = await import('../core/settings.ts');
+    updateSettings({ sharedConnectorToken: 'runtime-disconnect-token' });
+    
+    const { OpenConnectorClient } = await import('./client.ts');
+    const client = new OpenConnectorClient();
+    
+    await client.disconnectService('gmail', 'default');
+    
+    const deleteRequest = capturedRequests.find(r => r.options.method === 'DELETE');
+    expect(deleteRequest).toBeDefined();
+    const headers = deleteRequest!.options.headers as Record<string, string>;
+    expect(headers['Authorization']).toBe('Bearer runtime-disconnect-token');
+  });
+
+  it('OAuth start uses runtime token even when admin token IS present (ignores admin)', async () => {
+    // Even if admin token somehow exists, the client should use runtime token
+    process.env['OPEN_CONNECTOR_TOKEN'] = 'runtime-token-preferred';
+    process.env['CONNECTOR_ADMIN_TOKEN'] = 'admin-token-should-be-ignored';
+    
+    vi.resetModules();
+    
+    const { updateSettings } = await import('../core/settings.ts');
+    updateSettings({ sharedConnectorToken: 'runtime-token-preferred' });
+    
+    const { OpenConnectorClient } = await import('./client.ts');
+    const client = new OpenConnectorClient();
+    
+    await client.startOAuth('gmail');
+    
+    const oauthRequest = capturedRequests.find(r => r.url.includes('/api/oauth/authorizations'));
+    expect(oauthRequest).toBeDefined();
+    const headers = oauthRequest!.options.headers as Record<string, string>;
+    // MUST use runtime token, NOT admin token
+    expect(headers['Authorization']).toBe('Bearer runtime-token-preferred');
+    expect(headers['Authorization']).not.toContain('admin-token');
+  });
+});
+
