@@ -83,6 +83,25 @@ describe('Confirmation Gate', () => {
   });
 });
 
+describe('Pi Session Security', () => {
+  it('CRITICAL: session tools array does NOT include read tool - prevents prompt injection exfiltration', async () => {
+    const fs = await import('node:fs');
+    const sessionCode = fs.readFileSync('./src/agent/session.ts', 'utf-8');
+    
+    const toolsMatch = sessionCode.match(/tools:\s*\[([^\]]+)\]/);
+    expect(toolsMatch).toBeTruthy();
+    
+    const toolsContent = toolsMatch![1];
+    expect(toolsContent).not.toContain("'read'");
+    expect(toolsContent).not.toContain('"read"');
+    
+    expect(toolsContent).toContain('oc_search_actions');
+    expect(toolsContent).toContain('oc_get_action_guide');
+    expect(toolsContent).toContain('oc_execute_action');
+    expect(toolsContent).toContain('oc_list_connections');
+  });
+});
+
 describe('Confirmation gate uses the real classifier (#27)', () => {
   it('holds mutating actions and lets read-only ones through', async () => {
     const { requiresConfirmation } = await import('../core/confirmations.ts');
