@@ -47,13 +47,10 @@ const log = createChildLogger('handler');
 const COMMAND_PREFIX = '/';
 
 /**
- * Per-project processing queue — prevents concurrent messages from racing on
- * the same Pi or Claude Code session (#33).
- *
- * Each entry is a promise that resolves when processing is complete. New
- * messages chain onto the queue: `queue.set(id, queue.get(id).then(() => process()))`.
+ * Serial queue for non-bypass work. One chain so /project finishes before the
+ * next prompt (#77) and so two prompts cannot share a Pi session (#33).
  */
-const projectQueues = new Map<string, Promise<void>>();
+let messageQueue: Promise<void> = Promise.resolve();
 
 /**
  * Track which projects are currently processing — used to send ⏳ to messages
@@ -281,7 +278,6 @@ export function isSelfChat(message: Message): boolean {
 }
 
 export async function handleMessage(message: Message): Promise<void> {
-  const settings = loadSettings();
   const wa = getWhatsAppClient();
   const ownerJid = wa.getOwnerJid();
 
@@ -303,7 +299,10 @@ export async function handleMessage(message: Message): Promise<void> {
     return;
   }
 
-  const projectId = settings.activeProject;
+  // Snapshot only for enqueue bookkeeping (dedupe + queue-wait reaction).
+  // processMessageQueued reloads settings so /project is visible to the next prompt (#77).
+  const enqueueSettings = loadSettings();
+  const projectId = enqueueSettings.activeProject;
   message.projectId = projectId;
 
   if (getMessage(message.id)) {
@@ -324,14 +323,14 @@ export async function handleMessage(message: Message): Promise<void> {
   if (message.body.startsWith(COMMAND_PREFIX)) {
     const commandName = message.body.slice(COMMAND_PREFIX.length).split(' ')[0]?.toLowerCase();
     if (commandName && QUEUE_BYPASS_COMMANDS.has(commandName)) {
-      await handleCommandDirect(message, settings, wa, chatJid, tracker);
+      await handleCommandDirect(message, loadSettings(), wa, chatJid, tracker);
       return;
     }
   }
 
-  // Everything else (model prompts, confirmations, non-bypass commands) goes
-  // through the per-project queue to prevent concurrent model access (#33).
-  const wasActive = activeProcessing.has(projectId);
+  // Everything else (model prompts, confirmations, /project) goes through the
+  // serial queue so a project switch finishes before the next prompt (#77).
+  const wasActive = activeProcessing.size > 0;
 
   // If the model is already working on this project, send ⏳ immediately so
   // the user knows their message is queued, not lost.
@@ -340,9 +339,9 @@ export async function handleMessage(message: Message): Promise<void> {
     log.debug({ projectId, messageId: message.id }, 'Message queued behind active processing');
   }
 
-  const previousTask = projectQueues.get(projectId) ?? Promise.resolve();
-  const currentTask = previousTask.then(() => processMessageQueued(message, settings, wa, chatJid, tracker));
-  projectQueues.set(projectId, currentTask.catch(() => {})); // swallow errors in queue chain
+  const previousTask = messageQueue;
+  const currentTask = previousTask.then(() => processMessageQueued(message, wa, chatJid, tracker));
+  messageQueue = currentTask.catch(() => {});
 
   await currentTask;
 }
@@ -377,12 +376,13 @@ async function handleCommandDirect(
 
 async function processMessageQueued(
   message: Message,
-  settings: Settings,
   wa: WhatsAppClient,
   chatJid: string,
   tracker: ReactionTracker | null
 ): Promise<void> {
+  const settings = loadSettings();
   const projectId = settings.activeProject;
+  message.projectId = projectId;
   activeProcessing.add(projectId);
 
   try {

@@ -626,3 +626,34 @@ describe('resolveReplyJid — replies stay inside the owner\'s own chat (#73)', 
     expect(resolveReplyJid(undefined, isSelf, null)).toBeNull();
   });
 });
+
+describe('queued /project then prompt uses the new project (#77)', () => {
+  it('runPromptWithCallbacks is called with project b after /project b', async () => {
+    const session = await import('../agent/session.ts');
+    const { handleMessage } = await import('./handler.ts');
+
+    const projectMsg = makeMessage({
+      id: 'msg_project_b',
+      body: '/project b',
+      isFromMe: true,
+      to: 'ABC123XYZ@lid',
+      messageKey: { remoteJid: 'ABC123XYZ@lid', id: 'msg_project_b', fromMe: true },
+    });
+    const promptMsg = makeMessage({
+      id: 'msg_after_project',
+      body: 'check mail',
+      isFromMe: true,
+      to: 'ABC123XYZ@lid',
+      messageKey: { remoteJid: 'ABC123XYZ@lid', id: 'msg_after_project', fromMe: true },
+    });
+
+    await Promise.all([
+      handleMessage(projectMsg),
+      handleMessage(promptMsg),
+    ]);
+
+    expect(session.runPromptWithCallbacks).toHaveBeenCalled();
+    const projectIds = vi.mocked(session.runPromptWithCallbacks).mock.calls.map((c) => c[0]);
+    expect(projectIds).toContain('b');
+  });
+});
