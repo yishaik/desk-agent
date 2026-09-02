@@ -1536,21 +1536,15 @@ export function getLoginHtml(): string {
 }
 
 export function getWizardHtml(settings: ReturnType<typeof loadSettings>, pairingState: { isPaired: boolean; qrCode?: string; qrDataUrl?: string; phoneNumber?: string }, hasAiProvider: boolean = false): string {
-  const hasAdminToken = !!config.connectorAdminToken;
-  const adminTokenAcked = settings.connectorAdminTokenAcknowledged;
-  const needsConnectorAck = hasAdminToken && !adminTokenAcked;
-  
   let step: number;
   if (!pairingState.isPaired) {
     step = 1;
   } else if (!hasAiProvider) {
     step = 2;
-  } else if (needsConnectorAck) {
-    step = 3;
   } else if (!settings.ownerName) {
-    step = 4;
+    step = 3;
   } else {
-    step = 5;
+    step = 4;
   }
   
   return `<!DOCTYPE html>
@@ -1681,10 +1675,6 @@ export function getWizardHtml(settings: ReturnType<typeof loadSettings>, pairing
       </div>
       <div class="step ${step >= 3 ? (step > 3 ? 'done' : 'active') : ''}">
         <span class="step-num">${step > 3 ? '✓' : '3'}</span>
-        <span>Open Connector</span>
-      </div>
-      <div class="step ${step >= 4 ? (step > 4 ? 'done' : 'active') : ''}">
-        <span class="step-num">${step > 4 ? '✓' : '4'}</span>
         <span>זהות</span>
       </div>
     </div>
@@ -2028,125 +2018,6 @@ export function getWizardHtml(settings: ReturnType<typeof loadSettings>, pairing
       loadProviders();
     </script>
     ` : step === 3 ? `
-    <div class="card">
-      <h2>🔌 Open Connector</h2>
-      <p style="color: var(--text-secondary); margin-bottom: 20px;">
-        Open Connector מאפשר לסוכן להתחבר לשירותים חיצוניים כמו Gmail, Calendar ועוד.
-      </p>
-      
-      <div id="connectorStatus" style="margin-bottom: 24px;">
-        <div style="display: flex; align-items: center; gap: 12px; padding: 16px; background: var(--bg-tertiary); border-radius: 8px;">
-          <span id="healthIcon" style="font-size: 24px;">⏳</span>
-          <div>
-            <div id="healthText" style="font-weight: 500;">בודק חיבור...</div>
-            <div id="healthDetails" style="color: var(--text-muted); font-size: 14px;"></div>
-          </div>
-        </div>
-      </div>
-
-      <div id="adminTokenSection" style="display: none; margin-bottom: 24px;">
-        <div style="background: rgba(99, 102, 241, 0.1); border: 1px solid rgba(99, 102, 241, 0.3); border-radius: 8px; padding: 16px;">
-          <h3 style="margin-bottom: 12px; color: #a5b4fc;">🔑 טוקן ניהול (חד-פעמי)</h3>
-          <p style="color: var(--text-secondary); margin-bottom: 12px; font-size: 14px;">
-            שמור את הטוקן הבא במקום בטוח. הוא משמש להתחברות לקונסולת Open Connector ולא יוצג שוב.
-          </p>
-          <div style="background: var(--bg-primary); padding: 12px; border-radius: 6px; font-family: monospace; word-break: break-all; margin-bottom: 16px;">
-            <span id="adminTokenValue"></span>
-            <button onclick="copyToken()" style="margin-right: 8px; padding: 4px 8px; font-size: 12px;">העתק</button>
-          </div>
-          <label style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
-            <input type="checkbox" id="ackCheckbox" style="width: 18px; height: 18px;">
-            <span>שמרתי את הטוקן</span>
-          </label>
-        </div>
-      </div>
-
-      <div id="consoleLink" style="margin-bottom: 24px; display: none;">
-        <a id="consoleLinkHref" href="#" target="_blank" style="display: inline-flex; align-items: center; gap: 8px; color: var(--accent); text-decoration: none;">
-          <span>פתח קונסולת Open Connector</span>
-          <span>←</span>
-        </a>
-      </div>
-
-      <div class="btn-group">
-        <button id="continueBtn" onclick="continueToNext()" disabled>המשך</button>
-      </div>
-    </div>
-    <script>
-      let connectorData = null;
-
-      async function loadConnectorStatus() {
-        try {
-          const res = await fetch('/api/connector/onboarding');
-          const { data } = await res.json();
-          connectorData = data;
-
-          const healthIcon = document.getElementById('healthIcon');
-          const healthText = document.getElementById('healthText');
-          const healthDetails = document.getElementById('healthDetails');
-
-          if (data.healthy) {
-            healthIcon.textContent = '✅';
-            healthText.textContent = 'Open Connector מחובר';
-            healthDetails.textContent = data.connectionCount + ' חיבורים פעילים';
-          } else {
-            healthIcon.textContent = '❌';
-            healthText.textContent = 'Open Connector לא זמין';
-            healthDetails.textContent = 'ודא שהשירות פועל ונסה שוב';
-          }
-
-          if (data.consoleUrl) {
-            document.getElementById('consoleLink').style.display = 'block';
-            document.getElementById('consoleLinkHref').href = data.consoleUrl;
-          }
-
-          if (data.adminToken) {
-            document.getElementById('adminTokenSection').style.display = 'block';
-            document.getElementById('adminTokenValue').textContent = data.adminToken;
-          }
-
-          updateContinueButton();
-        } catch (err) {
-          document.getElementById('healthIcon').textContent = '❌';
-          document.getElementById('healthText').textContent = 'שגיאה בבדיקת החיבור';
-        }
-      }
-
-      function updateContinueButton() {
-        const btn = document.getElementById('continueBtn');
-        const ackCheckbox = document.getElementById('ackCheckbox');
-        
-        if (!connectorData?.healthy) {
-          btn.disabled = true;
-          return;
-        }
-        
-        if (connectorData.requiresAck && !ackCheckbox?.checked) {
-          btn.disabled = true;
-          return;
-        }
-        
-        btn.disabled = false;
-      }
-
-      document.getElementById('ackCheckbox')?.addEventListener('change', updateContinueButton);
-
-      function copyToken() {
-        const token = document.getElementById('adminTokenValue').textContent;
-        navigator.clipboard.writeText(token);
-      }
-
-      async function continueToNext() {
-        const ackCheckbox = document.getElementById('ackCheckbox');
-        if (connectorData?.requiresAck && ackCheckbox?.checked) {
-          await fetch('/api/connector/ack-admin-token', { method: 'POST' });
-        }
-        location.reload();
-      }
-
-      loadConnectorStatus();
-    </script>
-    ` : step === 4 ? `
     <div class="card">
       <h2>👤 זהות</h2>
       <p style="color: var(--text-secondary); margin-bottom: 20px;">

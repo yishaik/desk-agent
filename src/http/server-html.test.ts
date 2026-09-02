@@ -97,15 +97,22 @@ describe('Server HTML Source Code Requirements', () => {
       expect(serverCode).toContain('pollPairing');
     });
 
-    it('wizard steps include AI and Identity', () => {
+    it('wizard steps include WhatsApp, AI, and Identity (no Open Connector)', () => {
       expect(serverCode).toContain('>AI<');
       expect(serverCode).toContain('>WhatsApp<');
-      expect(serverCode).toContain('>Open Connector<');
       expect(serverCode).toContain('>זהות<');
     });
 
-    it('wizard uses טוקן not אסימון for admin token', () => {
-      expect(serverCode).toContain('שמרתי את הטוקן');
+    it('wizard does NOT show Open Connector step (admin token not required)', () => {
+      const wizardStepsMatch = serverCode.match(/<div class="steps">[\s\S]*?<\/div>\s*<\/div>\s*<\/div>/);
+      const stepsHtml = wizardStepsMatch?.[0] || '';
+      expect(stepsHtml).not.toContain('>Open Connector<');
+    });
+
+    it('wizard does NOT require admin token acknowledgment', () => {
+      expect(serverCode).not.toContain('id="adminTokenSection"');
+      expect(serverCode).not.toContain('id="ackCheckbox"');
+      expect(serverCode).not.toContain('needsConnectorAck');
     });
 
     it('imports getThemeCss from theme.ts', () => {
