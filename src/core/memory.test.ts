@@ -105,3 +105,19 @@ describe('Memory - duplicate message handling', () => {
     expect(() => saveMessage(message)).not.toThrow();
   });
 });
+
+describe('pruneMessages keeps the log bounded (#79)', () => {
+  it('keeps only the most recent N messages', async () => {
+    const { saveMessage, pruneMessages, getMessage } = await import('./memory.ts');
+    for (let i = 0; i < 30; i++) {
+      saveMessage({
+        id: `prune_${i}`, from: 'me', to: 'me', body: `m${i}`, timestamp: 1_000 + i,
+        isFromMe: true, projectId: 'default',
+      } as never);
+    }
+    expect(pruneMessages(10)).toBe(20);
+    expect(getMessage('prune_0')).toBeNull();
+    expect(getMessage('prune_29')).not.toBeNull();
+    expect(pruneMessages(10)).toBe(0);
+  });
+});

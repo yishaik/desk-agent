@@ -459,7 +459,10 @@ async function createSession(projectId: string): Promise<ProjectSession> {
     agentDir: piAgentDir,
     modelRuntime,
     model: modelResolution.model,
-    sessionManager: SessionManager.inMemory(projectCwd),
+    // Persist the conversation per project so a container restart resumes it
+    // instead of forgetting everything (#79). continueRecent() reopens the most
+    // recent session file for this cwd, or starts a fresh one.
+    sessionManager: SessionManager.continueRecent(projectCwd, join(piAgentDir, 'sessions', validProjectId)),
     customTools,
     resourceLoader,
     tools: ['oc_search_actions', 'oc_get_action_guide', 'oc_execute_action', 'oc_list_connections'],
