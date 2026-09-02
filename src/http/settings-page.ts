@@ -776,8 +776,11 @@ export function getSettingsHtml(data: SettingsPageData): string {
         const res = await fetch('/api/auth/providers');
         const { data } = await res.json();
         
+        // Filter out anthropic from the Settings list (not offered to customers)
+        const providers = data.filter(p => p.id !== 'anthropic');
+        
         const container = document.getElementById('providersContainer');
-        container.innerHTML = data.map(p => \`
+        container.innerHTML = providers.map(p => \`
           <div class="provider-item">
             <div class="provider-info">
               <span class="provider-name">\${escapeHtml(p.name)}</span>
@@ -820,9 +823,32 @@ export function getSettingsHtml(data: SettingsPageData): string {
           
           startLoginPoll(providerId);
           
+          // Show paste modal with provider-specific instructions
           setTimeout(() => {
-            document.getElementById('pasteModal').classList.add('active');
+            const modal = document.getElementById('pasteModal');
+            const desc = modal.querySelector('.modal-description');
+            if (providerId === 'claude-code') {
+              desc.textContent = 'אשר בחלון שנפתח, העתק את הקוד ש-Claude מציג, והדבק אותו כאן:';
+            } else {
+              desc.textContent = 'אם החלון לא נפתח, העתק את הקישור מכאן והדבק את הקוד שחזר:';
+            }
+            modal.classList.add('active');
           }, 2000);
+        } else if (json.userCode && json.verificationUri) {
+          // device_code flow (ChatGPT/OpenAI)
+          if (popup && !popup.closed) {
+            popup.location = json.verificationUri;
+          } else {
+            window.open(json.verificationUri, '_blank');
+          }
+          
+          // Show user code for device_code flow
+          const modal = document.getElementById('pasteModal');
+          const desc = modal.querySelector('.modal-description');
+          desc.innerHTML = \`קוד האימות שלך: <strong>\${escapeHtml(json.userCode)}</strong><br>הזן אותו בדף שנפתח. אם החלון לא נפתח, עבור ל: <a href="\${escapeHtml(json.verificationUri)}" target="_blank">\${escapeHtml(json.verificationUri)}</a>\`;
+          
+          startLoginPoll(providerId);
+          modal.classList.add('active');
         } else {
           if (popup && !popup.closed) popup.close();
           showToast(json.error || 'שגיאה בהתחברות', 'error');

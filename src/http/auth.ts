@@ -280,9 +280,8 @@ export interface LoginStatus {
 }
 
 const SUPPORTED_PROVIDERS = [
-  { id: 'claude-code', name: 'Claude (מנוי — Claude Code)' },
-  { id: 'anthropic', name: 'Anthropic (Claude · extra usage)' },
-  { id: 'openai-codex', name: 'OpenAI' },
+  { id: 'claude-code', name: 'Claude (מנוי)' },
+  { id: 'openai-codex', name: 'ChatGPT' },
 ];
 
 export async function listProviders(): Promise<ProviderInfo[]> {
