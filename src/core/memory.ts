@@ -134,13 +134,38 @@ export function updateProjectToken(projectId: string, token: string | null): voi
   log.info({ projectId }, 'Updated project token');
 }
 
-export function saveMessage(message: Message): void {
+export function getMessage(id: string): Message | null {
+  const database = getDb();
+  const row = database.prepare('SELECT * FROM messages WHERE id = ?').get(id) as {
+    id: string;
+    project_id: string;
+    from_jid: string;
+    to_jid: string;
+    body: string;
+    timestamp: number;
+    is_from_me: number;
+  } | undefined;
+
+  if (!row) return null;
+
+  return {
+    id: row.id,
+    from: row.from_jid,
+    to: row.to_jid,
+    body: row.body,
+    timestamp: row.timestamp,
+    isFromMe: row.is_from_me === 1,
+    projectId: row.project_id,
+  };
+}
+
+export function saveMessage(message: Message): boolean {
   const database = getDb();
   const projectId = message.projectId ?? 'default';
 
-  database
+  const result = database
     .prepare(
-      `INSERT INTO messages (id, project_id, from_jid, to_jid, body, timestamp, is_from_me)
+      `INSERT OR IGNORE INTO messages (id, project_id, from_jid, to_jid, body, timestamp, is_from_me)
        VALUES (?, ?, ?, ?, ?, ?, ?)`
     )
     .run(
@@ -152,6 +177,12 @@ export function saveMessage(message: Message): void {
       message.timestamp,
       message.isFromMe ? 1 : 0
     );
+
+  if (result.changes === 0) {
+    log.debug({ messageId: message.id }, 'Duplicate message ignored');
+    return false;
+  }
+  return true;
 }
 
 export function closeDatabase(): void {

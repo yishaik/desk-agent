@@ -1,6 +1,6 @@
 import { createChildLogger } from '../core/logger.ts';
 import { loadSettings, updateSettings, getActiveConnectorToken } from '../core/settings.ts';
-import { saveMessage, listProjects, createProject, getProject } from '../core/memory.ts';
+import { saveMessage, listProjects, createProject, getProject, getMessage } from '../core/memory.ts';
 import { slugifyProjectName, ProjectIdValidationError } from '../core/projects.ts';
 import { recordExecutedAction, consumeExecutedActionNotes } from '../core/confirmations.ts';
 import type { Message, MessageKey, Settings } from '../core/types.ts';
@@ -244,13 +244,29 @@ export async function handleMessage(message: Message): Promise<void> {
     return;
   }
 
-  // Reply into the chat the message arrived in (LID self-chat and phone-JID
-  // self-chat are different conversations on the phone).
-  const chatJid = message.messageKey?.remoteJid ?? ownerJid;
+  // Reply ONLY to LID self-chat. Prefer inbound @lid if self-chat, else getSelfChatJid().
+  const inboundJid = message.messageKey?.remoteJid;
+  const isInboundLidSelfChat = inboundJid?.endsWith('@lid') && wa.isSelfJid(inboundJid);
+  const chatJid = isInboundLidSelfChat ? inboundJid : wa.getSelfChatJid();
+
+  if (!chatJid || !chatJid.endsWith('@lid')) {
+    log.warn({ inboundJid, chatJid }, 'No LID self-chat available, skipping message');
+    return;
+  }
 
   const projectId = settings.activeProject;
   message.projectId = projectId;
-  saveMessage(message);
+
+  if (getMessage(message.id)) {
+    log.debug({ messageId: message.id }, 'Duplicate message, skipping');
+    return;
+  }
+
+  const saved = saveMessage(message);
+  if (!saved) {
+    log.debug({ messageId: message.id }, 'Message already processed, skipping');
+    return;
+  }
 
   const tracker = message.messageKey ? createReactionTracker(message.messageKey) : null;
 
