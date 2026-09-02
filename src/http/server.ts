@@ -594,6 +594,31 @@ addRoute('GET', '/api/pairing', async (req, res) => {
   });
 });
 
+addRoute('POST', '/api/pairing/repair', async (req, res) => {
+  if (!isAuthenticated(req)) {
+    sendError(res, 'Unauthorized', 401);
+    return;
+  }
+
+  const wa = getWhatsAppClient();
+  const previousOwner = loadSettings().ownerPhone;
+
+  updateSettings({ ownerPhone: undefined });
+  log.info({ previousOwner }, 'Cleared ownerPhone for explicit repair');
+
+  try {
+    await wa.repair();
+    sendJson(res, {
+      success: true,
+      message: 'איפוס בעלים הושלם. סרוק את קוד ה-QR החדש כדי לצמד טלפון חדש.',
+      previousOwner,
+    });
+  } catch (err) {
+    log.error({ err }, 'Repair failed');
+    sendError(res, 'שגיאה באיפוס הבעלים', 500);
+  }
+});
+
 function redactSettings(settings: ReturnType<typeof loadSettings>): ReturnType<typeof loadSettings> {
   return {
     ...settings,

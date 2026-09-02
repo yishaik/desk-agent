@@ -498,6 +498,38 @@ export class WhatsAppClient {
       log.info('Disconnected from WhatsApp');
     }
   }
+
+  /**
+   * Explicit owner repair: wipe auth and reconnect for a fresh QR.
+   * The caller must clear settings.ownerPhone before calling this to allow
+   * a new phone to become the owner. This is the only allowed owner-change path.
+   */
+  async repair(): Promise<void> {
+    log.info('Starting explicit owner repair');
+
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
+
+    if (this.socket) {
+      this.removeSocketListeners();
+      this.socket.end(undefined);
+      this.socket = null;
+    }
+
+    this.pairingState = { isPaired: false };
+    this.ownerJid = null;
+    this.ownerLid = null;
+    this.warnedNoLid = false;
+    this.reconnectAttempts = 0;
+
+    const authDir = join(config.dataDir, 'whatsapp-auth');
+    rmSync(authDir, { recursive: true, force: true });
+    log.info('Wiped WhatsApp auth for repair');
+
+    await this.connect();
+  }
 }
 
 let clientInstance: WhatsAppClient | null = null;

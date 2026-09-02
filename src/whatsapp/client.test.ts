@@ -260,4 +260,23 @@ describe('S-03: Owner binding — pairing is bound to owner identity', () => {
     const settingsAfter = loadSettings();
     expect(settingsAfter.ownerPhone).toBe('972501234567');
   });
+
+  it('repair() wipes auth and resets state for new owner pairing', async () => {
+    const { WhatsAppClient } = await import('./client.ts');
+    const client = new WhatsAppClient();
+    
+    (client as unknown as { ownerJid: string | null }).ownerJid = '972501234567:0@s.whatsapp.net';
+    (client as unknown as { ownerLid: string | null }).ownerLid = '123@lid';
+    (client as unknown as { pairingState: { isPaired: boolean } }).pairingState = { isPaired: true };
+    
+    const mockConnect = vi.fn().mockResolvedValue(undefined);
+    (client as unknown as { connect: typeof mockConnect }).connect = mockConnect;
+    
+    await client.repair();
+    
+    expect(client.getOwnerJid()).toBeNull();
+    expect(client.getOwnerLid()).toBeNull();
+    expect(client.getPairingState().isPaired).toBe(false);
+    expect(mockConnect).toHaveBeenCalled();
+  });
 });
