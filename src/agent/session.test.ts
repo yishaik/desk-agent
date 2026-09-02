@@ -131,3 +131,100 @@ describe('Pi oc_execute_action — HITL gate (#26)', () => {
     expect(Object.keys(props)).toEqual(['actionId', 'input', 'connectionName']);
   });
 });
+
+describe('extractTextFromMessages - Issue #34', () => {
+  it('returns null when current turn is empty — never reuses previous turn text', async () => {
+    const { extractTextFromMessages } = await import('./session.ts');
+
+    const messages = [
+      // Previous turn (turn 0) - has text
+      { role: 'user', content: [{ type: 'text', text: 'First question' }] },
+      { role: 'assistant', content: [{ type: 'text', text: 'First answer from previous turn' }] },
+      // Current turn (turn 1) - user asked but assistant produced no text (error/quota/tool-only)
+      { role: 'user', content: [{ type: 'text', text: 'Second question' }] },
+      { role: 'assistant', content: [{ type: 'tool_use', name: 'some_tool' }] },
+    ];
+
+    // startIndex=2 means we're looking at messages from the current turn only
+    const result = extractTextFromMessages(messages, 2);
+    
+    // MUST return null, NOT "First answer from previous turn"
+    expect(result).toBeNull();
+  });
+
+  it('extracts text only from current turn when startIndex is provided', async () => {
+    const { extractTextFromMessages } = await import('./session.ts');
+
+    const messages = [
+      // Previous turn
+      { role: 'user', content: [{ type: 'text', text: 'Previous question' }] },
+      { role: 'assistant', content: [{ type: 'text', text: 'Previous answer' }] },
+      // Current turn
+      { role: 'user', content: [{ type: 'text', text: 'Current question' }] },
+      { role: 'assistant', content: [{ type: 'text', text: 'Current answer' }] },
+    ];
+
+    const result = extractTextFromMessages(messages, 2);
+    
+    expect(result).toBe('Current answer');
+  });
+
+  it('collects ALL assistant text from current turn (multiple messages)', async () => {
+    const { extractTextFromMessages } = await import('./session.ts');
+
+    const messages = [
+      // Current turn starts at index 0
+      { role: 'user', content: [{ type: 'text', text: 'Question' }] },
+      { role: 'assistant', content: [{ type: 'text', text: 'First part' }] },
+      { role: 'assistant', content: [{ type: 'tool_use', name: 'some_tool' }] },
+      { role: 'tool_result', content: [{ type: 'text', text: 'Tool result' }] },
+      { role: 'assistant', content: [{ type: 'text', text: 'Second part after tool' }] },
+    ];
+
+    const result = extractTextFromMessages(messages, 0);
+    
+    // Should join all assistant text parts from the current turn
+    expect(result).toContain('First part');
+    expect(result).toContain('Second part after tool');
+  });
+
+  it('returns null for completely empty turn (no assistant messages)', async () => {
+    const { extractTextFromMessages } = await import('./session.ts');
+
+    const messages = [
+      { role: 'user', content: [{ type: 'text', text: 'Question' }] },
+    ];
+
+    const result = extractTextFromMessages(messages, 0);
+    
+    expect(result).toBeNull();
+  });
+
+  it('handles assistant message with errorMessage (provider error)', async () => {
+    const { extractTextFromMessages } = await import('./session.ts');
+
+    const messages = [
+      { role: 'user', content: [{ type: 'text', text: 'Question' }] },
+      { role: 'assistant', content: [], errorMessage: 'Rate limit exceeded' },
+    ];
+
+    const result = extractTextFromMessages(messages, 0);
+    
+    // No text content means null (the caller handles errorMessage separately)
+    expect(result).toBeNull();
+  });
+
+  it('backward compatibility: works without startIndex (extracts from all messages)', async () => {
+    const { extractTextFromMessages } = await import('./session.ts');
+
+    const messages = [
+      { role: 'user', content: [{ type: 'text', text: 'Question' }] },
+      { role: 'assistant', content: [{ type: 'text', text: 'Answer' }] },
+    ];
+
+    // Without startIndex, defaults to 0 — extracts from all messages
+    const result = extractTextFromMessages(messages);
+    
+    expect(result).toBe('Answer');
+  });
+});
