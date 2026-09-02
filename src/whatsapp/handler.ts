@@ -1,6 +1,6 @@
 import { createChildLogger } from '../core/logger.ts';
 import { loadSettings, updateSettings, getActiveConnectorToken } from '../core/settings.ts';
-import { saveMessage, listProjects, createProject, getProject } from '../core/memory.ts';
+import { saveMessage, listProjects, createProject, getProject, getMessage } from '../core/memory.ts';
 import { slugifyProjectName, ProjectIdValidationError } from '../core/projects.ts';
 import { config } from '../core/config.ts';
 import { recordExecutedAction, consumeExecutedActionNotes } from '../core/confirmations.ts';
@@ -251,7 +251,17 @@ export async function handleMessage(message: Message): Promise<void> {
 
   const projectId = settings.activeProject;
   message.projectId = projectId;
-  saveMessage(message);
+
+  if (getMessage(message.id)) {
+    log.debug({ messageId: message.id }, 'Duplicate message, skipping');
+    return;
+  }
+
+  const saved = saveMessage(message);
+  if (!saved) {
+    log.debug({ messageId: message.id }, 'Message already processed, skipping');
+    return;
+  }
 
   const tracker = message.messageKey ? createReactionTracker(message.messageKey) : null;
 

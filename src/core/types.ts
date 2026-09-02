@@ -84,6 +84,7 @@ export interface PairingState {
   qrExpiry?: number;
   phoneNumber?: string;
   name?: string;
+  error?: string;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
