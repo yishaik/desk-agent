@@ -1,9 +1,7 @@
 import { createServer, IncomingMessage, ServerResponse } from 'node:http';
 import { timingSafeEqual } from 'node:crypto';
 import { parse as parseUrl } from 'node:url';
-import { parse as parseQuery } from 'node:querystring';
-import { readFileSync } from 'node:fs';
-import { join, dirname } from 'node:path';
+import { dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import QRCode from 'qrcode';
 import { config } from '../core/config.ts';
@@ -13,17 +11,11 @@ import {
   updateSettings,
   setProjectToken,
   removeProjectToken,
-  setApiKeyMode,
   markSetupComplete,
   isSetupRequired,
-  acknowledgeAdminToken,
-  isAdminTokenAcknowledged,
   addService,
   removeService,
   setActionEnabled,
-  getService,
-  setServiceEnabled,
-  isActionEnabled,
   setActionConfirmation,
   getActionConfirmationOverride,
 } from '../core/settings.ts';
@@ -669,7 +661,7 @@ addRoute('PUT', '/api/settings', async (req, res) => {
     return;
   }
 
-  if (body.model !== undefined && !/^[a-z0-9.\/_-]+$/i.test(body.model)) {
+  if (body.model !== undefined && !/^[a-z0-9./_-]+$/i.test(body.model)) {
     sendError(res, `שם מודל לא תקין`, 400);
     return;
   }
@@ -774,7 +766,7 @@ addRoute('POST', '/api/projects', async (req, res) => {
   sendJson(res, { success: true, data: project });
 });
 
-addRoute('PUT', '/api/projects/:id/token', async (req, res, params) => {
+addRoute('PUT', '/api/projects/:id/token', async (req, res, _params) => {
   if (!isAuthenticated(req)) {
     sendError(res, 'Unauthorized', 401);
     return;
@@ -804,7 +796,7 @@ addRoute('PUT', '/api/projects/:id/token', async (req, res, params) => {
   sendJson(res, { success: true });
 });
 
-addRoute('PUT', '/api/projects/:id/activate', async (req, res, params) => {
+addRoute('PUT', '/api/projects/:id/activate', async (req, res, _params) => {
   if (!isAuthenticated(req)) {
     sendError(res, 'Unauthorized', 401);
     return;
@@ -895,7 +887,7 @@ addRoute('GET', '/api/connector/status', async (req, res) => {
         connectionCount: realConnections.length,
       },
     });
-  } catch (err) {
+  } catch {
     sendJson(res, {
       success: true,
       data: {

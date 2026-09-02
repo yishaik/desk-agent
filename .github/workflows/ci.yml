@@ -1,0 +1,44 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Typecheck
+        run: npm run typecheck
+      - name: Lint (no warnings allowed)
+        run: npx oxlint --max-warnings 0
+      - name: Tests (includes the strip-only boot smoke test)
+        run: npm test
+      - name: Caddyfile validates
+        run: |
+          docker run --rm -v "$PWD/Caddyfile:/etc/caddy/Caddyfile:ro" \
+            -e DOMAIN=agent.example.com -e CONSOLE_DOMAIN=console.example.com \
+            caddy:2-alpine caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
+      - name: Shell syntax
+        run: bash -n deploy.sh
+
+  docker-image:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build the agent image (pinned Claude Code, production deps only)
+        run: docker build -t desk-agent:ci .
+      - name: Image boots the production entry point
+        run: |
+          docker run --rm -e DATA_DIR=/tmp/data -e PAIR_TOKEN=ci -e OPEN_CONNECTOR_URL=http://127.0.0.1:9 \
+            -e OPEN_CONNECTOR_TOKEN=ci desk-agent:ci \
+            node --experimental-strip-types --no-warnings -e "import('./src/http/server.ts').then(()=>{console.log('BOOT_OK');process.exit(0)},e=>{console.error(e);process.exit(2)})"

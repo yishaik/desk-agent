@@ -45,7 +45,6 @@ describe('Settings', () => {
   });
 
   it('SECURITY: atomic write - temp file is renamed', async () => {
-    const fs = await import('node:fs');
     const { loadSettings, updateSettings } = await import('./settings.ts');
     
     loadSettings();
@@ -326,7 +325,7 @@ describe('Issue #36: Settings cache', () => {
     const fs = await import('node:fs');
     
     clearSettingsCache();
-    const settings1 = loadSettings();
+    const _settings1 = loadSettings();
     
     await new Promise((r) => setTimeout(r, 10));
     
