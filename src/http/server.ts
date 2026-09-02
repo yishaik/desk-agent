@@ -192,10 +192,12 @@ addRoute('GET', '/health', async (req, res) => {
   const connector = createClient();
   const connectorHealth = await connector.checkHealth().catch(() => false);
 
+  const pairing = wa.getPairingState();
   sendJson(res, {
     status: 'ok',
     whatsapp: wa.isConnected() ? 'connected' : 'disconnected',
     connector: connectorHealth ? 'healthy' : 'unhealthy',
+    lid: pairing.lid ?? 'missing',
     timestamp: new Date().toISOString(),
   });
 });
@@ -577,7 +579,8 @@ addRoute('GET', '/api/pairing', async (req, res) => {
   if (!state.isPaired && state.qrCode) {
     qrDataUrl = await QRCode.toDataURL(state.qrCode, { width: 280, margin: 1 });
   }
-  sendJson(res, { success: true, data: { ...state, qrDataUrl } });
+  const lid: 'present' | 'missing' = state.lid ?? (wa.getOwnerLid() ? 'present' : 'missing');
+  sendJson(res, { success: true, data: { ...state, qrDataUrl, lid } });
 });
 
 function redactSettings(settings: ReturnType<typeof loadSettings>): ReturnType<typeof loadSettings> {
@@ -2191,7 +2194,7 @@ export function getWizardHtml(settings: ReturnType<typeof loadSettings>, pairing
 </html>`;
 }
 
-export function getDashboardHtml(settings: ReturnType<typeof loadSettings>, pairingState: { isPaired: boolean; phoneNumber?: string; name?: string; selfChat?: 'lid' | 'phone' | 'none' }): string {
+export function getDashboardHtml(settings: ReturnType<typeof loadSettings>, pairingState: { isPaired: boolean; phoneNumber?: string; name?: string; selfChat?: 'lid' | 'phone' | 'none'; lid?: 'present' | 'missing' }): string {
   const safeBotName = escapeHtml(settings.botName);
   const safeName = escapeHtml(pairingState.name);
   const safePhone = escapeHtml(pairingState.phoneNumber);
@@ -2301,8 +2304,9 @@ export function getDashboardHtml(settings: ReturnType<typeof loadSettings>, pair
         <h2>📱 WhatsApp</h2>
         <div class="stat">${pairingState.isPaired ? '✅' : '❌'}</div>
         <div class="stat-label">${pairingState.isPaired ? 'מחובר' : 'מנותק'}</div>
+        <div class="stat-label">LID: ${pairingState.lid === 'present' ? 'קיים' : 'חסר'}</div>
         ${safePhone ? `<p style="margin-top: 12px; color: var(--text-muted);">${safePhone}</p>` : ''}
-        ${pairingState.selfChat === 'phone' ? `<p style="margin-top: 8px; color: var(--warning, #b45309); font-size: 13px;">⚠️ לחשבון אין LID — התשובות נשלחות דרך מספר הטלפון</p>` : ''}
+        ${(pairingState.lid === 'missing' || pairingState.selfChat === 'phone') && pairingState.isPaired ? `<p style="margin-top: 8px; color: var(--warning, #b45309); font-size: 13px;">⚠️ מזהה LID חסר — הסוכן משתמש במספר הטלפון לשיחה עם עצמך</p>` : ''}
       </div>
       <div class="card">
         <h2>📁 פרויקט פעיל</h2>
