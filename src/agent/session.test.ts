@@ -34,51 +34,72 @@ afterEach(() => {
 });
 
 describe('Confirmation Gate', () => {
-  it('requiresConfirmation detects send actions with camelCase', async () => {
-    const sessionModule = await import('./session.ts');
-    
-    const requiresConfirmation = (sessionModule as any).requiresConfirmation || (() => false);
-    
-    if (typeof requiresConfirmation === 'function') {
-      expect(true).toBe(true);
-    }
-  });
-
   it('generates unique confirmation IDs', async () => {
-    const sessionModule = await import('./session.ts');
-    
-    const generateConfirmationId = (sessionModule as any).generateConfirmationId;
-    
-    if (typeof generateConfirmationId === 'function') {
-      const id1 = generateConfirmationId();
-      const id2 = generateConfirmationId();
-      expect(id1).not.toBe(id2);
-      expect(id1).toMatch(/^confirm_\d+_[a-z0-9]+$/);
-    } else {
-      expect(true).toBe(true);
-    }
+    const { generateConfirmationId } = await import('../core/confirmations.ts');
+
+    const id1 = generateConfirmationId();
+    const id2 = generateConfirmationId();
+    expect(id1).not.toBe(id2);
+    expect(id1).toMatch(/^confirm_\d+_[a-z0-9]+$/);
   });
 
-  it('getPendingConfirmation returns pending action', async () => {
-    const { getPendingConfirmation } = await import('./session.ts');
-    
+  it('getPendingConfirmation returns undefined for nonexistent ID', async () => {
+    const { getPendingConfirmation } = await import('../core/confirmations.ts');
+
     const pending = getPendingConfirmation('nonexistent_id');
     expect(pending).toBeUndefined();
   });
 
-  it('confirmAction removes pending confirmation', async () => {
-    const { confirmAction, cancelConfirmation } = await import('./session.ts');
-    
-    const result = confirmAction('nonexistent_id');
-    expect(result).toBe(false);
-    
-    const cancelResult = cancelConfirmation('nonexistent_id');
-    expect(cancelResult).toBe(false);
+  it('createPendingConfirmation stores and retrieves confirmation', async () => {
+    const { createPendingConfirmation, getPendingConfirmation } = await import('../core/confirmations.ts');
+
+    const confirmId = createPendingConfirmation({
+      actionId: 'gmail.sendEmail',
+      input: { to: 'test@example.com', subject: 'Test' },
+    });
+
+    const pending = getPendingConfirmation(confirmId);
+    expect(pending).toBeDefined();
+    expect(pending?.actionId).toBe('gmail.sendEmail');
+    expect(pending?.input).toEqual({ to: 'test@example.com', subject: 'Test' });
+  });
+
+  it('confirmAction consumes the confirmation (returns true then false)', async () => {
+    const { createPendingConfirmation, confirmAction, getPendingConfirmation } = await import('../core/confirmations.ts');
+
+    const confirmId = createPendingConfirmation({
+      actionId: 'gmail.sendEmail',
+      input: {},
+    });
+
+    expect(getPendingConfirmation(confirmId)).toBeDefined();
+
+    const firstConfirm = confirmAction(confirmId);
+    expect(firstConfirm).toBe(true);
+
+    expect(getPendingConfirmation(confirmId)).toBeUndefined();
+
+    const secondConfirm = confirmAction(confirmId);
+    expect(secondConfirm).toBe(false);
+  });
+
+  it('cancelConfirmation removes pending confirmation', async () => {
+    const { createPendingConfirmation, cancelConfirmation, getPendingConfirmation } = await import('../core/confirmations.ts');
+
+    const confirmId = createPendingConfirmation({
+      actionId: 'gmail.sendEmail',
+      input: {},
+    });
+
+    const result = cancelConfirmation(confirmId);
+    expect(result).toBe(true);
+
+    expect(getPendingConfirmation(confirmId)).toBeUndefined();
   });
 
   it('cleanupOldConfirmations does not throw', async () => {
-    const { cleanupOldConfirmations } = await import('./session.ts');
-    
+    const { cleanupOldConfirmations } = await import('../core/confirmations.ts');
+
     expect(() => cleanupOldConfirmations()).not.toThrow();
   });
 });

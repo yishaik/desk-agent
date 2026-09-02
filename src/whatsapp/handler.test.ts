@@ -1,15 +1,73 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { existsSync, rmSync, mkdirSync } from 'node:fs';
+import { isSelfChatJid, bareJid } from './self-chat.ts';
+import type { Message } from '../core/types.ts';
 
 const TEST_DATA_DIR = './test-data-handler';
 
+const mockSendMessage = vi.fn();
+const mockSendReaction = vi.fn();
+const mockGetOwnerJid = vi.fn();
+const mockGetOwnerPhone = vi.fn();
+const mockGetOwnerLid = vi.fn();
+const mockIsConnected = vi.fn();
+
+vi.mock('./client.ts', () => ({
+  getWhatsAppClient: () => ({
+    sendMessage: mockSendMessage,
+    sendReaction: mockSendReaction,
+    getOwnerJid: mockGetOwnerJid,
+    getOwnerPhone: mockGetOwnerPhone,
+    getOwnerLid: mockGetOwnerLid,
+    isConnected: mockIsConnected,
+    isSelfJid: (jid: string | null | undefined) => {
+      const ownerPhone = mockGetOwnerPhone();
+      const ownerLid = mockGetOwnerLid();
+      return isSelfChatJid(jid, ownerPhone, ownerLid);
+    },
+  }),
+  WhatsAppClient: class {},
+}));
+
+vi.mock('../agent/session.ts', () => ({
+  runPromptWithCallbacks: vi.fn(async () => null),
+  clearSession: vi.fn(),
+  getOrCreateSession: vi.fn(async () => ({})),
+  setSessionModel: vi.fn(async () => true),
+  getPendingConfirmation: vi.fn(() => undefined),
+  getLatestPendingConfirmation: vi.fn(() => null),
+  confirmAction: vi.fn(() => false),
+  cancelConfirmation: vi.fn(() => false),
+  cleanupOldConfirmations: vi.fn(),
+  checkCredentialsBeforePrompt: vi.fn(async () => ({ valid: true, model: true, modelId: 'test' })),
+  recreateSessionAfterCredentialChange: vi.fn(async () => {}),
+  CredentialError: class extends Error {},
+}));
+
+vi.mock('../agent/claude-code.ts', () => ({
+  isClaudeCodeConnected: vi.fn(() => false),
+  runClaudeCodePrompt: vi.fn(async () => null),
+  clearClaudeCodeSession: vi.fn(),
+}));
+
+vi.mock('../http/auth.ts', () => ({
+  listRuntimeCredentials: vi.fn(async () => []),
+  resolveActiveModel: vi.fn(async () => ({ valid: true, model: true, modelId: 'test' })),
+}));
+
 beforeEach(() => {
   vi.resetModules();
+  vi.clearAllMocks();
   process.env['DATA_DIR'] = TEST_DATA_DIR;
   if (existsSync(TEST_DATA_DIR)) {
     rmSync(TEST_DATA_DIR, { recursive: true });
   }
   mkdirSync(TEST_DATA_DIR, { recursive: true });
+  
+  mockGetOwnerJid.mockReturnValue('1234567890:123@s.whatsapp.net');
+  mockGetOwnerPhone.mockReturnValue('1234567890');
+  mockGetOwnerLid.mockReturnValue('ABC123XYZ@lid');
+  mockIsConnected.mockReturnValue(true);
 });
 
 afterEach(() => {
@@ -19,141 +77,239 @@ afterEach(() => {
   delete process.env['DATA_DIR'];
 });
 
-describe('Self-Chat Gate', () => {
-  it('isSelfChat returns true for owner self-chat', async () => {
-    const handlerModule = await import('./handler.ts');
-    const isSelfChat = (handlerModule as any).isSelfChat;
+function makeMessage(overrides: Partial<Message>): Message {
+  return {
+    id: 'msg_test',
+    from: '1234567890:123@s.whatsapp.net',
+    to: '1234567890@s.whatsapp.net',
+    body: 'test message',
+    timestamp: Date.now(),
+    isFromMe: false,
+    ...overrides,
+  };
+}
 
-    if (typeof isSelfChat !== 'function') {
-      expect(true).toBe(true);
-      return;
-    }
-
-    const ownerJid = '1234567890:123@s.whatsapp.net';
-    const message = {
-      id: 'msg_1',
-      from: ownerJid,
-      to: '1234567890@s.whatsapp.net',
-      body: 'test',
-      timestamp: Date.now(),
-      isFromMe: true,
-    };
-
-    expect(isSelfChat(message, ownerJid)).toBe(true);
+describe('bareJid', () => {
+  it('extracts phone from standard JID', () => {
+    expect(bareJid('1234567890@s.whatsapp.net')).toBe('1234567890');
   });
 
-  it('isSelfChat returns false for non-owner messages', async () => {
-    const handlerModule = await import('./handler.ts');
-    const isSelfChat = (handlerModule as any).isSelfChat;
-
-    if (typeof isSelfChat !== 'function') {
-      expect(true).toBe(true);
-      return;
-    }
-
-    const ownerJid = '1234567890:123@s.whatsapp.net';
-    const message = {
-      id: 'msg_1',
-      from: '9876543210@s.whatsapp.net',
-      to: ownerJid,
-      body: 'test',
-      timestamp: Date.now(),
-      isFromMe: false,
-    };
-
-    expect(isSelfChat(message, ownerJid)).toBe(false);
+  it('extracts phone from JID with device suffix', () => {
+    expect(bareJid('1234567890:123@s.whatsapp.net')).toBe('1234567890');
   });
 
-  it('CRITICAL: fromMe is NOT authorization - external message to owner is rejected', async () => {
-    const handlerModule = await import('./handler.ts');
-    const isSelfChat = (handlerModule as any).isSelfChat;
+  it('extracts LID without domain', () => {
+    expect(bareJid('ABC123XYZ@lid')).toBe('ABC123XYZ');
+  });
 
-    if (typeof isSelfChat !== 'function') {
-      expect(true).toBe(true);
-      return;
-    }
+  it('returns null for null input', () => {
+    expect(bareJid(null)).toBeNull();
+  });
 
-    const ownerJid = '1234567890:123@s.whatsapp.net';
+  it('returns null for undefined input', () => {
+    expect(bareJid(undefined)).toBeNull();
+  });
+
+  it('returns null for empty string', () => {
+    expect(bareJid('')).toBeNull();
+  });
+});
+
+describe('isSelfChatJid — canonical self-chat gate', () => {
+  const ownerPhone = '1234567890';
+  const ownerLid = 'ABC123XYZ@lid';
+
+  describe('valid self-chat cases', () => {
+    it('accepts self-chat via phone JID', () => {
+      expect(isSelfChatJid('1234567890@s.whatsapp.net', ownerPhone, ownerLid)).toBe(true);
+    });
+
+    it('accepts self-chat via phone JID with device suffix', () => {
+      expect(isSelfChatJid('1234567890:456@s.whatsapp.net', ownerPhone, ownerLid)).toBe(true);
+    });
+
+    it('accepts self-chat via LID', () => {
+      expect(isSelfChatJid('ABC123XYZ@lid', ownerPhone, ownerLid)).toBe(true);
+    });
+  });
+
+  describe('rejects other person/group/broadcast (fromMe is NOT a parameter)', () => {
+    it('rejects message to another person JID', () => {
+      expect(isSelfChatJid('9876543210@s.whatsapp.net', ownerPhone, ownerLid)).toBe(false);
+    });
+
+    it('rejects message to a group', () => {
+      expect(isSelfChatJid('123456789-987654321@g.us', ownerPhone, ownerLid)).toBe(false);
+    });
+
+    it('rejects message to broadcast', () => {
+      expect(isSelfChatJid('status@broadcast', ownerPhone, ownerLid)).toBe(false);
+    });
+  });
+
+  describe('edge cases', () => {
+    it('returns false for null JID', () => {
+      expect(isSelfChatJid(null, ownerPhone, ownerLid)).toBe(false);
+    });
+
+    it('returns false when owner phone and LID are both null', () => {
+      expect(isSelfChatJid('1234567890@s.whatsapp.net', null, null)).toBe(false);
+    });
+
+    it('returns false for undefined JID', () => {
+      expect(isSelfChatJid(undefined, ownerPhone, ownerLid)).toBe(false);
+    });
+  });
+});
+
+describe('handleMessage — self-chat gate integration', () => {
+  it('does NOT send/react when fromMe + otherPerson@s.whatsapp.net', async () => {
+    const { handleMessage } = await import('./handler.ts');
     
-    const externalMessage = {
-      id: 'msg_1',
-      from: '9876543210@s.whatsapp.net',
-      to: '1234567890@s.whatsapp.net',
-      body: 'Hello!',
-      timestamp: Date.now(),
-      isFromMe: false,
-    };
-
-    expect(isSelfChat(externalMessage, ownerJid)).toBe(false);
-  });
-
-  it('CRITICAL: fromMe alone does not grant access for messages to other JIDs', async () => {
-    const handlerModule = await import('./handler.ts');
-    const isSelfChat = (handlerModule as any).isSelfChat;
-
-    if (typeof isSelfChat !== 'function') {
-      expect(true).toBe(true);
-      return;
-    }
-
-    const ownerJid = '1234567890:123@s.whatsapp.net';
-    
-    const messageToOther = {
-      id: 'msg_1',
-      from: ownerJid,
+    const messageToOther = makeMessage({
+      from: '1234567890:123@s.whatsapp.net',
       to: '9876543210@s.whatsapp.net',
-      body: 'Hello someone else!',
-      timestamp: Date.now(),
+      body: 'Hello someone else',
       isFromMe: true,
-    };
+      messageKey: { remoteJid: '9876543210@s.whatsapp.net', id: 'msg_1', fromMe: true },
+    });
 
-    expect(isSelfChat(messageToOther, ownerJid)).toBe(false);
+    await handleMessage(messageToOther);
+
+    expect(mockSendMessage).not.toHaveBeenCalled();
+    expect(mockSendReaction).not.toHaveBeenCalled();
   });
 
-  it('rejects group messages even if fromMe is true', async () => {
-    const handlerModule = await import('./handler.ts');
-    const isSelfChat = (handlerModule as any).isSelfChat;
-
-    if (typeof isSelfChat !== 'function') {
-      expect(true).toBe(true);
-      return;
-    }
-
-    const ownerJid = '1234567890:123@s.whatsapp.net';
+  it('does NOT send/react when fromMe + group@g.us', async () => {
+    const { handleMessage } = await import('./handler.ts');
     
-    const groupMessage = {
-      id: 'msg_1',
-      from: ownerJid,
+    const groupMessage = makeMessage({
+      from: '1234567890:123@s.whatsapp.net',
       to: '123456789-987654321@g.us',
-      body: 'Hello group!',
-      timestamp: Date.now(),
+      body: 'Hello group',
       isFromMe: true,
-    };
+      messageKey: { remoteJid: '123456789-987654321@g.us', id: 'msg_1', fromMe: true },
+    });
 
-    expect(isSelfChat(groupMessage, ownerJid)).toBe(false);
+    await handleMessage(groupMessage);
+
+    expect(mockSendMessage).not.toHaveBeenCalled();
+    expect(mockSendReaction).not.toHaveBeenCalled();
   });
 
-  it('rejects broadcast messages even if fromMe is true', async () => {
-    const handlerModule = await import('./handler.ts');
-    const isSelfChat = (handlerModule as any).isSelfChat;
-
-    if (typeof isSelfChat !== 'function') {
-      expect(true).toBe(true);
-      return;
-    }
-
-    const ownerJid = '1234567890:123@s.whatsapp.net';
+  it('does NOT send/react when fromMe + @broadcast', async () => {
+    const { handleMessage } = await import('./handler.ts');
     
-    const broadcastMessage = {
-      id: 'msg_1',
-      from: ownerJid,
+    const broadcastMessage = makeMessage({
+      from: '1234567890:123@s.whatsapp.net',
       to: 'status@broadcast',
-      body: 'Hello broadcast!',
-      timestamp: Date.now(),
+      body: 'Hello broadcast',
       isFromMe: true,
-    };
+      messageKey: { remoteJid: 'status@broadcast', id: 'msg_1', fromMe: true },
+    });
 
-    expect(isSelfChat(broadcastMessage, ownerJid)).toBe(false);
+    await handleMessage(broadcastMessage);
+
+    expect(mockSendMessage).not.toHaveBeenCalled();
+    expect(mockSendReaction).not.toHaveBeenCalled();
+  });
+
+  it('does NOT send/react when isFromMe is false (inbound from other person)', async () => {
+    const { handleMessage } = await import('./handler.ts');
+    
+    const inboundMessage = makeMessage({
+      from: '9876543210@s.whatsapp.net',
+      to: '1234567890@s.whatsapp.net',
+      body: 'Hello',
+      isFromMe: false,
+      messageKey: { remoteJid: '1234567890@s.whatsapp.net', id: 'msg_1', fromMe: false },
+    });
+
+    await handleMessage(inboundMessage);
+
+    expect(mockSendMessage).not.toHaveBeenCalled();
+    expect(mockSendReaction).not.toHaveBeenCalled();
+  });
+
+  it('DOES process valid self-chat via phone JID', async () => {
+    const { handleMessage } = await import('./handler.ts');
+    
+    const selfChatMessage = makeMessage({
+      from: '1234567890:123@s.whatsapp.net',
+      to: '1234567890@s.whatsapp.net',
+      body: '/help',
+      isFromMe: true,
+      messageKey: { remoteJid: '1234567890@s.whatsapp.net', id: 'msg_1', fromMe: true },
+    });
+
+    await handleMessage(selfChatMessage);
+
+    expect(mockSendMessage).toHaveBeenCalled();
+  });
+
+  it('DOES process valid self-chat via LID', async () => {
+    const { handleMessage } = await import('./handler.ts');
+    
+    const selfChatMessage = makeMessage({
+      from: '1234567890:123@s.whatsapp.net',
+      to: 'ABC123XYZ@lid',
+      body: '/help',
+      isFromMe: true,
+      messageKey: { remoteJid: 'ABC123XYZ@lid', id: 'msg_1', fromMe: true },
+    });
+
+    await handleMessage(selfChatMessage);
+
+    expect(mockSendMessage).toHaveBeenCalled();
+  });
+
+  it('returns early when ownerJid is null', async () => {
+    mockGetOwnerJid.mockReturnValue(null);
+    const { handleMessage } = await import('./handler.ts');
+    
+    const message = makeMessage({
+      body: '/help',
+      isFromMe: true,
+    });
+
+    await handleMessage(message);
+
+    expect(mockSendMessage).not.toHaveBeenCalled();
+  });
+});
+
+describe('isSelfChat — exported function uses canonical gate', () => {
+  it('isSelfChat calls isSelfChatJid with owner phone and LID', async () => {
+    const { isSelfChat } = await import('./handler.ts');
+    
+    const selfMessage = makeMessage({
+      to: '1234567890@s.whatsapp.net',
+      isFromMe: true,
+    });
+    
+    expect(isSelfChat(selfMessage)).toBe(true);
+  });
+
+  it('isSelfChat rejects when isFromMe is false', async () => {
+    const { isSelfChat } = await import('./handler.ts');
+    
+    const notFromMe = makeMessage({
+      to: '1234567890@s.whatsapp.net',
+      isFromMe: false,
+    });
+    
+    expect(isSelfChat(notFromMe)).toBe(false);
+  });
+
+  it('isSelfChat rejects when to is another person', async () => {
+    const { isSelfChat } = await import('./handler.ts');
+    
+    const toOther = makeMessage({
+      to: '9876543210@s.whatsapp.net',
+      isFromMe: true,
+    });
+    
+    expect(isSelfChat(toOther)).toBe(false);
   });
 });
 
@@ -202,7 +358,6 @@ describe('Per-Project Processing Lock - Issue #33', () => {
     const promptCalls: { start: number; end: number; message: string }[] = [];
     let promptCallCounter = 0;
 
-    // Mock the session module to track prompt calls
     vi.doMock('../agent/session.ts', async (importOriginal) => {
       const original = await importOriginal<typeof import('../agent/session.ts')>();
       return {
@@ -217,7 +372,6 @@ describe('Per-Project Processing Lock - Issue #33', () => {
           const start = Date.now();
           promptCalls.push({ start, end: 0, message: text });
           
-          // Simulate async work
           await new Promise(r => setTimeout(r, 50));
           
           promptCalls[callIndex]!.end = Date.now();
@@ -226,10 +380,11 @@ describe('Per-Project Processing Lock - Issue #33', () => {
       };
     });
 
-    // Mock WhatsApp client
     vi.doMock('./client.ts', () => ({
       getWhatsAppClient: vi.fn().mockReturnValue({
         getOwnerJid: () => '1234567890:123@s.whatsapp.net',
+        getOwnerPhone: () => '1234567890',
+        getOwnerLid: () => null,
         isSelfJid: (jid: string) => jid.includes('1234567890'),
         isConnected: () => true,
         sendMessage: vi.fn().mockResolvedValue(undefined),
@@ -238,7 +393,6 @@ describe('Per-Project Processing Lock - Issue #33', () => {
       WhatsAppClient: class {},
     }));
 
-    // Mock settings
     vi.doMock('../core/settings.ts', async (importOriginal) => {
       const original = await importOriginal<typeof import('../core/settings.ts')>();
       return {
@@ -256,7 +410,6 @@ describe('Per-Project Processing Lock - Issue #33', () => {
       };
     });
 
-    // Mock memory
     vi.doMock('../core/memory.ts', () => ({
       saveMessage: vi.fn(),
       listProjects: vi.fn().mockReturnValue([]),
@@ -264,14 +417,12 @@ describe('Per-Project Processing Lock - Issue #33', () => {
       getProject: vi.fn(),
     }));
 
-    // Mock claude-code
     vi.doMock('../agent/claude-code.ts', () => ({
       isClaudeCodeConnected: vi.fn().mockReturnValue(false),
       runClaudeCodePrompt: vi.fn(),
       clearClaudeCodeSession: vi.fn(),
     }));
 
-    // Import handler after mocks
     const { handleMessage } = await import('./handler.ts');
 
     const ownerJid = '1234567890:123@s.whatsapp.net';
@@ -297,28 +448,24 @@ describe('Per-Project Processing Lock - Issue #33', () => {
       messageKey: { remoteJid: selfChatJid, id: 'msg_2', fromMe: true },
     };
 
-    // Fire both messages concurrently (simulating Baileys behavior)
     await Promise.all([
       handleMessage(message1),
       handleMessage(message2),
     ]);
 
-    // Verify both prompts were called
     expect(promptCalls.length).toBe(2);
 
-    // CRITICAL: Verify serial execution — second call should start AFTER first ends
-    // This proves the queue is working
     const [first, second] = promptCalls.sort((a, b) => a.start - b.start);
     
-    // The second prompt must start after the first prompt ends (serial, not parallel)
     expect(second!.start).toBeGreaterThanOrEqual(first!.end);
   });
 
   it('queue-bypass commands (/status, /help) run immediately outside queue', async () => {
-    // This test verifies that status/help commands don't wait in the queue
     vi.doMock('./client.ts', () => ({
       getWhatsAppClient: vi.fn().mockReturnValue({
         getOwnerJid: () => '1234567890:123@s.whatsapp.net',
+        getOwnerPhone: () => '1234567890',
+        getOwnerLid: () => null,
         isSelfJid: (jid: string) => jid.includes('1234567890'),
         isConnected: () => true,
         sendMessage: vi.fn().mockResolvedValue(undefined),
@@ -376,7 +523,32 @@ describe('Per-Project Processing Lock - Issue #33', () => {
 
     await handleMessage(statusMessage);
 
-    // /status should have completed and sent a message
     expect(wa.sendMessage).toHaveBeenCalled();
+  });
+});
+
+describe('Gate mutation safety', () => {
+  const ownerPhone = '1234567890';
+  const ownerLid = 'ABC123XYZ@lid';
+
+  it('fails if isSelfChatJid always returns true (mutation test)', () => {
+    const maliciousJid = '9999999999@s.whatsapp.net';
+    const result = isSelfChatJid(maliciousJid, ownerPhone, ownerLid);
+    expect(result).toBe(false);
+  });
+
+  it('fails if group check is removed (mutation test)', () => {
+    const groupJid = '123456789-987654321@g.us';
+    expect(isSelfChatJid(groupJid, ownerPhone, ownerLid)).toBe(false);
+  });
+
+  it('fails if broadcast check is removed (mutation test)', () => {
+    const broadcastJid = 'status@broadcast';
+    expect(isSelfChatJid(broadcastJid, ownerPhone, ownerLid)).toBe(false);
+  });
+
+  it('must accept valid self-chat (ensures we test both directions)', () => {
+    expect(isSelfChatJid('1234567890@s.whatsapp.net', ownerPhone, ownerLid)).toBe(true);
+    expect(isSelfChatJid('ABC123XYZ@lid', ownerPhone, ownerLid)).toBe(true);
   });
 });

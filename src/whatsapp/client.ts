@@ -319,6 +319,14 @@ export class WhatsAppClient {
     return this.ownerJid;
   }
 
+  getOwnerPhone(): string | null {
+    return this.pairingState.phoneNumber ?? null;
+  }
+
+  getOwnerLid(): string | null {
+    return this.ownerLid;
+  }
+
   isConnected(): boolean {
     return this.pairingState.isPaired;
   }

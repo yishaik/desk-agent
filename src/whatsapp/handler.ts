@@ -38,6 +38,7 @@ import {
   shouldUpdateReaction,
   type ReactionTracker,
 } from './reaction-state.ts';
+import { isSelfChatJid } from './self-chat.ts';
 
 const log = createChildLogger('handler');
 
@@ -209,10 +210,24 @@ async function checkForConfirmationResponse(text: string, projectId: string): Pr
   return { handled: false };
 }
 
-function isSelfChat(message: Message): boolean {
-  // The self-chat may be addressed by phone JID or by LID — the client knows both.
+/**
+ * Handler-level self-chat check. Combines isFromMe with JID verification.
+ * 
+ * This is the ONLY authorization gate for the agent. Only self-chat messages
+ * are processed; all other messages are ignored for security.
+ * 
+ * Note: The client's isOwnerMessage has a known bug (if (isFromMe) return true)
+ * that lets fromMe messages to other chats reach the handler. This function
+ * MUST drop them. fromMe alone is NOT authorization.
+ * 
+ * Uses the canonical isSelfChatJid from self-chat.ts for testability.
+ */
+export function isSelfChat(message: Message): boolean {
+  if (!message.isFromMe) {
+    return false;
+  }
   const wa = getWhatsAppClient();
-  return message.isFromMe && wa.isSelfJid(message.to);
+  return isSelfChatJid(message.to, wa.getOwnerPhone(), wa.getOwnerLid());
 }
 
 export async function handleMessage(message: Message): Promise<void> {
