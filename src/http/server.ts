@@ -161,16 +161,6 @@ addRoute('GET', '/health', async (req, res) => {
   });
 });
 
-addRoute('GET', '/api/auth/check', async (req, res) => {
-  if (isAuthenticated(req)) {
-    res.writeHead(200);
-    res.end();
-  } else {
-    res.writeHead(401);
-    res.end();
-  }
-});
-
 addRoute('GET', '/', async (req, res) => {
   if (!isAuthenticated(req)) {
     const loginHtml = getLoginHtml();

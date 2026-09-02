@@ -58,17 +58,13 @@ curl -fsSL https://get.docker.com | sh
 
 ## שלב 2: הגדרת DNS
 
-הצבע את הדומיין שלך לכתובת ה-IP של השרת. **צריך שתי רשומות** — אחת לסוכן
-ואחת לקונסול של Open Connector (הוא חייב סאבדומיין נפרד, לא נתיב-משנה):
+הצבע את הדומיין שלך לכתובת ה-IP של השרת:
 
 ```
 A    agent.example.com    → 1.2.3.4
-A    oc.example.com       → 1.2.3.4
 ```
 
-בהתאם, ב-`.env` מגדירים גם `CONSOLE_DOMAIN=oc.example.com` ו-
-`CONSOLE_URL=https://oc.example.com`. אם משתמשים ב-Cloudflare — כבו את ה-proxy
-(עננה אפורה) כדי ש-Caddy יוכל להנפיק תעודות בעצמו.
+אם משתמשים ב-Cloudflare — כבו את ה-proxy (עננה אפורה) כדי ש-Caddy יוכל להנפיק תעודות בעצמו.
 
 המתן להתפשטות DNS (עד 48 שעות, בדרך כלל דקות).
 

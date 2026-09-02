@@ -2,22 +2,6 @@
 # Uses DOMAIN environment variable (passed from docker-compose)
 # Defaults to localhost for local development
 
-# ---------------------------------------------------------------------------
-# CONSOLE_DOMAIN: If set, this subdomain also serves the OC console, but
-# GATED with the same PAIR_TOKEN cookie as the main domain. Anonymous admin
-# is never allowed. If you don't need a separate subdomain, leave it unset.
-# ---------------------------------------------------------------------------
-{$CONSOLE_DOMAIN:console.localhost} {
-    # Gate with PAIR_TOKEN cookie — same auth as Settings
-    forward_auth agent:3001 {
-        uri /api/auth/check
-        copy_headers {
-            Cookie
-        }
-    }
-    reverse_proxy connector:3000
-}
-
 {$DOMAIN:localhost} {
     # =========================================================================
     # PUBLIC (no auth): OAuth callback and OAuth API — browser redirects here
@@ -40,10 +24,7 @@
     # Console SPA at /connector/ — strip prefix and proxy to connector root
     handle_path /connector/* {
         forward_auth agent:3001 {
-            uri /api/auth/check
-            copy_headers {
-                Cookie
-            }
+            uri /api/auth/session
         }
         reverse_proxy connector:3000
     }
@@ -51,10 +32,7 @@
     # SPA static assets (absolute paths from the SPA) — gated
     handle /assets/* {
         forward_auth agent:3001 {
-            uri /api/auth/check
-            copy_headers {
-                Cookie
-            }
+            uri /api/auth/session
         }
         reverse_proxy connector:3000
     }
@@ -62,28 +40,19 @@
     # OC APIs the browser console needs — gated (before agent /api/*)
     handle /api/connections* {
         forward_auth agent:3001 {
-            uri /api/auth/check
-            copy_headers {
-                Cookie
-            }
+            uri /api/auth/session
         }
         reverse_proxy connector:3000
     }
     handle /api/providers* {
         forward_auth agent:3001 {
-            uri /api/auth/check
-            copy_headers {
-                Cookie
-            }
+            uri /api/auth/session
         }
         reverse_proxy connector:3000
     }
     handle /api/actions/* {
         forward_auth agent:3001 {
-            uri /api/auth/check
-            copy_headers {
-                Cookie
-            }
+            uri /api/auth/session
         }
         reverse_proxy connector:3000
     }

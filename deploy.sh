@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Desk Agent — one-shot deployment.
 #
-#   ./deploy.sh <domain> [console-domain]
-#   e.g. ./deploy.sh agent.example.com oc.example.com
+#   ./deploy.sh <domain>
+#   e.g. ./deploy.sh agent.example.com
 #
 # What it does, in order:
 #   1. Installs Docker if missing
@@ -14,23 +14,18 @@
 #   6. Prints the wizard login URL
 #
 # Prerequisites you must do yourself BEFORE running:
-#   - Two DNS A records pointing at this server's public IP:
-#       <domain>          (the agent)
-#       <console-domain>  (the Open Connector console)
+#   - DNS A record pointing at this server's public IP:
+#       <domain>  (the agent + console)
 #   - Cloud-level firewall (OCI security list/NSG, Hetzner firewall, etc.)
 #     allowing TCP 80+443 in.
 set -euo pipefail
 trap 'echo "❌ deploy.sh failed at line $LINENO" >&2' ERR
 
 DOMAIN="${1:-}"
-CONSOLE_DOMAIN="${2:-}"
 
 if [ -z "$DOMAIN" ]; then
-  echo "usage: $0 <domain> [console-domain]" >&2
+  echo "usage: $0 <domain>" >&2
   exit 1
-fi
-if [ -z "$CONSOLE_DOMAIN" ]; then
-  CONSOLE_DOMAIN="oc.${DOMAIN}"
 fi
 
 cd "$(dirname "$0")"
@@ -58,8 +53,6 @@ OPEN_CONNECTOR_TOKEN=$(openssl rand -hex 32)
 CONNECTOR_ENCRYPTION_KEY=$(openssl rand -hex 32)
 CONNECTOR_ADMIN_TOKEN=$(openssl rand -hex 32)
 DOMAIN=${DOMAIN}
-CONSOLE_DOMAIN=${CONSOLE_DOMAIN}
-CONSOLE_URL=https://${CONSOLE_DOMAIN}
 CONNECTOR_ORIGIN=https://${DOMAIN}
 CONNECTOR_ALLOWED_ACTIONS=*
 LOG_LEVEL=info
@@ -104,14 +97,12 @@ fi
 
 # --- 5. DNS sanity (warn only) ---------------------------------------------
 PUBLIC_IP="$(curl -s --max-time 8 ifconfig.me || true)"
-for NAME in "$DOMAIN" "$CONSOLE_DOMAIN"; do
-  RESOLVED="$(getent ahostsv4 "$NAME" 2>/dev/null | awk 'NR==1{print $1}' || true)"
-  if [ -z "$RESOLVED" ]; then
-    echo "⚠️  ${NAME} does not resolve yet — create its A record (→ ${PUBLIC_IP:-this server}), HTTPS will fail until it does"
-  elif [ -n "$PUBLIC_IP" ] && [ "$RESOLVED" != "$PUBLIC_IP" ]; then
-    echo "⚠️  ${NAME} resolves to ${RESOLVED}, but this server's public IP is ${PUBLIC_IP}"
-  fi
-done
+RESOLVED="$(getent ahostsv4 "$DOMAIN" 2>/dev/null | awk 'NR==1{print $1}' || true)"
+if [ -z "$RESOLVED" ]; then
+  echo "⚠️  ${DOMAIN} does not resolve yet — create its A record (→ ${PUBLIC_IP:-this server}), HTTPS will fail until it does"
+elif [ -n "$PUBLIC_IP" ] && [ "$RESOLVED" != "$PUBLIC_IP" ]; then
+  echo "⚠️  ${DOMAIN} resolves to ${RESOLVED}, but this server's public IP is ${PUBLIC_IP}"
+fi
 
 # --- 6. Up + wait ----------------------------------------------------------
 say "Building and starting the stack (first build takes a few minutes)"
@@ -154,5 +145,5 @@ echo
 # Display token to terminal only (not captured in script logs or Caddy access logs)
 printf '    PAIR_TOKEN: %s\n' "$PAIR_TOKEN"
 echo
-echo "Console (after setup, login with the admin token shown once in the wizard):"
-echo "    https://${CONSOLE_DOMAIN}"
+echo "Console (requires login with Settings cookie):"
+echo "    https://${DOMAIN}/connector/"
