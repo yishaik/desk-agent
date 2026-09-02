@@ -623,28 +623,82 @@ describe('Actions endpoint returns human-readable actions', () => {
   });
 });
 
-describe('Skills Pack Service IDs', () => {
-  it('uses correct service IDs in inbox-calendar.json', () => {
-    const skillsPath = './skills-pack/inbox-calendar.json';
-    const content = readFileSync(skillsPath, 'utf-8');
-    const skill = JSON.parse(content);
+describe('Skills Pack SKILL.md Format (#40)', () => {
+  it('inbox-calendar uses correct service IDs in SKILL.md', () => {
+    const skillPath = './skills-pack/inbox-calendar/SKILL.md';
+    const content = readFileSync(skillPath, 'utf-8');
     
-    expect(skill.requiredServices).toContain('gmail');
-    expect(skill.requiredServices).toContain('googlecalendar');
-    expect(skill.requiredServices).not.toContain('google-calendar');
+    expect(content).toContain('gmail');
+    expect(content).toContain('googlecalendar');
+    expect(content).not.toContain('google-calendar');
   });
 
-  it('uses correct action names in inbox-calendar.json', () => {
-    const skillsPath = './skills-pack/inbox-calendar.json';
-    const content = readFileSync(skillsPath, 'utf-8');
-    const skill = JSON.parse(content);
+  it('inbox-calendar uses correct action names in SKILL.md', () => {
+    const skillPath = './skills-pack/inbox-calendar/SKILL.md';
+    const content = readFileSync(skillPath, 'utf-8');
     
-    expect(skill.actions).toContain('gmail.fetch_emails');
-    expect(skill.actions).toContain('gmail.search_threads');
-    expect(skill.actions).toContain('googlecalendar.list_events');
+    expect(content).toContain('gmail.fetch_emails');
+    expect(content).toContain('gmail.search_threads');
+    expect(content).toContain('gmail.list_threads');
+    expect(content).toContain('gmail.get_message');
+    expect(content).toContain('gmail.send_email');
+    expect(content).toContain('gmail.reply_email');
+    expect(content).toContain('googlecalendar.list_events');
+    expect(content).toContain('googlecalendar.create_event');
+    expect(content).toContain('googlecalendar.quick_add_event');
     
-    expect(skill.actions).not.toContain('gmail.list_messages');
-    expect(skill.actions).not.toContain('gmail.search_messages');
-    expect(skill.actions).not.toContain('google-calendar.list_events');
+    expect(content).not.toContain('gmail.list_messages');
+  });
+
+  it('all skill packs have SKILL.md files', () => {
+    const skillDirs = ['inbox-calendar', 'light-crm', 'storefront-faq'];
+    for (const dir of skillDirs) {
+      const skillPath = `./skills-pack/${dir}/SKILL.md`;
+      expect(() => readFileSync(skillPath, 'utf-8')).not.toThrow();
+    }
+  });
+
+  it('no JSON skill packs remain', () => {
+    const jsonFiles = ['inbox-calendar.json', 'light-crm.json', 'storefront-faq.json'];
+    for (const file of jsonFiles) {
+      const jsonPath = `./skills-pack/${file}`;
+      expect(() => readFileSync(jsonPath, 'utf-8')).toThrow();
+    }
+  });
+});
+
+describe('consoleUrl uses CONNECTOR_ORIGIN (#38)', () => {
+  it('connectorOrigin is used for console URL, not CONSOLE_URL', async () => {
+    vi.resetModules();
+    process.env['CONNECTOR_ORIGIN'] = 'https://agent.example.com';
+    
+    const { loadConfig } = await import('../core/config.ts');
+    const config = loadConfig();
+    
+    expect(config.connectorOrigin).toBe('https://agent.example.com');
+  });
+
+  it('openConnectorUrl is docker-internal, connectorOrigin is public', async () => {
+    vi.resetModules();
+    process.env['OPEN_CONNECTOR_URL'] = 'http://connector:3000';
+    process.env['CONNECTOR_ORIGIN'] = 'https://agent.example.com';
+    
+    const { loadConfig } = await import('../core/config.ts');
+    const config = loadConfig();
+    
+    expect(config.openConnectorUrl).toBe('http://connector:3000');
+    expect(config.connectorOrigin).toBe('https://agent.example.com');
+    expect(config.connectorOrigin).not.toContain('connector:3000');
+  });
+
+  it('console URL is CONNECTOR_ORIGIN + /connector/', async () => {
+    vi.resetModules();
+    process.env['CONNECTOR_ORIGIN'] = 'https://agent.example.com';
+    process.env['NODE_ENV'] = 'production';
+    
+    const { loadConfig } = await import('../core/config.ts');
+    const config = loadConfig();
+    
+    expect(config.connectorOrigin).toBe('https://agent.example.com');
   });
 });

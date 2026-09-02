@@ -1,29 +1,36 @@
 # Desk Agent Skill Packs
 
-Pre-built skill configurations for common SMB use cases. Each skill pack defines:
+Pre-built skill configurations for common SMB use cases. Each skill pack is a directory containing a `SKILL.md` file with:
 
+- YAML frontmatter (name, description)
 - Required services (Open Connector providers)
-- Available actions
-- System prompts for common tasks
+- Available actions with correct catalog IDs
+- Instructions for common tasks
 - Confirmation requirements for sensitive actions
 - Example interactions
 
 ## Available Packs
 
-### 📬 Inbox & Calendar (`inbox-calendar.json`)
+### 📬 Inbox & Calendar (`inbox-calendar/`)
 
 Email and calendar management using Gmail and Google Calendar.
 
 **Features:**
 - Read and search emails
-- Send emails with draft preview
+- Send emails with confirmation
 - View and manage calendar events
 - Schedule meetings with availability check
 - Daily briefing summaries
 
-**Required Services:** `gmail`, `google-calendar`
+**Required Services:** `gmail`, `googlecalendar`
 
-### 👥 Light CRM (`light-crm.json`)
+**Actions:**
+- `gmail.fetch_emails`, `gmail.get_message`, `gmail.search_threads`, `gmail.list_threads`
+- `gmail.send_email`, `gmail.reply_email`, `gmail.reply_to_thread`
+- `googlecalendar.list_events`, `googlecalendar.list_events_all_calendars`, `googlecalendar.get_event`, `googlecalendar.find_event`
+- `googlecalendar.create_event`, `googlecalendar.quick_add_event`, `googlecalendar.update_event`, `googlecalendar.delete_event`
+
+### 👥 Light CRM (`light-crm/`)
 
 Simple contact management and follow-up tracking without heavy CRM software.
 
@@ -34,9 +41,9 @@ Simple contact management and follow-up tracking without heavy CRM software.
 - Search contact history
 - Weekly follow-up lists
 
-**Required Services:** `notion` or `airtable`, optionally `google-tasks`
+**Required Services:** `notion` or `airtable`, optionally `googletasks`
 
-### 🏪 Storefront FAQ (`storefront-faq.json`)
+### 🏪 Storefront FAQ (`storefront-faq/`)
 
 Answer common business questions from your knowledge base.
 
@@ -47,57 +54,58 @@ Answer common business questions from your knowledge base.
 - Policy explanations
 - Custom FAQ entries
 
-**Required Services:** None (uses stored settings), optionally `notion` for extended KB
+**Required Services:** None (uses stored settings), optionally `notion` or `googledrive` for extended KB
 
 ## Using Skill Packs
 
-1. **Copy to your agent:**
-   ```bash
-   cp skills-pack/inbox-calendar.json .pi/skills/
-   ```
+Skill packs are automatically loaded by Pi from the `skills-pack/` directory via `additionalSkillPaths`. Each skill directory must contain a `SKILL.md` file.
 
-2. **Enable in Settings:**
-   - Open the Web UI Settings page
-   - Enable the skill pack
-   - Connect required services in Open Connector
-
-3. **Customize prompts:**
-   Edit the JSON file to adjust prompts for your business context.
+To use a skill:
+1. Ensure the skill directory exists in `skills-pack/`
+2. Connect required services in Open Connector
+3. The skill will be available to the agent automatically
 
 ## Creating Custom Skill Packs
 
-Use the provided packs as templates:
+Create a new directory under `skills-pack/` with a `SKILL.md` file:
 
-```json
-{
-  "id": "your-skill-id",
-  "name": "Your Skill Name",
-  "description": "What this skill does",
-  "version": "1.0.0",
-  "requiredServices": ["service1", "service2"],
-  "actions": [
-    "service1.action_name",
-    "service2.other_action"
-  ],
-  "prompts": {
-    "task_name": "System prompt for this task..."
-  },
-  "confirmationRequired": [
-    "service1.dangerous_action"
-  ],
-  "examples": [
-    {
-      "user": "Example user message",
-      "assistant": "Expected assistant response",
-      "action": "service1.action_name"
-    }
-  ]
-}
+```markdown
+---
+name: Your Skill Name
+description: What this skill does
+---
+
+# Your Skill Name
+
+Use this skill when the user wants to...
+
+## Required Services
+
+- **servicename** — Description
+
+## Available Actions
+
+- `servicename.action_name` — Description
+
+## Confirmation Required
+
+Always ask for user confirmation before:
+- Dangerous actions
+
+## Common Tasks
+
+### Task Name
+1. Step one
+2. Step two
+
+## Examples
+
+- User: "Example request" → Use `servicename.action_name`
 ```
 
 ### Best Practices
 
 1. **Confirmation gates:** Always require confirmation for actions that modify, send, or delete data
-2. **Clear prompts:** Write prompts that guide the AI to ask for confirmation before taking action
-3. **Service fallbacks:** Use `alternativeServices` for flexibility
+2. **Clear instructions:** Write clear task flows that guide the agent
+3. **Use real catalog IDs:** Use exact Open Connector action IDs (e.g., `googlecalendar` not `google-calendar`)
 4. **Examples:** Include Hebrew and English examples if your users speak both

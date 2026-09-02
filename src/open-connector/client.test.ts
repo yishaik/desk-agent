@@ -250,3 +250,82 @@ describe('isRealConnection helper', () => {
     expect(isRealConnection({ service: 'wikipedia', connectionName: 'default', authType: 'no_auth', virtual: true })).toBe(false);
   });
 });
+
+describe('Path traversal protection (#30)', () => {
+  it('getActionGuide rejects path traversal actionId before request', async () => {
+    vi.resetModules();
+    
+    const { OpenConnectorClient } = await import('./client.ts');
+    const client = new OpenConnectorClient();
+    
+    await expect(client.getActionGuide('../x')).rejects.toThrow('invalid action id');
+    await expect(client.getActionGuide('../../connections')).rejects.toThrow('invalid action id');
+    await expect(client.getActionGuide('../../../etc/passwd')).rejects.toThrow('invalid action id');
+  });
+
+  it('getAction rejects invalid actionId', async () => {
+    vi.resetModules();
+    
+    const { OpenConnectorClient } = await import('./client.ts');
+    const client = new OpenConnectorClient();
+    
+    await expect(client.getAction('../x')).rejects.toThrow('invalid action id');
+    await expect(client.getAction('')).rejects.toThrow('invalid action id');
+  });
+
+  it('executeAction rejects invalid actionId', async () => {
+    vi.resetModules();
+    
+    const { OpenConnectorClient } = await import('./client.ts');
+    const client = new OpenConnectorClient();
+    
+    await expect(client.executeAction({ actionId: '../x', input: {} })).rejects.toThrow('invalid action id');
+  });
+
+  it('listActions rejects invalid serviceId', async () => {
+    vi.resetModules();
+    
+    const { OpenConnectorClient } = await import('./client.ts');
+    const client = new OpenConnectorClient();
+    
+    await expect(client.listActions('../x')).rejects.toThrow('invalid service id');
+  });
+
+  it('getProvider rejects invalid serviceId', async () => {
+    vi.resetModules();
+    
+    const { OpenConnectorClient } = await import('./client.ts');
+    const client = new OpenConnectorClient();
+    
+    await expect(client.getProvider('../x')).rejects.toThrow('invalid service id');
+  });
+
+  it('disconnectService rejects invalid serviceId', async () => {
+    vi.resetModules();
+    
+    const { OpenConnectorClient } = await import('./client.ts');
+    const client = new OpenConnectorClient();
+    
+    await expect(client.disconnectService('../x')).rejects.toThrow('invalid service id');
+  });
+
+  it('accepts valid actionId formats', async () => {
+    vi.resetModules();
+    
+    const { OpenConnectorClient } = await import('./client.ts');
+    const client = new OpenConnectorClient();
+    
+    const validIds = [
+      'gmail.send_email',
+      'googlecalendar.list_events',
+      'notion.create_page',
+      'my-service.my_action',
+      'a1.b2-c3_d4',
+    ];
+    
+    for (const id of validIds) {
+      expect(() => client.getAction(id)).not.toThrow('invalid action id');
+    }
+  });
+});
+

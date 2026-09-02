@@ -4,6 +4,15 @@ import { loadSettings, getActiveConnectorToken } from '../core/settings.ts';
 
 const log = createChildLogger('open-connector');
 
+const ID_PATTERN = /^[a-z0-9][a-z0-9_.-]{0,127}$/i;
+const DEFAULT_TIMEOUT_MS = 15_000;
+
+function validateId(id: string, label: string): void {
+  if (!ID_PATTERN.test(id)) {
+    throw new Error(`invalid ${label}`);
+  }
+}
+
 export interface ActionInput {
   actionId: string;
   input: Record<string, unknown>;
@@ -87,7 +96,8 @@ export class OpenConnectorClient {
 
   private async request<T>(
     path: string,
-    options: RequestInit = {}
+    options: RequestInit = {},
+    timeoutMs: number = DEFAULT_TIMEOUT_MS
   ): Promise<T> {
     // Console endpoints (/api/*) require the admin token; runtime endpoints
     // (/v1/*) take the runtime token.
@@ -109,6 +119,7 @@ export class OpenConnectorClient {
     const response = await fetch(url, {
       ...options,
       headers,
+      signal: AbortSignal.timeout(timeoutMs),
     });
 
     if (!response.ok) {
@@ -138,9 +149,10 @@ export class OpenConnectorClient {
   }
 
   async getProvider(serviceId: string): Promise<Provider | null> {
+    validateId(serviceId, 'service id');
     try {
       const response = await this.request<{ success: boolean; data: Provider }>(
-        `/v1/apps/services/${serviceId}`
+        `/v1/apps/services/${encodeURIComponent(serviceId)}`
       );
       return response.data;
     } catch {
@@ -187,6 +199,9 @@ export class OpenConnectorClient {
   }
 
   async listActions(serviceId?: string): Promise<Action[]> {
+    if (serviceId) {
+      validateId(serviceId, 'service id');
+    }
     const path = serviceId ? `/v1/actions?service=${encodeURIComponent(serviceId)}` : '/v1/actions';
     const response = await this.request<Action[] | { success: boolean; data: Action[] }>(path);
     const items = Array.isArray(response) ? response : response.data;
@@ -196,9 +211,10 @@ export class OpenConnectorClient {
   }
 
   async getAction(actionId: string): Promise<Action | null> {
+    validateId(actionId, 'action id');
     try {
       const response = await this.request<{ success: boolean; data: Action }>(
-        `/v1/actions/${actionId}`
+        `/v1/actions/${encodeURIComponent(actionId)}`
       );
       return response.data
         ? this.normalizeAction(response.data as unknown as Record<string, unknown>)
@@ -209,16 +225,17 @@ export class OpenConnectorClient {
   }
 
   async getActionGuide(actionId: string): Promise<string> {
+    validateId(actionId, 'action id');
     // /api/* is admin scope on the connector — the runtime token gets a 401.
-    const guideToken = config.connectorAdminToken ?? this.getToken();
-    const response = await fetch(
-      `${this.baseUrl}/api/actions/${actionId}/agent.md`,
-      {
-        headers: guideToken
-          ? { Authorization: `Bearer ${guideToken}` }
-          : {},
-      }
-    );
+    // Use request() for consistent auth + timeout handling, but we need text, not JSON.
+    const token = config.connectorAdminToken ?? this.getToken();
+    const url = `${this.baseUrl}/api/actions/${encodeURIComponent(actionId)}/agent.md`;
+    log.debug({ url, method: 'GET' }, 'API request');
+
+    const response = await fetch(url, {
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+      signal: AbortSignal.timeout(DEFAULT_TIMEOUT_MS),
+    });
     if (!response.ok) {
       throw new Error(`Failed to get action guide: ${response.status}`);
     }
@@ -226,6 +243,7 @@ export class OpenConnectorClient {
   }
 
   async executeAction(input: ActionInput): Promise<ActionResponse> {
+    validateId(input.actionId, 'action id');
     const token = this.getToken();
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
@@ -240,11 +258,12 @@ export class OpenConnectorClient {
     }
 
     const response = await fetch(
-      `${this.baseUrl}/v1/actions/${input.actionId}`,
+      `${this.baseUrl}/v1/actions/${encodeURIComponent(input.actionId)}`,
       {
         method: 'POST',
         headers,
         body: JSON.stringify({ input: input.input }),
+        signal: AbortSignal.timeout(DEFAULT_TIMEOUT_MS),
       }
     );
 
@@ -276,8 +295,8 @@ export class OpenConnectorClient {
 
   async checkHealth(): Promise<boolean> {
     try {
-      await this.request('/v1/health');
-      return true;
+      const response = await fetch(`${this.baseUrl}/health`);
+      return response.ok;
     } catch {
       return false;
     }
@@ -309,6 +328,7 @@ export class OpenConnectorClient {
   }
 
   async disconnectService(service: string, connectionName?: string): Promise<void> {
+    validateId(service, 'service id');
     const query = connectionName ? `?connectionName=${encodeURIComponent(connectionName)}` : '';
     await this.request<void>(`/api/connections/${encodeURIComponent(service)}${query}`, {
       method: 'DELETE',

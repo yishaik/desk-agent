@@ -58,17 +58,13 @@ curl -fsSL https://get.docker.com | sh
 
 ## שלב 2: הגדרת DNS
 
-הצבע את הדומיין שלך לכתובת ה-IP של השרת. **צריך שתי רשומות** — אחת לסוכן
-ואחת לקונסול של Open Connector (הוא חייב סאבדומיין נפרד, לא נתיב-משנה):
+הצבע את הדומיין שלך לכתובת ה-IP של השרת:
 
 ```
 A    agent.example.com    → 1.2.3.4
-A    oc.example.com       → 1.2.3.4
 ```
 
-בהתאם, ב-`.env` מגדירים גם `CONSOLE_DOMAIN=oc.example.com` ו-
-`CONSOLE_URL=https://oc.example.com`. אם משתמשים ב-Cloudflare — כבו את ה-proxy
-(עננה אפורה) כדי ש-Caddy יוכל להנפיק תעודות בעצמו.
+אם משתמשים ב-Cloudflare — כבו את ה-proxy (עננה אפורה) כדי ש-Caddy יוכל להנפיק תעודות בעצמו.
 
 המתן להתפשטות DNS (עד 48 שעות, בדרך כלל דקות).
 
@@ -233,12 +229,22 @@ docker compose logs -f
 
 Caddy מטפל ב-TLS וב-routing:
 
-```
-https://your-domain.com/*        → agent:3001
-https://your-domain.com/oauth/*  → connector:3000
-```
+| דומיין | נתיב | אימות | יעד | הערות |
+|--------|------|-------|-----|-------|
+| `{$DOMAIN}` | `/oauth/*`, `/api/oauth/*` | ציבורי | `connector:3000` | OAuth flows |
+| `{$DOMAIN}` | `/connector/*` | Cookie | `connector:3000` | קונסול SPA |
+| `{$DOMAIN}` | `/assets/*`, `/api/connections*`, `/api/providers*`, `/api/actions/*` | Cookie | `connector:3000` | APIs לקונסול |
+| `{$DOMAIN}` | `/*` | Cookie | `agent:3001` | Agent UI/API |
 
-ודא ש-`CONNECTOR_ORIGIN` מכיל את ה-URL הציבורי כדי ש-OAuth callbacks יגיעו לקונקטור.
+**אבטחה:**
+- הקונסול וה-APIs שלו מוגנים ב-PAIR_TOKEN cookie (כמו Settings)
+- `/mcp`, `/v1/*`, `/api/files/*`, `/api/runs*`, `/openapi.json` **לא** חשופים בכלל
+- תעבורת agent-to-connector משתמשת ברשת Docker הפנימית
+- OAuth routes ציבוריים (redirect flow)
+
+**כתובת הקונסול:** `https://your-domain.com/connector/` (דורש התחברות)
+
+ודא ש-`CONNECTOR_ORIGIN` מכיל את ה-URL הציבורי.
 
 ## טיפים לייצור
 
