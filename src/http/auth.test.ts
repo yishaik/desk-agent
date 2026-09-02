@@ -96,6 +96,42 @@ describe('Bearer Token Authentication (API clients)', () => {
   });
 });
 
+describe('Login Form Flow (טוקן גישה)', () => {
+  it('POST /auth creates session and sets DESK_SESSION cookie', async () => {
+    const fs = await import('node:fs');
+    const path = await import('node:path');
+    const serverCode = fs.readFileSync(path.join(__dirname, 'server.ts'), 'utf8');
+    
+    const authRoute = serverCode.match(/addRoute\('POST', '\/auth'[\s\S]*?\}\);/);
+    expect(authRoute).toBeTruthy();
+    
+    const route = authRoute![0];
+    expect(route).toContain('validatePairToken(token)');
+    expect(route).toContain('createSession()');
+    expect(route).toContain('SESSION_COOKIE_NAME');
+    expect(route).toContain('SESSION_MAX_AGE_SECONDS');
+    expect(route).not.toContain('PAIR_TOKEN=${');
+  });
+
+  it('Login form submits token via JSON POST, not query string', async () => {
+    const fs = await import('node:fs');
+    const path = await import('node:path');
+    const serverCode = fs.readFileSync(path.join(__dirname, 'server.ts'), 'utf8');
+    
+    expect(serverCode).toContain("fetch('/auth'");
+    expect(serverCode).toContain("method: 'POST'");
+    expect(serverCode).toContain("body: JSON.stringify({ token })");
+  });
+
+  it('Session cookie enables authenticated API calls for Gmail/Calendar Connect', async () => {
+    const { createSession, validateSession, clearSessionCache } = await import('./session.ts');
+    clearSessionCache();
+    
+    const sessionToken = createSession();
+    expect(validateSession(sessionToken)).toBe(true);
+  });
+});
+
 describe('Secure Cookie Setting', () => {
   it('sets Secure flag when X-Forwarded-Proto is https', async () => {
     const isHttps = (headers: Record<string, string | undefined>, isProduction: boolean): boolean => {
@@ -361,6 +397,34 @@ describe('HTTP Authentication Security (server.ts)', () => {
 });
 
 describe('GET /api/auth/session (Caddy forward_auth)', () => {
+  it('Caddy forward_auth: returns 200 when valid DESK_SESSION cookie is present', async () => {
+    const { createSession, validateSession, clearSessionCache, SESSION_COOKIE_NAME } = await import('./session.ts');
+    clearSessionCache();
+    
+    const sessionToken = createSession();
+    expect(SESSION_COOKIE_NAME).toBe('DESK_SESSION');
+    expect(validateSession(sessionToken)).toBe(true);
+  });
+
+  it('Caddy forward_auth: returns 401 when no session cookie', async () => {
+    const { validateSession, clearSessionCache } = await import('./session.ts');
+    clearSessionCache();
+    
+    expect(validateSession(undefined)).toBe(false);
+    expect(validateSession('')).toBe(false);
+  });
+
+  it('Caddy forward_auth: returns 401 when session is revoked', async () => {
+    const { createSession, validateSession, revokeSession, clearSessionCache } = await import('./session.ts');
+    clearSessionCache();
+    
+    const sessionToken = createSession();
+    expect(validateSession(sessionToken)).toBe(true);
+    
+    revokeSession(sessionToken);
+    expect(validateSession(sessionToken)).toBe(false);
+  });
+
   it('exists and validates session cookie', async () => {
     const fs = await import('node:fs');
     const path = await import('node:path');
