@@ -393,4 +393,137 @@ describe('getSettingsHtml', () => {
     
     expect(html).toContain('MAX_ACTIONS = 40');
   });
+
+  describe('Gmail and Google Calendar Connect buttons', () => {
+    it('includes Gmail Connect button', () => {
+      const html = getSettingsHtml(createTestData());
+      
+      expect(html).toContain('id="gmail-connect-btn"');
+      expect(html).toContain("onclick=\"connectService('gmail')\"");
+      expect(html).toContain('Gmail');
+    });
+
+    it('includes Google Calendar Connect button', () => {
+      const html = getSettingsHtml(createTestData());
+      
+      expect(html).toContain('id="googlecalendar-connect-btn"');
+      expect(html).toContain("onclick=\"connectService('googlecalendar')\"");
+      expect(html).toContain('Google Calendar');
+    });
+
+    it('includes connectService function that calls /api/connector/services/:service/connect', () => {
+      const html = getSettingsHtml(createTestData());
+      
+      expect(html).toContain('async function connectService(serviceId)');
+      expect(html).toContain('/api/connector/services/${encodeURIComponent(serviceId)}/connect');
+      expect(html).toContain("method: 'POST'");
+    });
+
+    it('opens OAuth popup with authorization URL', () => {
+      const html = getSettingsHtml(createTestData());
+      
+      expect(html).toContain("window.open('about:blank'");
+      expect(html).toContain('serviceConnectPopup.location = json.data.authorizationUrl');
+    });
+
+    it('polls /api/connector/tools for service connection', () => {
+      const html = getSettingsHtml(createTestData());
+      
+      expect(html).toContain('startServiceConnectPoll');
+      expect(html).toContain("fetch('/api/connector/tools')");
+      expect(html).toContain('isConnected');
+    });
+
+    it('shows success toast and reloads tools on connection', () => {
+      const html = getSettingsHtml(createTestData());
+      
+      expect(html).toContain("showToast(serviceId === 'gmail' ? 'Gmail חובר בהצלחה!'");
+      expect(html).toContain('loadServiceConnectionStatus()');
+      expect(html).toContain('loadTools()');
+    });
+
+    it('hides connect row when service is already connected', () => {
+      const html = getSettingsHtml(createTestData());
+      
+      expect(html).toContain("rowEl.style.display = 'none'");
+    });
+
+    it('does not render unused OC catalog picker', () => {
+      const html = getSettingsHtml(createTestData());
+      
+      expect(html).not.toContain("onclick=\"connectService('slack')\"");
+      expect(html).not.toContain("onclick=\"connectService('notion')\"");
+      expect(html).not.toContain("onclick=\"connectService('github')\"");
+    });
+
+    it('replaces console error messages with Hebrew retry copy', () => {
+      const html = getSettingsHtml(createTestData());
+      
+      expect(html).toContain("errorMsg.toLowerCase().includes('console')");
+      expect(html).toContain("errorMsg.toLowerCase().includes('connector')");
+      expect(html).toContain("errorMsg = 'לא ניתן להתחבר כעת. נסה שוב מאוחר יותר.'");
+    });
+
+    it('includes retry button for connection errors', () => {
+      const html = getSettingsHtml(createTestData());
+      
+      expect(html).toContain('id="serviceConnectError"');
+      expect(html).toContain('retryServiceConnect()');
+      expect(html).toContain('נסה שוב');
+    });
+
+    it('checks service connection status on page load', () => {
+      const html = getSettingsHtml(createTestData());
+      
+      expect(html).toContain('loadServiceConnectionStatus()');
+      expect(html).toContain('async function loadServiceConnectionStatus()');
+    });
+  });
+
+  describe('Console link (כלים נוספים)', () => {
+    it('shows console link as כלים נוספים (extra tools)', () => {
+      const html = getSettingsHtml(createTestData());
+      
+      expect(html).toContain('כלים נוספים');
+      expect(html).not.toContain('פתח את הקונסול</button>');
+    });
+
+    it('console link is hidden by default', () => {
+      const html = getSettingsHtml(createTestData());
+      
+      expect(html).toContain('id="consoleLinkContainer"');
+      expect(html).toContain('style="display: none;"');
+    });
+
+    it('does not hardcode console URL', () => {
+      const html = getSettingsHtml(createTestData());
+      
+      expect(html).not.toContain('href="http://connector:3000"');
+      expect(html).not.toContain('href="/connector/"');
+      expect(html).not.toContain('connector:3000');
+    });
+
+    it('does not require admin token in Settings page', () => {
+      const html = getSettingsHtml(createTestData());
+      
+      expect(html).not.toContain('adminToken');
+      expect(html).not.toContain('טוקן ניהול');
+    });
+  });
+
+  describe('No PAIR_TOKEN, API key, or npx pi in Settings', () => {
+    it('does not contain PAIR_TOKEN reference', () => {
+      const html = getSettingsHtml(createTestData());
+      
+      expect(html).not.toContain('PAIR_TOKEN=');
+      expect(html).not.toMatch(/PAIR_TOKEN.*value/i);
+    });
+
+    it('does not contain npx pi login reference', () => {
+      const html = getSettingsHtml(createTestData());
+      
+      expect(html).not.toContain('npx pi');
+      expect(html).not.toContain('npx @');
+    });
+  });
 });

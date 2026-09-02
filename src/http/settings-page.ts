@@ -256,6 +256,10 @@ export function getSettingsHtml(data: SettingsPageData): string {
       color: var(--text-muted);
     }
     
+    .provider-status.connected {
+      color: var(--success);
+    }
+    
     .info-row {
       display: flex;
       align-items: center;
@@ -663,13 +667,51 @@ export function getSettingsHtml(data: SettingsPageData): string {
       </div>
     </div>
 
+    <!-- Service Connect Section -->
+    <div class="section">
+      <div class="section-header">
+        <span class="section-icon">🔗</span>
+        <h3 class="section-title">חיבור שירותים</h3>
+      </div>
+      <p class="section-description">התחבר לשירותי Google כדי לאפשר לסוכן לנהל מיילים ופגישות</p>
+      
+      <div id="serviceConnectContainer">
+        <div class="provider-item" id="gmail-connect-row">
+          <div class="provider-info">
+            <span style="font-size: 24px;">📧</span>
+            <div>
+              <span class="provider-name">Gmail</span>
+              <div class="provider-status" id="gmail-connect-status">בודק...</div>
+            </div>
+          </div>
+          <button type="button" id="gmail-connect-btn" onclick="connectService('gmail')">התחבר</button>
+        </div>
+        
+        <div class="provider-item" id="googlecalendar-connect-row">
+          <div class="provider-info">
+            <span style="font-size: 24px;">📅</span>
+            <div>
+              <span class="provider-name">Google Calendar</span>
+              <div class="provider-status" id="googlecalendar-connect-status">בודק...</div>
+            </div>
+          </div>
+          <button type="button" id="googlecalendar-connect-btn" onclick="connectService('googlecalendar')">התחבר</button>
+        </div>
+      </div>
+      
+      <div id="serviceConnectError" style="display: none; margin-top: 16px; padding: 12px; background: rgba(239, 68, 68, 0.1); border: 1px solid rgba(239, 68, 68, 0.3); border-radius: 8px; color: var(--error);">
+        <span id="serviceConnectErrorText"></span>
+        <button type="button" class="secondary" style="margin-top: 8px; padding: 6px 12px; font-size: 13px;" onclick="retryServiceConnect()">נסה שוב</button>
+      </div>
+    </div>
+
     <!-- Open Connector Section -->
     <div class="section">
       <div class="section-header">
         <span class="section-icon">🔌</span>
         <h3 class="section-title">Open Connector</h3>
       </div>
-      <p class="section-description">חיבור לשירותים חיצוניים כמו Gmail, Calendar ועוד</p>
+      <p class="section-description">סטטוס החיבור לשירותים חיצוניים</p>
       
       <div class="info-row">
         <span class="info-label">סטטוס</span>
@@ -683,7 +725,7 @@ export function getSettingsHtml(data: SettingsPageData): string {
       </div>
       <div class="btn-group" id="consoleLinkContainer" style="display: none;">
         <a id="consoleLinkHref" href="#" target="_blank">
-          <button type="button" class="secondary">פתח את הקונסול</button>
+          <button type="button" class="secondary">כלים נוספים</button>
         </a>
       </div>
     </div>
@@ -1314,10 +1356,229 @@ export function getSettingsHtml(data: SettingsPageData): string {
       }
     }
 
+    let serviceConnectPopup = null;
+    let serviceConnectPollInterval = null;
+    let lastServiceConnectAttempt = null;
+
+    async function loadServiceConnectionStatus() {
+      try {
+        const res = await fetch('/api/connector/tools');
+        if (!res.ok) return;
+        const { data: tools } = await res.json();
+        
+        const connectedServices = new Set(tools.map(t => t.id || t.serviceId));
+        
+        ['gmail', 'googlecalendar'].forEach(serviceId => {
+          const statusEl = document.getElementById(serviceId + '-connect-status');
+          const btnEl = document.getElementById(serviceId + '-connect-btn');
+          const rowEl = document.getElementById(serviceId + '-connect-row');
+          
+          if (connectedServices.has(serviceId)) {
+            if (statusEl) {
+              statusEl.textContent = '✓ מחובר';
+              statusEl.classList.add('connected');
+            }
+            if (btnEl) {
+              btnEl.textContent = 'התחבר מחדש';
+            }
+            if (rowEl) {
+              rowEl.style.display = 'none';
+            }
+          } else {
+            if (statusEl) {
+              statusEl.textContent = 'לא מחובר';
+              statusEl.classList.remove('connected');
+            }
+            if (btnEl) {
+              btnEl.textContent = 'התחבר';
+              btnEl.disabled = false;
+            }
+            if (rowEl) {
+              rowEl.style.display = '';
+            }
+          }
+        });
+      } catch (err) {
+        console.error('Failed to load service connection status:', err);
+      }
+    }
+
+    async function connectService(serviceId) {
+      lastServiceConnectAttempt = serviceId;
+      const btnEl = document.getElementById(serviceId + '-connect-btn');
+      const errorContainer = document.getElementById('serviceConnectError');
+      
+      if (btnEl) {
+        btnEl.disabled = true;
+        btnEl.textContent = 'מתחבר...';
+      }
+      if (errorContainer) {
+        errorContainer.style.display = 'none';
+      }
+      
+      serviceConnectPopup = window.open('about:blank', '_blank', 'width=600,height=700');
+      
+      try {
+        const res = await fetch(\`/api/connector/services/\${encodeURIComponent(serviceId)}/connect\`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' }
+        });
+        
+        const json = await res.json();
+        
+        if (json.success && json.data && json.data.authorizationUrl) {
+          if (serviceConnectPopup && !serviceConnectPopup.closed) {
+            serviceConnectPopup.location = json.data.authorizationUrl;
+          } else {
+            window.open(json.data.authorizationUrl, '_blank', 'width=600,height=700');
+          }
+          
+          startServiceConnectPoll(serviceId);
+        } else {
+          if (serviceConnectPopup && !serviceConnectPopup.closed) {
+            serviceConnectPopup.close();
+          }
+          serviceConnectPopup = null;
+          
+          let errorMsg = json.error || 'שגיאה בהתחברות לשירות';
+          if (errorMsg.toLowerCase().includes('console') || errorMsg.toLowerCase().includes('connector')) {
+            errorMsg = 'לא ניתן להתחבר כעת. נסה שוב מאוחר יותר.';
+          }
+          
+          showServiceConnectError(errorMsg);
+          
+          if (btnEl) {
+            btnEl.disabled = false;
+            btnEl.textContent = 'התחבר';
+          }
+        }
+      } catch (err) {
+        if (serviceConnectPopup && !serviceConnectPopup.closed) {
+          serviceConnectPopup.close();
+        }
+        serviceConnectPopup = null;
+        
+        showServiceConnectError('שגיאה בהתחברות לשירות. נסה שוב.');
+        
+        if (btnEl) {
+          btnEl.disabled = false;
+          btnEl.textContent = 'התחבר';
+        }
+      }
+    }
+
+    function startServiceConnectPoll(serviceId) {
+      if (serviceConnectPollInterval) {
+        clearInterval(serviceConnectPollInterval);
+      }
+      
+      let pollCount = 0;
+      const maxPolls = 60;
+      
+      serviceConnectPollInterval = setInterval(async () => {
+        pollCount++;
+        
+        if (serviceConnectPopup && serviceConnectPopup.closed) {
+          clearInterval(serviceConnectPollInterval);
+          serviceConnectPollInterval = null;
+          
+          await checkServiceConnected(serviceId);
+          return;
+        }
+        
+        if (pollCount >= maxPolls) {
+          clearInterval(serviceConnectPollInterval);
+          serviceConnectPollInterval = null;
+          
+          if (serviceConnectPopup && !serviceConnectPopup.closed) {
+            serviceConnectPopup.close();
+          }
+          serviceConnectPopup = null;
+          
+          await checkServiceConnected(serviceId);
+          return;
+        }
+        
+        try {
+          const res = await fetch('/api/connector/tools');
+          if (!res.ok) return;
+          const { data: tools } = await res.json();
+          
+          const isConnected = tools.some(t => (t.id || t.serviceId) === serviceId);
+          
+          if (isConnected) {
+            clearInterval(serviceConnectPollInterval);
+            serviceConnectPollInterval = null;
+            
+            if (serviceConnectPopup && !serviceConnectPopup.closed) {
+              serviceConnectPopup.close();
+            }
+            serviceConnectPopup = null;
+            
+            showToast(serviceId === 'gmail' ? 'Gmail חובר בהצלחה!' : 'Google Calendar חובר בהצלחה!');
+            loadServiceConnectionStatus();
+            loadTools();
+          }
+        } catch (err) {
+          // Continue polling
+        }
+      }, 2000);
+    }
+
+    async function checkServiceConnected(serviceId) {
+      const btnEl = document.getElementById(serviceId + '-connect-btn');
+      
+      try {
+        const res = await fetch('/api/connector/tools');
+        if (!res.ok) throw new Error('Failed to check');
+        const { data: tools } = await res.json();
+        
+        const isConnected = tools.some(t => (t.id || t.serviceId) === serviceId);
+        
+        if (isConnected) {
+          showToast(serviceId === 'gmail' ? 'Gmail חובר בהצלחה!' : 'Google Calendar חובר בהצלחה!');
+          loadServiceConnectionStatus();
+          loadTools();
+        } else {
+          if (btnEl) {
+            btnEl.disabled = false;
+            btnEl.textContent = 'התחבר';
+          }
+        }
+      } catch (err) {
+        if (btnEl) {
+          btnEl.disabled = false;
+          btnEl.textContent = 'התחבר';
+        }
+      }
+    }
+
+    function showServiceConnectError(message) {
+      const errorContainer = document.getElementById('serviceConnectError');
+      const errorText = document.getElementById('serviceConnectErrorText');
+      
+      if (errorContainer && errorText) {
+        errorText.textContent = message;
+        errorContainer.style.display = 'block';
+      }
+    }
+
+    function retryServiceConnect() {
+      const errorContainer = document.getElementById('serviceConnectError');
+      if (errorContainer) {
+        errorContainer.style.display = 'none';
+      }
+      
+      if (lastServiceConnectAttempt) {
+        connectService(lastServiceConnectAttempt);
+      }
+    }
+
     loadProviders();
     loadTools();
     loadConnectorConsoleLink();
     loadSkillPacks();
+    loadServiceConnectionStatus();
   </script>
 </body>
 </html>`;
