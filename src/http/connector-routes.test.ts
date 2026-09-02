@@ -75,10 +75,6 @@ describe('SECURITY: Admin Token Never Exposed (S-01)', () => {
     
     const adminTokenReferences = serverCode.match(/config\.connectorAdminToken/g) || [];
     
-    const safeContexts = [
-      'import', 'type', 'interface', 'hasAdminToken', '!!'
-    ];
-    
     for (const match of adminTokenReferences) {
       const context = serverCode.substring(
         Math.max(0, serverCode.indexOf(match) - 50),

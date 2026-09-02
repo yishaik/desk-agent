@@ -1,7 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { IncomingMessage } from 'node:http';
 import { existsSync, rmSync, mkdirSync } from 'node:fs';
-import { parse as parseUrl } from 'node:url';
 
 const TEST_DATA_DIR = './test-data-auth';
 const TEST_PORT = 3999;
