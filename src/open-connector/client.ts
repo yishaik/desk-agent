@@ -294,9 +294,10 @@ export class OpenConnectorClient {
   }
 
   async checkHealth(): Promise<boolean> {
-    // Use /health (public endpoint) not /v1/health (requires runtime token).
-    // This allows the agent to check connector health without auth, which is
-    // necessary for the public Caddy routes that don't expose /v1/*.
+    // GET /health on the docker-internal baseUrl (OPEN_CONNECTOR_URL, typically
+    // http://connector:3000). No Authorization header — /health is public on the
+    // connector. Do NOT use /v1/health (requires runtime token) or the public
+    // domain (Caddy doesn't expose /v1/*).
     try {
       const response = await fetch(`${this.baseUrl}/health`, {
         signal: AbortSignal.timeout(DEFAULT_TIMEOUT_MS),

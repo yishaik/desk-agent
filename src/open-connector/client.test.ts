@@ -329,7 +329,7 @@ describe('Path traversal protection (#30)', () => {
   });
 });
 
-describe('checkHealth uses public endpoint (#37)', () => {
+describe('checkHealth uses docker-internal /health without auth (#37)', () => {
   it('checkHealth uses /health not /v1/health', async () => {
     vi.resetModules();
     
@@ -339,5 +339,30 @@ describe('checkHealth uses public endpoint (#37)', () => {
     const checkHealthSource = client.checkHealth.toString();
     expect(checkHealthSource).toContain('/health');
     expect(checkHealthSource).not.toContain('/v1/health');
+  });
+
+  it('checkHealth does not send Authorization header', async () => {
+    vi.resetModules();
+    
+    const { OpenConnectorClient } = await import('./client.ts');
+    const client = new OpenConnectorClient();
+    
+    const checkHealthSource = client.checkHealth.toString();
+    expect(checkHealthSource).not.toContain('Authorization');
+    expect(checkHealthSource).not.toContain('Bearer');
+    expect(checkHealthSource).not.toContain('getToken');
+    expect(checkHealthSource).not.toContain('token');
+  });
+
+  it('checkHealth uses baseUrl (docker-internal) not public domain', async () => {
+    vi.resetModules();
+    
+    const { OpenConnectorClient } = await import('./client.ts');
+    const client = new OpenConnectorClient();
+    
+    const checkHealthSource = client.checkHealth.toString();
+    expect(checkHealthSource).toContain('this.baseUrl');
+    expect(checkHealthSource).not.toContain('CONNECTOR_ORIGIN');
+    expect(checkHealthSource).not.toContain('connectorOrigin');
   });
 });
