@@ -30,6 +30,12 @@ interface ProjectSession {
 
 const activeSessions = new Map<string, ProjectSession>();
 
+/**
+ * Pending session creations — prevents getOrCreateSession from racing and
+ * creating two sessions for the same project (#33).
+ */
+const pendingCreations = new Map<string, Promise<ProjectSession>>();
+
 let sharedModelRuntime: ModelRuntime | null = null;
 
 // The pending-confirmation store is file-backed and shared with the connector
@@ -373,6 +379,23 @@ export async function getOrCreateSession(projectId: string): Promise<ProjectSess
     return existing;
   }
 
+  // If another call is already creating the session, wait for it (#33).
+  const pending = pendingCreations.get(projectId);
+  if (pending) {
+    return pending;
+  }
+
+  const creationPromise = createSession(projectId);
+  pendingCreations.set(projectId, creationPromise);
+
+  try {
+    return await creationPromise;
+  } finally {
+    pendingCreations.delete(projectId);
+  }
+}
+
+async function createSession(projectId: string): Promise<ProjectSession> {
   const settings = loadSettings();
   const projectCwd = `${config.dataDir}/projects/${projectId}`;
 
@@ -514,23 +537,36 @@ export function getSession(projectId: string): ProjectSession | undefined {
   return activeSessions.get(projectId);
 }
 
-export function extractTextFromMessages(messages: unknown[]): string | null {
-  for (let i = messages.length - 1; i >= 0; i--) {
+/**
+ * Extract assistant text from a slice of messages (the CURRENT turn only).
+ *
+ * Previously this walked the entire messages array from the end and returned
+ * the first assistant message with text — if the current turn had no text, it
+ * would return text from a PREVIOUS turn (#34). Now callers pass startIndex
+ * (messages.length before session.prompt) so we only look at the current turn.
+ *
+ * We also collect ALL assistant text from the current turn (a turn with
+ * several tool calls may have intermediate text worth joining).
+ */
+export function extractTextFromMessages(
+  messages: unknown[],
+  startIndex = 0
+): string | null {
+  const allTextParts: string[] = [];
+
+  for (let i = startIndex; i < messages.length; i++) {
     const msg = messages[i] as { role?: string; content?: unknown[] };
     if (msg?.role === 'assistant' && Array.isArray(msg.content)) {
-      const textParts: string[] = [];
       for (const part of msg.content) {
         const p = part as { type?: string; text?: string };
         if (p?.type === 'text' && p?.text) {
-          textParts.push(p.text);
+          allTextParts.push(p.text);
         }
-      }
-      if (textParts.length > 0) {
-        return textParts.join('\n');
       }
     }
   }
-  return null;
+
+  return allTextParts.length > 0 ? allTextParts.join('\n\n') : null;
 }
 
 export type AgentEventType = 
@@ -553,11 +589,12 @@ export interface RunPromptCallbacks {
 export async function runPrompt(projectId: string, text: string): Promise<string | null> {
   const { session } = await getOrCreateSession(projectId);
 
+  const startIndex = session.state.messages.length;
   await session.prompt(text);
   await session.waitForIdle();
 
   const messages = session.state.messages;
-  return extractTextFromMessages(messages);
+  return extractTextFromMessages(messages, startIndex);
 }
 
 export async function runPromptWithCallbacks(
@@ -599,15 +636,16 @@ export async function runPromptWithCallbacks(
   });
 
   try {
+    const startIndex = session.state.messages.length;
     await session.prompt(text);
     await session.waitForIdle();
 
     const messages = session.state.messages;
-    const result = extractTextFromMessages(messages);
+    const result = extractTextFromMessages(messages, startIndex);
     if (!result) {
       const last = messages[messages.length - 1] as { errorMessage?: string } | undefined;
       log.error(
-        { lastMessage: JSON.stringify(last)?.slice(0, 2000), count: messages.length },
+        { lastMessage: JSON.stringify(last)?.slice(0, 2000), count: messages.length, startIndex },
         'Pi turn produced no assistant text'
       );
       // Surface the provider's actual error to the user instead of a generic

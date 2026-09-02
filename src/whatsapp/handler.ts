@@ -4,7 +4,7 @@ import { saveMessage, listProjects, createProject, getProject } from '../core/me
 import { config } from '../core/config.ts';
 import { recordExecutedAction, consumeExecutedActionNotes } from '../core/confirmations.ts';
 import type { Message, MessageKey, Settings } from '../core/types.ts';
-import { getWhatsAppClient } from './client.ts';
+import { getWhatsAppClient, WhatsAppClient } from './client.ts';
 import { OpenConnectorClient } from '../open-connector/client.ts';
 import { 
   runPromptWithCallbacks, 
@@ -41,6 +41,28 @@ import {
 const log = createChildLogger('handler');
 
 const COMMAND_PREFIX = '/';
+
+/**
+ * Per-project processing queue — prevents concurrent messages from racing on
+ * the same Pi or Claude Code session (#33).
+ *
+ * Each entry is a promise that resolves when processing is complete. New
+ * messages chain onto the queue: `queue.set(id, queue.get(id).then(() => process()))`.
+ */
+const projectQueues = new Map<string, Promise<void>>();
+
+/**
+ * Track which projects are currently processing — used to send ⏳ to messages
+ * that arrive while the model is working.
+ */
+const activeProcessing = new Set<string>();
+
+/**
+ * Commands that can run outside the queue (status queries, help, etc.).
+ * Confirmation replies must NOT be in this list — they interact with the
+ * pending-confirmation state that may be mid-update.
+ */
+const QUEUE_BYPASS_COMMANDS = new Set(['help', 'status', 'projects', 'services', 'settings']);
 
 async function safeReaction(messageKey: MessageKey, state: ReactionState): Promise<void> {
   try {
@@ -217,59 +239,114 @@ export async function handleMessage(message: Message): Promise<void> {
 
   const tracker = message.messageKey ? createReactionTracker(message.messageKey) : null;
 
+  // Queue-bypass commands (/status, /help, etc.) can run immediately without
+  // waiting for a queued model prompt to finish — they're read-only.
   if (message.body.startsWith(COMMAND_PREFIX)) {
-    if (tracker) {
-      await updateReaction(tracker, 'reading');
+    const commandName = message.body.slice(COMMAND_PREFIX.length).split(' ')[0]?.toLowerCase();
+    if (commandName && QUEUE_BYPASS_COMMANDS.has(commandName)) {
+      await handleCommandDirect(message, settings, wa, chatJid, tracker);
+      return;
     }
-    try {
-      const result = await handleCommand(message.body, settings);
-      if (result.handled && result.response) {
-        if (tracker) {
-          await updateReaction(tracker, 'finished');
-        }
-        await wa.sendMessage(chatJid, result.response);
-      } else if (!result.handled) {
-        await updateReaction(tracker, 'error');
-        await wa.sendMessage(chatJid, 'פקודה לא מוכרת. שלח /help לרשימת הפקודות.');
-      }
-    } catch (err) {
-      log.error({ err, command: message.body }, 'Command failed');
-      await updateReaction(tracker, 'error');
-      await wa.sendMessage(chatJid, `שגיאה בפקודה: ${err instanceof Error ? err.message : 'Unknown error'}`);
-    }
-    return;
   }
 
-  const confirmResponse = await checkForConfirmationResponse(message.body, projectId);
-  if (confirmResponse.handled) {
-    if (tracker) {
-      await updateReaction(tracker, 'reading');
-    }
-    if (confirmResponse.response) {
+  // Everything else (model prompts, confirmations, non-bypass commands) goes
+  // through the per-project queue to prevent concurrent model access (#33).
+  const wasActive = activeProcessing.has(projectId);
+
+  // If the model is already working on this project, send ⏳ immediately so
+  // the user knows their message is queued, not lost.
+  if (wasActive && tracker) {
+    await safeReaction(tracker.messageKey!, 'queued');
+    log.debug({ projectId, messageId: message.id }, 'Message queued behind active processing');
+  }
+
+  const previousTask = projectQueues.get(projectId) ?? Promise.resolve();
+  const currentTask = previousTask.then(() => processMessageQueued(message, settings, wa, chatJid, tracker));
+  projectQueues.set(projectId, currentTask.catch(() => {})); // swallow errors in queue chain
+
+  await currentTask;
+}
+
+async function handleCommandDirect(
+  message: Message,
+  settings: Settings,
+  wa: WhatsAppClient,
+  chatJid: string,
+  tracker: ReactionTracker | null
+): Promise<void> {
+  if (tracker) {
+    await updateReaction(tracker, 'reading');
+  }
+  try {
+    const result = await handleCommand(message.body, settings);
+    if (result.handled && result.response) {
       if (tracker) {
         await updateReaction(tracker, 'finished');
       }
-      await wa.sendMessage(chatJid, confirmResponse.response);
-    }
-    return;
-  }
-
-  await updateReaction(tracker, 'reading');
-  
-  try {
-    const response = await processWithPi(message, settings, tracker);
-    if (response) {
-      await updateReaction(tracker, 'finished');
-      await sendSplitMessage(chatJid, response, message.id);
-    } else {
-      // Never fail silently — the user is staring at a chat with no reply.
+      await wa.sendMessage(chatJid, result.response);
+    } else if (!result.handled) {
       await updateReaction(tracker, 'error');
-      await wa.sendMessage(chatJid, '⚠️ לא התקבלה תשובה מהמודל. נסה שוב, ואם זה חוזר — בדוק את חיבור ה-AI בהגדרות.');
+      await wa.sendMessage(chatJid, 'פקודה לא מוכרת. שלח /help לרשימת הפקודות.');
     }
   } catch (err) {
-    log.error({ err }, 'Error processing message');
+    log.error({ err, command: message.body }, 'Command failed');
     await updateReaction(tracker, 'error');
-    await wa.sendMessage(chatJid, `שגיאה: ${err instanceof Error ? err.message : 'Unknown error'}`);
+    await wa.sendMessage(chatJid, `שגיאה בפקודה: ${err instanceof Error ? err.message : 'Unknown error'}`);
+  }
+}
+
+async function processMessageQueued(
+  message: Message,
+  settings: Settings,
+  wa: WhatsAppClient,
+  chatJid: string,
+  tracker: ReactionTracker | null
+): Promise<void> {
+  const projectId = settings.activeProject;
+  activeProcessing.add(projectId);
+
+  try {
+    // Non-bypass commands (like /project, /model) need the queue.
+    if (message.body.startsWith(COMMAND_PREFIX)) {
+      await handleCommandDirect(message, settings, wa, chatJid, tracker);
+      return;
+    }
+
+    // Confirmations ("yes", "כן") must be in the queue — they interact with
+    // pending-confirmation state that may be mid-update by a model prompt.
+    const confirmResponse = await checkForConfirmationResponse(message.body, projectId);
+    if (confirmResponse.handled) {
+      if (tracker) {
+        await updateReaction(tracker, 'reading');
+      }
+      if (confirmResponse.response) {
+        if (tracker) {
+          await updateReaction(tracker, 'finished');
+        }
+        await wa.sendMessage(chatJid, confirmResponse.response);
+      }
+      return;
+    }
+
+    await updateReaction(tracker, 'reading');
+
+    try {
+      const response = await processWithPi(message, settings, tracker);
+      if (response) {
+        await updateReaction(tracker, 'finished');
+        await sendSplitMessage(chatJid, response, message.id);
+      } else {
+        // Never fail silently — the user is staring at a chat with no reply.
+        await updateReaction(tracker, 'error');
+        await wa.sendMessage(chatJid, '⚠️ לא התקבלה תשובה מהמודל. נסה שוב, ואם זה חוזר — בדוק את חיבור ה-AI בהגדרות.');
+      }
+    } catch (err) {
+      log.error({ err }, 'Error processing message');
+      await updateReaction(tracker, 'error');
+      await wa.sendMessage(chatJid, `שגיאה: ${err instanceof Error ? err.message : 'Unknown error'}`);
+    }
+  } finally {
+    activeProcessing.delete(projectId);
   }
 }
 

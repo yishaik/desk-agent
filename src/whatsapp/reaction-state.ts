@@ -9,7 +9,8 @@ export type ReactionState =
   | 'using_tools'
   | 'thinking'
   | 'finished'
-  | 'error';
+  | 'error'
+  | 'queued';
 
 export const REACTION_EMOJIS: Record<ReactionState, string> = {
   reading: '👀',
@@ -18,6 +19,7 @@ export const REACTION_EMOJIS: Record<ReactionState, string> = {
   thinking: '🤔',
   finished: '✅',
   error: '❌',
+  queued: '⏳',
 };
 
 export interface ReactionStateTransition {
@@ -80,7 +82,7 @@ export function isValidTransition(
   to: ReactionState
 ): boolean {
   if (from === null) {
-    return to === 'reading';
+    return to === 'reading' || to === 'queued';
   }
 
   if (from === 'finished' || from === 'error') {
@@ -94,6 +96,7 @@ export function isValidTransition(
     using_tools: ['thinking', 'processing', 'finished', 'error'],
     finished: [],
     error: [],
+    queued: ['reading', 'processing', 'finished', 'error'],
   };
 
   return validTransitions[from]?.includes(to) ?? false;
