@@ -98,6 +98,10 @@ function describeSelfChat(mode: 'lid' | 'phone' | 'none' | undefined): string {
   return '';
 }
 
+function describeLid(lid: 'present' | 'missing' | undefined): string {
+  return lid === 'present' ? 'קיים' : 'חסר';
+}
+
 const CONFIRM_PATTERNS = [
   /^(yes|כן|אשר|confirm)$/i,
 ];
@@ -540,6 +544,7 @@ _שלח הודעה לעצמך כדי לדבר עם הסוכן_`,
         response: `*סטטוס מערכת*
 
 📱 WhatsApp: ${wa.isConnected() ? '✅ מחובר' : '❌ מנותק'}${describeSelfChat(wa.getPairingState().selfChat)}
+🆔 LID: ${describeLid(wa.getPairingState().lid)}
 🤖 ספקי AI: ${hasAnyProvider ? '✅ ' + providerList : '❌ לא מחובר'}
 🧠 מודל: ${modelStatus}
 🔌 Open Connector: ${connectorHealth ? '✅ תקין' : '❌ לא זמין'}
