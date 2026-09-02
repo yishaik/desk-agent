@@ -212,7 +212,7 @@ describe('S-03: Owner binding — pairing is bound to owner identity', () => {
   });
 
   it('allows pairing from the same phone when ownerPhone is already set', async () => {
-    const { updateSettings, loadSettings } = await import('../core/settings.ts');
+    const { updateSettings } = await import('../core/settings.ts');
     updateSettings({ ownerPhone: '972501234567' });
     
     const { WhatsAppClient } = await import('./client.ts');
