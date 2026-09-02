@@ -78,6 +78,40 @@ describe('HTML Escape Security', () => {
   });
 });
 
+describe('S-03: Pairing API returns boundOwnerPhone', () => {
+  let serverCode: string;
+
+  beforeAll(() => {
+    serverCode = fs.readFileSync(path.join(__dirname, 'server.ts'), 'utf8');
+  });
+
+  it('pairing API response includes boundOwnerPhone when owner is set', () => {
+    expect(serverCode).toContain('boundOwnerPhone: settings.ownerPhone');
+  });
+
+  it('pairing API loads settings to check ownerPhone', () => {
+    const pairingRouteMatch = serverCode.match(/addRoute\('GET',\s*'\/api\/pairing'[\s\S]*?^\}\);/m);
+    const pairingRoute = pairingRouteMatch?.[0] || '';
+    expect(pairingRoute).toContain('loadSettings()');
+    expect(pairingRoute).toContain('boundOwnerPhone');
+  });
+
+  it('POST /api/pairing/repair endpoint exists for explicit owner change', () => {
+    expect(serverCode).toContain("addRoute('POST', '/api/pairing/repair'");
+  });
+
+  it('repair endpoint clears ownerPhone before calling repair()', () => {
+    expect(serverCode).toContain('updateSettings({ ownerPhone: undefined })');
+    expect(serverCode).toContain('wa.repair()');
+  });
+
+  it('repair endpoint requires authentication', () => {
+    const repairRouteMatch = serverCode.match(/addRoute\('POST',\s*'\/api\/pairing\/repair'[\s\S]*?^\}\);/m);
+    const repairRoute = repairRouteMatch?.[0] || '';
+    expect(repairRoute).toContain('isAuthenticated(req)');
+  });
+});
+
 describe('Server HTML Source Code Requirements', () => {
   let serverCode: string;
 
