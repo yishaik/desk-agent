@@ -277,6 +277,7 @@ addRoute('GET', '/api/status', async (req, res) => {
   sendJson(res, {
     success: true,
     data: {
+      // connecting|open|closed + last event (#176). Public /health stays S-17 { status: 'ok' }.
       whatsapp: wa.getConnectionPhase(),
       lastConnectionEventAt: wa.getLastConnectionEventAt(),
       connector: connectorHealth ? 'healthy' : 'unhealthy',
