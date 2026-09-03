@@ -50,6 +50,7 @@ vi.mock('../agent/session.ts', () => ({
   confirmAction: vi.fn(() => false),
   cancelConfirmation: vi.fn(() => false),
   cleanupOldConfirmations: vi.fn(),
+  consumeExpiredConfirmations: vi.fn(() => []),
   checkCredentialsBeforePrompt: vi.fn(async () => ({ valid: true, model: true, modelId: 'test' })),
   recreateSessionAfterCredentialChange: vi.fn(async () => {}),
   CredentialError: class extends Error {},
@@ -795,19 +796,19 @@ describe('Gate mutation safety', () => {
 
 describe('Confirmation Patterns (handler)', () => {
   const CONFIRM_PATTERNS = [
-    /^(yes|כן|אשר|confirm)$/i,
+    /^(yes|y|ok|okay|sure|confirm|כן|אשר|אוקיי|אוקי|בסדר|יאללה)$/i,
   ];
 
-  it('CONFIRM_PATTERNS does NOT include ok', () => {
-    expect(CONFIRM_PATTERNS.some((p) => p.test('ok'))).toBe(false);
+  it('CONFIRM_PATTERNS includes ok', () => {
+    expect(CONFIRM_PATTERNS.some((p) => p.test('ok'))).toBe(true);
   });
 
-  it('CONFIRM_PATTERNS does NOT include בסדר', () => {
-    expect(CONFIRM_PATTERNS.some((p) => p.test('בסדר'))).toBe(false);
+  it('CONFIRM_PATTERNS includes בסדר', () => {
+    expect(CONFIRM_PATTERNS.some((p) => p.test('בסדר'))).toBe(true);
   });
 
-  it('CONFIRM_PATTERNS does NOT include אוקיי', () => {
-    expect(CONFIRM_PATTERNS.some((p) => p.test('אוקיי'))).toBe(false);
+  it('CONFIRM_PATTERNS includes אוקיי', () => {
+    expect(CONFIRM_PATTERNS.some((p) => p.test('אוקיי'))).toBe(true);
   });
 
   it('CONFIRM_PATTERNS includes כן', () => {
@@ -851,6 +852,7 @@ describe('S-04 (#108) — handler must show payload before any execute', () => {
         isPayloadPresented: mockIsPayloadPresented,
         getPendingConfirmation: vi.fn().mockReturnValue(undefined),
         cleanupOldConfirmations: vi.fn(),
+        consumeExpiredConfirmations: vi.fn(() => []),
         cancelAllPendingConfirmations: vi.fn().mockReturnValue(0),
         checkCredentialsBeforePrompt: vi.fn().mockResolvedValue({ valid: true, model: true, modelId: 'test' }),
         runPromptWithCallbacks: vi.fn().mockResolvedValue(null),
@@ -953,6 +955,7 @@ describe('S-04 (#108) — handler must show payload before any execute', () => {
           createdAt: Date.now(),
         }),
         cleanupOldConfirmations: vi.fn(),
+        consumeExpiredConfirmations: vi.fn(() => []),
         cancelAllPendingConfirmations: vi.fn().mockReturnValue(0),
         checkCredentialsBeforePrompt: vi.fn().mockResolvedValue({ valid: true, model: true, modelId: 'test' }),
         runPromptWithCallbacks: vi.fn().mockResolvedValue(null),
@@ -1047,6 +1050,7 @@ describe('S-04 (#108) — handler must show payload before any execute', () => {
         isPayloadPresented: mockIsPayloadPresented,
         getPendingConfirmation: vi.fn().mockReturnValue(undefined),
         cleanupOldConfirmations: vi.fn(),
+        consumeExpiredConfirmations: vi.fn(() => []),
         cancelAllPendingConfirmations: vi.fn().mockReturnValue(0),
         checkCredentialsBeforePrompt: vi.fn().mockResolvedValue({ valid: true, model: true, modelId: 'test' }),
         runPromptWithCallbacks: vi.fn().mockResolvedValue(null),
@@ -1142,6 +1146,7 @@ describe('S-04 (#108) — handler must show payload before any execute', () => {
         isPayloadPresented: mockIsPayloadPresented,
         getPendingConfirmation: vi.fn().mockReturnValue(undefined),
         cleanupOldConfirmations: vi.fn(),
+        consumeExpiredConfirmations: vi.fn(() => []),
         cancelAllPendingConfirmations: vi.fn().mockReturnValue(0),
         checkCredentialsBeforePrompt: vi.fn().mockResolvedValue({ valid: true, model: true, modelId: 'test' }),
         runPromptWithCallbacks: vi.fn().mockResolvedValue(null),

@@ -28,7 +28,7 @@ After onboarding, the **Settings** page lets you:
 - **Connect Gmail and Google Calendar** via the Connect buttons (OAuth popup)
 - Check WhatsApp status and re-pair if disconnected
 
-For other integrations or advanced configuration, operators can use the Open Connector console at `https://console.your-domain.com` (optional, extra tools — Hebrew UI: "כלים נוספים").
+For other integrations, operators can open the Open Connector console at `https://console.your-domain.com` and log in with `CONNECTOR_ADMIN_TOKEN` from `.env` (Hebrew UI: "כלים נוספים"). The agent site cookie is not sent to that host.
 
 ## Architecture
 
@@ -121,8 +121,9 @@ All configuration is via environment variables. See `.env.example` for the full 
 
 | Variable | Description |
 |----------|-------------|
-| `PAIR_TOKEN` | Access token for the Web UI (auto-generated on first run) |
+| `PAIR_TOKEN` | Access token for the Web UI (set in `.env`; `deploy.sh` generates it) |
 | `OPEN_CONNECTOR_TOKEN` | Runtime token for Open Connector API |
+| `CONNECTOR_ADMIN_TOKEN` | Open Connector admin token (required in production; console login + admin-scope fallback) |
 | `CONNECTOR_ENCRYPTION_KEY` | Encryption key for stored credentials |
 
 ### Optional Variables
@@ -180,12 +181,14 @@ Caddy handles TLS and routing:
 | `{$DOMAIN}` | `/oauth/*` | Public | `connector:3000` | OAuth redirect target |
 | `{$DOMAIN}` | `/*` | PAIR_TOKEN cookie | `agent:3001` | Agent wizard / settings / API |
 
+`/api/oauth/*` is **not** exposed on the public domain. The agent calls the connector on the internal Docker network.
+
 **Security:**
 - The console SPA uses absolute paths and a router without a base path, so it must own its host — it cannot be served under `/connector/` on the agent's origin (#72)
 - On `{$DOMAIN}` nothing but the OAuth callback reaches the connector: `/v1/*`, `/mcp`, `/api/files/*`, `/api/runs*`, `/openapi.json` stay internal
 - Agent-to-connector traffic uses the internal Docker network (`http://connector:3000`)
 
-**Console URL:** `https://console.your-domain.com` (optional, extra tools — operators set `CONNECTOR_ADMIN_TOKEN` in `.env` to access). Override the host with `CONSOLE_DOMAIN` / the link with `CONSOLE_URL`.
+**Console URL:** `https://console.your-domain.com` — log in with `CONNECTOR_ADMIN_TOKEN` from `.env`. Override the host with `CONSOLE_DOMAIN` / the link with `CONSOLE_URL`.
 
 Set `CONNECTOR_ORIGIN=https://your-domain.com` so OAuth callbacks land on the agent's domain.
 

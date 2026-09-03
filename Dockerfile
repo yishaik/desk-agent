@@ -3,8 +3,9 @@
 
 FROM node:22-slim
 
-# Install dependencies for Baileys (WhatsApp)
-RUN apt-get update && apt-get install -y \
+# Build tools are needed for native modules (better-sqlite3) during npm ci,
+# then removed from the production image (S-13).
+RUN apt-get update && apt-get install -y --no-install-recommends \
     python3 \
     make \
     g++ \
@@ -24,7 +25,10 @@ WORKDIR /app
 COPY package*.json ./
 
 # Install dependencies (--omit=dev replaces deprecated --only=production)
-RUN npm ci --omit=dev
+RUN npm ci --omit=dev \
+    && apt-get purge -y python3 make g++ \
+    && apt-get autoremove -y --purge \
+    && rm -rf /var/lib/apt/lists/* /root/.npm
 
 # Copy source code
 COPY src/ ./src/

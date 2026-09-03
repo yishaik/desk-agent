@@ -14,7 +14,7 @@ describe('Shared Theme CSS', () => {
     
     expect(css).toContain('--bg-primary: #09090b');
     expect(css).toContain('--bg-secondary: #18181b');
-    expect(css).toContain('--accent: #6366f1');
+    expect(css).toContain('--accent: #818cf8');
     expect(css).toContain('--accent-hover: #4f46e5');
     expect(css).toContain('--success: #22c55e');
     expect(css).toContain('--error: #ef4444');

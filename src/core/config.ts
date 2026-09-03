@@ -1,5 +1,6 @@
-import { resolve } from 'node:path';
+import { resolve, join } from 'node:path';
 import { randomBytes } from 'node:crypto';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 
 export interface Config {
   port: number;
@@ -24,17 +25,38 @@ function generatePairToken(): string {
   return randomBytes(32).toString('hex');
 }
 
+/** Persist a generated PAIR_TOKEN so an empty env var does not mint a new one every boot (S-16). */
+function loadOrCreatePairToken(dataDir: string): string {
+  const fromEnv = process.env['PAIR_TOKEN'] ?? '';
+  if (fromEnv) return fromEnv;
+
+  const tokenPath = join(dataDir, '.pair-token');
+  try {
+    const existing = readFileSync(tokenPath, 'utf8').trim();
+    if (existing) return existing;
+  } catch {
+    // first boot
+  }
+
+  const generated = generatePairToken();
+  try {
+    if (!existsSync(dataDir)) mkdirSync(dataDir, { recursive: true, mode: 0o700 });
+    writeFileSync(tokenPath, generated, { mode: 0o600 });
+    console.error(`[config] Generated PAIR_TOKEN and saved to ${tokenPath}`);
+    console.error('[config] Set PAIR_TOKEN in .env for production; this file is not a substitute.');
+  } catch (err) {
+    console.error('[config] Generated PAIR_TOKEN but failed to persist it:', err);
+    console.error(`[config] PAIR_TOKEN=${generated}`);
+  }
+  return generated;
+}
+
 export function loadConfig(): Config {
   const isProduction = process.env['NODE_ENV'] === 'production';
   // Absolute: it becomes HOME/CLAUDE_CONFIG_DIR of child processes that run with another cwd.
   const dataDir = resolve(getEnvOrDefault('DATA_DIR', './data'));
   
-  let pairToken = process.env['PAIR_TOKEN'] ?? '';
-  if (!pairToken) {
-    pairToken = generatePairToken();
-    console.error(`[config] Generated PAIR_TOKEN: ${pairToken}`);
-    console.error('[config] Save this token for future use or set PAIR_TOKEN env var');
-  }
+  const pairToken = loadOrCreatePairToken(dataDir);
 
   const openConnectorUrl = getEnvOrDefault('OPEN_CONNECTOR_URL', 'http://localhost:3000');
   

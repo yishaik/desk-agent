@@ -1,4 +1,4 @@
-import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdirSync, renameSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { config } from './config.ts';
 import { createChildLogger } from './logger.ts';
@@ -35,10 +35,16 @@ function load(): Store {
   }
 }
 
+function atomicWrite(path: string, content: string): void {
+  mkdirSync(dirname(path), { recursive: true });
+  const tempPath = `${path}.tmp`;
+  writeFileSync(tempPath, content, { mode: 0o600 });
+  renameSync(tempPath, path);
+}
+
 function save(store: Store): void {
   try {
-    mkdirSync(dirname(STORE_PATH), { recursive: true });
-    writeFileSync(STORE_PATH, JSON.stringify(store), { mode: 0o600 });
+    atomicWrite(STORE_PATH, JSON.stringify(store));
   } catch (err) {
     log.error({ err }, 'Failed to persist pending confirmations');
   }
@@ -220,8 +226,7 @@ function loadExecuted(): ExecutedActionNote[] {
 
 function saveExecuted(notes: ExecutedActionNote[]): void {
   try {
-    mkdirSync(dirname(EXECUTED_PATH), { recursive: true });
-    writeFileSync(EXECUTED_PATH, JSON.stringify(notes), { mode: 0o600 });
+    atomicWrite(EXECUTED_PATH, JSON.stringify(notes));
   } catch (err) {
     log.error({ err }, 'Failed to persist executed-action notes');
   }
@@ -244,16 +249,28 @@ export function consumeExecutedActionNotes(projectId: string): ExecutedActionNot
 }
 
 export function cleanupOldConfirmations(): void {
+  consumeExpiredConfirmations();
+}
+
+/** Remove expired pending items and return them so the handler can tell the owner. */
+export function consumeExpiredConfirmations(
+  projectId?: string
+): Array<PendingConfirmation & { confirmationId: string }> {
   const store = load();
   const now = Date.now();
+  const expired: Array<PendingConfirmation & { confirmationId: string }> = [];
   let changed = false;
   for (const [id, pending] of Object.entries(store)) {
     if (now - pending.createdAt > MAX_AGE_MS) {
-      delete store[id];
-      changed = true;
+      if (projectId === undefined || pending.projectId === projectId) {
+        expired.push({ confirmationId: id, ...pending });
+        delete store[id];
+        changed = true;
+      }
     }
   }
   if (changed) save(store);
+  return expired;
 }
 
 /** Get all pending confirmations for a project (or all if projectId undefined). */

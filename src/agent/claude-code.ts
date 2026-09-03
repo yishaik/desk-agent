@@ -151,8 +151,8 @@ export async function startClaudeCodeLogin(): Promise<{ authorizeUrl?: string; e
   }
 
   ensureDirs();
-  // A fresh login must not reuse half-written credentials.
-  rmSync(CREDENTIALS_PATH, { force: true });
+  // Keep existing credentials until the new login actually stores replacements
+  // (U-10 / S-20). A failed attempt must not disconnect a working account.
 
   const child = spawn('script', ['-qec', `stty cols 500 2>/dev/null; ${CLAUDE_BIN}`, '/dev/null'], {
     env: buildClaudeCodeEnv(),

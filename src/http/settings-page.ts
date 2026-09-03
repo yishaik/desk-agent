@@ -1,5 +1,6 @@
 import type { Settings, PairingState } from '../core/types.ts';
 import { getThemeCss } from './theme.ts';
+import { timezoneSelectHtml, escapeHtml } from './html.ts';
 
 interface ConnectorStatus {
   healthy: boolean;
@@ -612,14 +613,7 @@ export function getSettingsHtml(data: SettingsPageData): string {
           </div>
           <div class="form-group">
             <label for="timezone">אזור זמן</label>
-            <select id="timezone" name="timezone">
-              <option value="Asia/Jerusalem" ${settings.timezone === 'Asia/Jerusalem' ? 'selected' : ''}>ישראל (Asia/Jerusalem)</option>
-              <option value="UTC" ${settings.timezone === 'UTC' ? 'selected' : ''}>UTC</option>
-              <option value="America/New_York" ${settings.timezone === 'America/New_York' ? 'selected' : ''}>ניו יורק</option>
-              <option value="Europe/London" ${settings.timezone === 'Europe/London' ? 'selected' : ''}>לונדון</option>
-              <option value="Europe/Paris" ${settings.timezone === 'Europe/Paris' ? 'selected' : ''}>פריז</option>
-              <option value="Asia/Tokyo" ${settings.timezone === 'Asia/Tokyo' ? 'selected' : ''}>טוקיו</option>
-            </select>
+            ${timezoneSelectHtml(settings.timezone || 'Asia/Jerusalem')}
           </div>
         </div>
         
@@ -724,9 +718,10 @@ export function getSettingsHtml(data: SettingsPageData): string {
         <span class="info-value">${connectorStatus.connectionCount}</span>
       </div>
       <div class="btn-group" id="consoleLinkContainer" style="display: none;">
-        <a id="consoleLinkHref" href="#" target="_blank">
+        <a id="consoleLinkHref" href="#" target="_blank" rel="noopener noreferrer">
           <button type="button" class="secondary">כלים נוספים</button>
         </a>
+        <p id="consoleLoginHint" style="font-size: 13px; color: var(--text-muted); margin-top: 8px;">התחברות לקונסול עם <code>CONNECTOR_ADMIN_TOKEN</code> מ-.env (לא טוקן הגישה של האתר).</p>
       </div>
     </div>
 
@@ -1043,6 +1038,17 @@ export function getSettingsHtml(data: SettingsPageData): string {
         
         if (res.ok) {
           showToast('ההגדרות נשמרו בהצלחה');
+        } else if (res.status === 409) {
+          const json = await res.json().catch(() => ({}));
+          if (json.needsConfirm && confirm(json.error || 'שינוי זה מאפס את היסטוריית השיחה. להמשיך?')) {
+            const retry = await fetch('/api/settings', {
+              method: 'PUT',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ ...data, confirmReset: true })
+            });
+            if (retry.ok) showToast('ההגדרות נשמרו בהצלחה');
+            else showToast('שגיאה בשמירה', 'error');
+          }
         } else {
           showToast('שגיאה בשמירה', 'error');
         }
@@ -1324,11 +1330,24 @@ export function getSettingsHtml(data: SettingsPageData): string {
     async function saveSkillPacks() {
       const ids = Array.from(document.querySelectorAll('input[name="skillPack"]:checked')).map((b) => b.value);
       try {
-        const res = await fetch('/api/settings', {
+        const payload = { skillPacks: ids };
+        let res = await fetch('/api/settings', {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ skillPacks: ids })
+          body: JSON.stringify(payload)
         });
+        if (res.status === 409) {
+          const json = await res.json().catch(() => ({}));
+          if (json.needsConfirm && confirm(json.error || 'שינוי סקילים מאפס את היסטוריית השיחה. להמשיך?')) {
+            res = await fetch('/api/settings', {
+              method: 'PUT',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ ...payload, confirmReset: true })
+            });
+          } else {
+            return;
+          }
+        }
         if (res.ok) showToast('הסקילים עודכנו'); else showToast('שגיאה בשמירת הסקילים', 'error');
       } catch (err) {
         showToast('שגיאה בשמירת הסקילים', 'error');
@@ -1582,14 +1601,4 @@ export function getSettingsHtml(data: SettingsPageData): string {
   </script>
 </body>
 </html>`;
-}
-
-function escapeHtml(str: string): string {
-  if (!str) return '';
-  return str
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;');
 }

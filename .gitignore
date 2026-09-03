@@ -1,5 +1,6 @@
 # desk-agent specific
 data/
+test-data-*/
 *.sqlite
 *.sqlite3
 

@@ -38,8 +38,9 @@ say() { printf '\n\033[1;36m== %s\033[0m\n' "$*"; }
 
 # --- 1. Docker -------------------------------------------------------------
 if ! command -v docker >/dev/null 2>&1; then
-  say "Docker not found — installing"
-  curl -fsSL https://get.docker.com | sh
+  echo "Docker is not installed. Install it from https://docs.docker.com/engine/install/ then re-run." >&2
+  echo "Do not pipe curl | sh on this host — the installer is not pinned (S-14)." >&2
+  exit 1
 fi
 if ! docker info >/dev/null 2>&1; then
   echo "docker is installed but not usable by this user (try: sudo usermod -aG docker \$USER && re-login, or run with sudo)" >&2
@@ -154,5 +155,5 @@ echo
 # Display token to terminal only (not captured in script logs or Caddy access logs)
 printf '    PAIR_TOKEN: %s\n' "$PAIR_TOKEN"
 echo
-echo "Open Connector console (log in with the admin token the wizard shows once):"
+echo "Open Connector console (log in with CONNECTOR_ADMIN_TOKEN from .env):"
 echo "    https://${CONSOLE_DOMAIN}"

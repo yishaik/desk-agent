@@ -221,6 +221,7 @@ describe('Health Check Path', () => {
     expect(checkHealthSource).toContain('/health');
     expect(checkHealthSource).not.toContain('/v1/health');
     expect(checkHealthSource).not.toContain('this.request');
+    expect(checkHealthSource).toContain('AbortSignal.timeout');
   });
 
   it('handler /status uses OpenConnectorClient.checkHealth not standalone fetch', async () => {

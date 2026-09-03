@@ -89,6 +89,12 @@ nano .env
 # טוקן גישה לממשק (צור אקראי)
 PAIR_TOKEN=$(openssl rand -hex 32)
 
+# טוקן runtime ל-Open Connector
+OPEN_CONNECTOR_TOKEN=$(openssl rand -hex 32)
+
+# טוקן ניהול לקונסול ולנתיבי admin של Open Connector (חובה בייצור)
+CONNECTOR_ADMIN_TOKEN=$(openssl rand -hex 32)
+
 # מפתח הצפנה לסיסמאות
 CONNECTOR_ENCRYPTION_KEY=$(openssl rand -hex 32)
 
@@ -105,7 +111,7 @@ CONSOLE_DOMAIN=console.agent.example.com
 # CONSOLE_URL=https://console.agent.example.com
 ```
 
-> **הערה:** טוקן Open Connector נוצר אחרי ההפעלה הראשונה בממשק.
+> **הערה:** בלי `CONNECTOR_ADMIN_TOKEN` נתיבי הניהול של Open Connector פתוחים. `deploy.sh` מייצר את כל הטוקנים אוטומטית.
 
 > **טיפ — פורט 443 תפוס בשרת?** (למשל tailscaled שמאזין על 443): צור
 > `docker-compose.override.yml` שקושר את Caddy רק ל-IP הספציפי:
@@ -254,7 +260,7 @@ Caddy מטפל ב-TLS וב-routing:
 
 **DNS:** שני A records לאותו שרת — `your-domain.com` ו-`console.your-domain.com` (`deploy.sh <domain> [console-domain]`).
 
-**כתובת הקונסול:** `https://console.your-domain.com` — אופציונלי לכלים נוספים. מפעילים מגדירים `CONNECTOR_ADMIN_TOKEN` ב-`.env` כדי להתחבר. אפשר לשנות עם `CONSOLE_DOMAIN` / `CONSOLE_URL`.
+**כתובת הקונסול:** `https://console.your-domain.com` — מתחברים עם `CONNECTOR_ADMIN_TOKEN` מ-`.env` (לא טוקן הגישה של האתר). אפשר לשנות עם `CONSOLE_DOMAIN` / `CONSOLE_URL`.
 
 ודא ש-`CONNECTOR_ORIGIN` מכיל את ה-URL הציבורי של ה-agent.
 
@@ -342,7 +348,7 @@ docker compose up -d
 
 - [ ] שרת CX23 / 4GB RAM פועל עם Docker
 - [ ] DNS: שני A records (`DOMAIN` ו-`CONSOLE_DOMAIN` / `console.<domain>`) מצביעים לשרת
-- [ ] .env מוגדר (PAIR_TOKEN, CONNECTOR_ENCRYPTION_KEY, DOMAIN, CONNECTOR_ORIGIN, CONSOLE_DOMAIN)
+- [ ] .env מוגדר (PAIR_TOKEN, OPEN_CONNECTOR_TOKEN, CONNECTOR_ADMIN_TOKEN, CONNECTOR_ENCRYPTION_KEY, DOMAIN, CONNECTOR_ORIGIN, CONSOLE_DOMAIN)
 - [ ] `docker compose up -d` הצליח
 - [ ] HTTPS פועל (אין אזהרת תעודה)
 - [ ] ממשק ניהול נגיש

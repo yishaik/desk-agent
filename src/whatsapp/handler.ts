@@ -14,7 +14,7 @@ import {
   getPendingConfirmation,
   confirmAction,
   cancelConfirmation,
-  cleanupOldConfirmations,
+  consumeExpiredConfirmations,
   getAllPendingConfirmations,
   cancelAllPendingConfirmations,
   formatPendingForUser,
@@ -113,11 +113,11 @@ function describeSelfChat(mode: 'lid' | 'phone' | 'none' | undefined): string {
   return '';
 }
 
-const CONFIRM_PATTERNS = [
-  /^(yes|כן|אשר|confirm)$/i,
+export const CONFIRM_PATTERNS = [
+  /^(yes|y|ok|okay|sure|confirm|כן|אשר|אוקיי|אוקי|בסדר|יאללה)$/i,
 ];
 
-const CANCEL_PATTERNS = [
+export const CANCEL_PATTERNS = [
   /^(no|לא|בטל|cancel|ביטול)$/i,
 ];
 
@@ -145,36 +145,40 @@ async function executePendingAction(
       recordExecutedAction({ projectId, actionId: pending.actionId, success: false, summary: String(result.message ?? 'unknown error') });
       return {
         handled: true,
-        response: `❌ Action failed: ${result.message}`,
+        response: `❌ הפעולה נכשלה: ${publicActionError(result.message)}`,
       };
     }
 
     recordExecutedAction({ projectId, actionId: pending.actionId, success: true, summary: JSON.stringify(result.data ?? null) });
     return {
       handled: true,
-      response: `✅ Action "${pending.actionId}" executed successfully.\n\nResult:\n${JSON.stringify(result.data, null, 2)}`,
+      response: `✅ בוצע: ${pending.actionId}`,
     };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     recordExecutedAction({ projectId, actionId: pending.actionId, success: false, summary: message });
     return {
       handled: true,
-      response: `❌ Error: ${message}`,
+      response: `❌ שגיאה: ${publicActionError(message)}`,
     };
   }
 }
 
 /** Prefix the prompt with what ran since the model's last turn, so it never re-executes or denies it. */
+const EXECUTED_NOTE_MARK = '⟦desk-agent-executed⟧';
+
 export function withExecutedActionNotes(projectId: string, text: string): string {
   const notes = consumeExecutedActionNotes(projectId);
-  if (notes.length === 0) return text;
+  const safeText = text.replaceAll(EXECUTED_NOTE_MARK, '');
+  if (notes.length === 0) return safeText;
   const lines = notes.map((n) => `- ${n.actionId}: ${n.success ? 'executed successfully' : 'FAILED'} — ${n.summary}`);
   return [
-    '[System note — not written by the user. Since your last turn the user approved these actions and they were executed outside the model:',
+    `${EXECUTED_NOTE_MARK} Since your last turn the user approved these actions and they were executed outside the model:`,
     ...lines,
-    'Do not execute them again; you may refer to the results.]',
+    'Do not execute them again; you may refer to the results.',
+    `${EXECUTED_NOTE_MARK}`,
     '',
-    text,
+    safeText,
   ].join('\n');
 }
 
@@ -192,16 +196,37 @@ function showPayloadAndMarkPresented(
   lines.push(`\n${formatPendingForUser(pending)}`);
   
   if (isSingleItem) {
-    lines.push('\nהשב *כן* או *אשר* לאישור, או "לא" לביטול.');
+    lines.push('\nהשב *כן* / *אשר* / *בסדר* / *1* לאישור, או "לא" לביטול.');
   } else {
-    lines.push('\nהשב *כן* לאישור פעולה זו, או "לא" לביטול.');
+    lines.push('\nהשב את המספר לאישור פעולה זו, או "לא" לביטול.');
   }
   
   return lines.join('\n');
 }
 
+function publicActionError(message: string | undefined): string {
+  const raw = (message ?? '').slice(0, 400);
+  if (/Open Connector API error|ECONNREFUSED|fetch failed|unauthorized|401|403/i.test(raw)) {
+    return 'שגיאה בשירות החיבורים. נסה שוב, ואם זה חוזר בדוק את החיבור בהגדרות.';
+  }
+  return raw || 'שגיאה לא ידועה';
+}
+
 async function checkForConfirmationResponse(text: string, projectId: string): Promise<CommandResult> {
-  cleanupOldConfirmations();
+  const expired = consumeExpiredConfirmations(projectId);
+  const trimmedPreview = text.trim();
+  const looksLikeConfirmOrCancel =
+    CONFIRM_PATTERNS.some((p) => p.test(trimmedPreview)) ||
+    CANCEL_PATTERNS.some((p) => p.test(trimmedPreview)) ||
+    /^\d+$/.test(trimmedPreview);
+
+  if (expired.length > 0 && looksLikeConfirmOrCancel) {
+    const names = expired.map((p) => p.actionId).join(', ');
+    return {
+      handled: true,
+      response: `⏱️ תוקף האישור פג (3 דקות): ${names}. בקש מהסוכן לבצע שוב.`,
+    };
+  }
 
   const allPending = getAllPendingConfirmations(projectId);
   if (allPending.length === 0) {
@@ -253,8 +278,8 @@ async function checkForConfirmationResponse(text: string, projectId: string): Pr
   const isSimpleConfirm = CONFIRM_PATTERNS.some((p) => p.test(trimmedText));
   const numberMatch = trimmedText.match(/^(\d+)$/);
 
-  // --- Number pick for multi-pending ---
-  if (allPending.length > 1 && numberMatch && numberMatch[1]) {
+  // --- Number pick: "1" is valid for a single pending item; 1..n for a list ---
+  if (numberMatch && numberMatch[1] && (allPending.length > 1 || numberMatch[1] === '1')) {
     const idx = parseInt(numberMatch[1], 10) - 1;
     if (idx >= 0 && idx < allPending.length) {
       const selected = allPending[idx];
@@ -319,14 +344,8 @@ async function checkForConfirmationResponse(text: string, projectId: string): Pr
     };
   }
 
-  const count = cancelAllPendingConfirmations(projectId);
-  const actionNames = allPending.map((p) => p.actionId).join(', ');
-  return {
-    handled: true,
-    response: count === 1
-      ? `⚠️ הפעולה "${actionNames}" בוטלה (לא התקבל אישור/ביטול).`
-      : `⚠️ ${count} פעולות בוטלו (לא התקבל אישור/ביטול): ${actionNames}`,
-  };
+  // Any other text keeps the pending action and goes to the model (U-03).
+  return { handled: false };
 }
 
 /**
@@ -590,7 +609,8 @@ async function handleCommand(text: string, settings: Settings): Promise<CommandR
 /model [name] - החלף מודל
 
 *אישור פעולות:*
-כן / אשר — אישור · לא / בטל — ביטול
+כן / אשר / בסדר / אוקיי / 1 — אישור · לא / בטל — ביטול
+הודעה רגילה לא מבטלת פעולה ממתינה.
 
 *פעולות Open Connector:*
 שאל "מה אני יכול לעשות עם Gmail?" או "שלח מייל ל..."

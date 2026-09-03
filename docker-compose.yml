@@ -25,7 +25,8 @@ services:
       - CONNECTOR_ORIGIN=${CONNECTOR_ORIGIN}
       # S-07: Admin token is SERVER-SIDE ONLY for OAuth fallback if OC requires it.
       # NEVER exposed to customer UI (onboarding, dashboard, settings) or child env (Claude/Pi/MCP).
-      - CONNECTOR_ADMIN_TOKEN=${CONNECTOR_ADMIN_TOKEN:-}
+      # Required in production — an empty token opens Open Connector admin routes (S-25).
+      - CONNECTOR_ADMIN_TOKEN=${CONNECTOR_ADMIN_TOKEN}
       - DOMAIN=${DOMAIN}
       # Public console URL shown in the wizard/settings (default: https://console.${DOMAIN})
       - CONSOLE_URL=${CONSOLE_URL:-}
@@ -41,6 +42,16 @@ services:
       - connector
     networks:
       - desk-network
+    mem_limit: 1536m
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
     healthcheck:
       test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://localhost:3001/health"]
       interval: 30s
@@ -72,6 +83,14 @@ services:
       - OOMOL_CONNECT_RUNTIME_TOKEN=${OPEN_CONNECTOR_TOKEN}
       - OOMOL_CONNECT_ALLOWED_ACTIONS=${CONNECTOR_ALLOWED_ACTIONS:-*}
       - OOMOL_CONNECT_BLOCKED_ACTIONS=${CONNECTOR_BLOCKED_ACTIONS:-}
+    mem_limit: 768m
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+    security_opt:
+      - no-new-privileges:true
     volumes:
       - connector-data:/app/data
     networks:
@@ -98,6 +117,13 @@ services:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy-data:/data
       - caddy-config:/config
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+    security_opt:
+      - no-new-privileges:true
     depends_on:
       - agent
       - connector

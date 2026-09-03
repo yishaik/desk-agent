@@ -39,7 +39,7 @@ import { writeIdentityFiles } from '../core/identity-files.ts';
 import { recreateSessionAfterCredentialChange } from '../agent/session.ts';
 import { getSettingsHtml, type SettingsPageData } from './settings-page.ts';
 import { getThemeCss } from './theme.ts';
-import { escapeHtml } from './html.ts';
+import { escapeHtml, timezoneSelectHtml } from './html.ts';
 
 const log = createChildLogger('http');
 
@@ -110,6 +110,42 @@ function timingSafeTokenCompare(provided: string | undefined, expected: string):
 
 const COOKIE_MAX_AGE = 30 * 24 * 60 * 60;
 
+const LOGIN_WINDOW_MS = 15 * 60 * 1000;
+const LOGIN_MAX_FAILURES = 5;
+const loginAttempts = new Map<string, { count: number; resetAt: number }>();
+
+function clientIp(req: IncomingMessage): string {
+  const forwarded = req.headers['x-forwarded-for'];
+  if (typeof forwarded === 'string' && forwarded.length > 0) {
+    return forwarded.split(',')[0]!.trim();
+  }
+  return req.socket.remoteAddress ?? 'unknown';
+}
+
+function loginBlocked(ip: string): boolean {
+  const entry = loginAttempts.get(ip);
+  if (!entry) return false;
+  if (Date.now() > entry.resetAt) {
+    loginAttempts.delete(ip);
+    return false;
+  }
+  return entry.count >= LOGIN_MAX_FAILURES;
+}
+
+function recordLoginFailure(ip: string): void {
+  const now = Date.now();
+  const entry = loginAttempts.get(ip);
+  if (!entry || now > entry.resetAt) {
+    loginAttempts.set(ip, { count: 1, resetAt: now + LOGIN_WINDOW_MS });
+    return;
+  }
+  entry.count += 1;
+}
+
+function clearLoginFailures(ip: string): void {
+  loginAttempts.delete(ip);
+}
+
 function getPairTokenCookie(req: IncomingMessage): string | undefined {
   const cookies = req.headers.cookie ?? '';
   return cookies
@@ -163,8 +199,15 @@ function sendJson(res: ServerResponse, data: unknown, status = 200): void {
   res.end(JSON.stringify(data));
 }
 
+const HTML_SECURITY_HEADERS = {
+  'Content-Type': 'text/html; charset=utf-8',
+  'Content-Security-Policy': "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; connect-src 'self' https:; frame-ancestors 'none'; base-uri 'self'; form-action 'self'",
+  'X-Content-Type-Options': 'nosniff',
+  'Referrer-Policy': 'strict-origin-when-cross-origin',
+};
+
 function sendHtml(res: ServerResponse, html: string, status = 200): void {
-  res.writeHead(status, { 'Content-Type': 'text/html; charset=utf-8' });
+  res.writeHead(status, HTML_SECURITY_HEADERS);
   res.end(html);
 }
 
@@ -212,16 +255,34 @@ async function parseBody<T>(req: IncomingMessage): Promise<T> {
   });
 }
 
-addRoute('GET', '/health', async (req, res) => {
+addRoute('GET', '/health', async (_req, res) => {
+  // Unauthenticated liveness only. Do not probe Open Connector here — a hung
+  // connector used to fail this check and restart the agent (R-01, S-17).
+  sendJson(res, { status: 'ok' });
+});
+
+addRoute('GET', '/api/status', async (req, res) => {
+  if (!isAuthenticated(req)) {
+    sendError(res, 'Unauthorized', 401);
+    return;
+  }
+
   const wa = getWhatsAppClient();
   const connector = createClient();
   const connectorHealth = await connector.checkHealth().catch(() => false);
+  const settings = loadSettings();
+  const { getAllPendingConfirmations } = await import('../core/confirmations.ts');
+  const pending = getAllPendingConfirmations(settings.activeProject);
 
   sendJson(res, {
-    status: 'ok',
-    whatsapp: wa.isConnected() ? 'connected' : 'disconnected',
-    connector: connectorHealth ? 'healthy' : 'unhealthy',
-    timestamp: new Date().toISOString(),
+    success: true,
+    data: {
+      whatsapp: wa.isConnected() ? 'connected' : 'disconnected',
+      connector: connectorHealth ? 'healthy' : 'unhealthy',
+      pendingConfirmations: pending.length,
+      activeProject: settings.activeProject,
+      timestamp: new Date().toISOString(),
+    },
   });
 });
 
@@ -375,25 +436,19 @@ addRoute('GET', '/api/auth/login/:provider/status', async (req, res, params) => 
   }
 
   try {
+    // S-11: GET must not recreate sessions. Persist the default model only.
     const status = await getLoginStatusAsync(provider);
-    
-    // On success, persist the model and recreate session
     if (status.status === 'success') {
       const settings = loadSettings();
-      const defaultModel = provider === 'claude-code' 
-        ? 'claude-code/default' 
+      const defaultModel = provider === 'claude-code'
+        ? 'claude-code/default'
         : provider === 'openai-codex'
           ? 'openai-codex/gpt-5.3-codex'
           : settings.model;
-      
       if (settings.model !== defaultModel) {
         updateSettings({ model: defaultModel });
       }
-      
-      const { recreateSessionAfterCredentialChange } = await import('../agent/session.ts');
-      await recreateSessionAfterCredentialChange(settings.activeProject, { credentialsChanged: true });
     }
-    
     sendJson(res, { success: true, data: status });
   } catch (err) {
     log.error({ err }, 'Login status error');
@@ -537,6 +592,13 @@ addRoute('POST', '/api/ai/sync-model', async (req, res) => {
 });
 
 addRoute('POST', '/auth', async (req, res) => {
+  const ip = clientIp(req);
+  if (loginBlocked(ip)) {
+    log.warn({ ip }, 'Login locked out after repeated failures');
+    sendError(res, 'יותר מדי ניסיונות. נסה שוב בעוד רבע שעה.', 429);
+    return;
+  }
+
   let body: { token?: string };
   try {
     body = await parseBody<{ token?: string }>(req);
@@ -551,9 +613,12 @@ addRoute('POST', '/auth', async (req, res) => {
   const token = body.token;
 
   if (timingSafeTokenCompare(token, config.pairToken)) {
+    clearLoginFailures(ip);
     setAuthCookie(res, req);
     sendJson(res, { success: true });
   } else {
+    recordLoginFailure(ip);
+    log.warn({ ip }, 'Failed Web UI login');
     sendError(res, 'Invalid token', 401);
   }
 });
@@ -753,6 +818,8 @@ addRoute('PUT', '/api/settings', async (req, res) => {
     }
   }
 
+  const confirmReset = (body as { confirmReset?: boolean }).confirmReset === true;
+
   const stringFields: Array<keyof typeof body> = [
     'botName', 'ownerName', 'businessName', 'businessDescription',
     'agentVoice', 'agentBoundaries', 'timezone', 'model',
@@ -790,6 +857,24 @@ addRoute('PUT', '/api/settings', async (req, res) => {
 
   const previousSettings = loadSettings();
 
+  const identityFields = ['botName', 'ownerName', 'businessName', 'businessDescription', 'agentVoice', 'agentBoundaries', 'timezone'] as const;
+  const identityChanged = identityFields.some(
+    (field) => body[field] !== undefined && body[field] !== previousSettings[field]
+  );
+  const modelChanged = body.model !== undefined && body.model !== previousSettings.model;
+  const skillsChanged =
+    body.skillPacks !== undefined &&
+    JSON.stringify([...body.skillPacks].sort()) !== JSON.stringify([...(previousSettings.skillPacks ?? DEFAULT_SKILL_PACKS)].sort());
+
+  if (previousSettings.setupComplete && (modelChanged || identityChanged || skillsChanged) && !confirmReset) {
+    sendJson(res, {
+      success: false,
+      needsConfirm: true,
+      error: 'שינוי זהות או סקילים מאפס את היסטוריית השיחה. אשר ושמור שוב.',
+    }, 409);
+    return;
+  }
+
   const updates: Partial<typeof body> = {};
   if (body.botName !== undefined) updates.botName = body.botName;
   if (body.ownerName !== undefined) updates.ownerName = body.ownerName;
@@ -806,16 +891,7 @@ addRoute('PUT', '/api/settings', async (req, res) => {
   
   writeIdentityFiles(settings);
 
-  const identityFields = ['botName', 'ownerName', 'businessName', 'businessDescription', 'agentVoice', 'agentBoundaries', 'timezone'] as const;
-  const identityChanged = identityFields.some(
-    (field) => body[field] !== undefined && body[field] !== previousSettings[field]
-  );
-  const modelChanged = body.model !== undefined && body.model !== previousSettings.model;
-
   let sessionRecreated = false;
-  const skillsChanged =
-    body.skillPacks !== undefined &&
-    JSON.stringify([...body.skillPacks].sort()) !== JSON.stringify([...(previousSettings.skillPacks ?? DEFAULT_SKILL_PACKS)].sort());
 
   if (modelChanged || identityChanged || skillsChanged) {
     try {
@@ -951,15 +1027,6 @@ addRoute('PUT', '/api/projects/:id/activate', async (req, res, _params) => {
 addRoute('POST', '/api/setup/complete', async (req, res) => {
   if (!isAuthenticated(req)) {
     sendError(res, 'Unauthorized', 401);
-    return;
-  }
-
-  const settings = loadSettings();
-  const connector = createClient(settings.activeProject);
-
-  const healthy = await connector.checkHealth().catch(() => false);
-  if (!healthy) {
-    sendError(res, 'Open Connector לא זמין. ודא שהשירות פועל ונסה שוב.', 400);
     return;
   }
 
@@ -1611,7 +1678,8 @@ export function getLoginHtml(): string {
     <p class="subtitle">הזן טוקן גישה להמשך</p>
     <form id="loginForm">
       <label for="token">טוקן גישה</label>
-      <input type="password" id="token" name="token" placeholder="הזן PAIR_TOKEN" required>
+      <input type="password" id="token" name="token" placeholder="הזן PAIR_TOKEN" required autocomplete="current-password">
+      <p style="color: var(--text-muted); font-size: 13px; margin: -12px 0 24px;">הטוקן נמצא בקובץ <code>.env</code> בשדה <code>PAIR_TOKEN</code>. <code>deploy.sh</code> יוצר אותו בהפעלה הראשונה ומציג אותו פעם אחת במסוף.</p>
       <button type="submit">התחבר</button>
     </form>
     <p class="error" id="error">טוקן שגוי</p>
@@ -2139,12 +2207,7 @@ export function getWizardHtml(settings: ReturnType<typeof loadSettings>, pairing
         </div>
         <div class="form-group">
           <label for="timezone">אזור זמן</label>
-          <select id="timezone" name="timezone">
-            <option value="Asia/Jerusalem" ${settings.timezone === 'Asia/Jerusalem' ? 'selected' : ''}>ישראל (Asia/Jerusalem)</option>
-            <option value="UTC" ${settings.timezone === 'UTC' ? 'selected' : ''}>UTC</option>
-            <option value="America/New_York" ${settings.timezone === 'America/New_York' ? 'selected' : ''}>ניו יורק</option>
-            <option value="Europe/London" ${settings.timezone === 'Europe/London' ? 'selected' : ''}>לונדון</option>
-          </select>
+          ${timezoneSelectHtml(settings.timezone || 'Asia/Jerusalem')}
         </div>
         <div class="form-group">
           <label for="businessDescription">תיאור העסק</label>

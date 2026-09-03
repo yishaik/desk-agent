@@ -9,6 +9,13 @@ const log = createChildLogger('main');
 async function main(): Promise<void> {
   log.info({ version: '1.0.0' }, 'Starting Desk Agent');
 
+  if (process.env['NODE_ENV'] === 'production' && !process.env['CONNECTOR_ADMIN_TOKEN']) {
+    log.error(
+      'CONNECTOR_ADMIN_TOKEN is required in production. An empty admin token leaves Open Connector /api/oauth/* unauthenticated (S-25). Generate one with: openssl rand -hex 32'
+    );
+    process.exit(1);
+  }
+
   console.log(`
 ╔═══════════════════════════════════════════════╗
 ║           🤖 Desk Agent v1.0.0                ║
