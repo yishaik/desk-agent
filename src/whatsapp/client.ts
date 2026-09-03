@@ -69,6 +69,12 @@ export class WhatsAppClient {
   private ownerLid: string | null = null;
   private warnedNoLid = false;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  /** Fires if WS stays on 'connecting' without QR/open (issue #176). */
+  private connectWatchdog: ReturnType<typeof setTimeout> | null = null;
+  private static readonly CONNECT_WATCHDOG_MS = 30_000;
+  private connectionPhase: 'connecting' | 'open' | 'closed' = 'closed';
+  /** Epoch ms of the last connection.update phase change (or connect()/disconnect). */
+  private lastConnectionEventAt: number | null = null;
   /** One Hebrew stale-skip notice per reconnect (PR 160 CHANGE THIS). */
   private staleSkipNotified = false;
 
@@ -104,6 +110,8 @@ export class WhatsAppClient {
       generateHighQualityLinkPreview: false,
     });
 
+    this.noteConnectionEvent('connecting');
+    this.startConnectWatchdog();
     this.setupEventHandlers(saveCreds);
     log.info('WhatsApp client initialized');
   }
@@ -114,6 +122,47 @@ export class WhatsAppClient {
       this.socket.ev.removeAllListeners('creds.update');
       this.socket.ev.removeAllListeners('messages.upsert');
     }
+  }
+
+  private noteConnectionEvent(phase: 'connecting' | 'open' | 'closed'): void {
+    this.connectionPhase = phase;
+    this.lastConnectionEventAt = Date.now();
+  }
+
+  private clearConnectWatchdog(): void {
+    if (this.connectWatchdog) {
+      clearTimeout(this.connectWatchdog);
+      this.connectWatchdog = null;
+    }
+  }
+
+  /**
+   * If the WS handshake never yields QR or open (proxy/DNS/firewall), Baileys
+   * can sit on connection==='connecting' forever. End the socket (never logout)
+   * and schedule a reconnect with backoff (#176).
+   */
+  private startConnectWatchdog(): void {
+    if (this.connectWatchdog) return;
+
+    this.connectWatchdog = setTimeout(() => {
+      this.connectWatchdog = null;
+      log.warn('WhatsApp connect watchdog: stuck on connecting without QR/open');
+      this.pairingState = {
+        isPaired: false,
+        error: 'לא ניתן להתחבר ל-WhatsApp — בדוק חיבור/חומת אש',
+      };
+      this.noteConnectionEvent('closed');
+
+      if (this.socket) {
+        this.removeSocketListeners();
+        this.socket.end(new Error('connect watchdog'));
+        this.socket = null;
+      }
+
+      this.reconnectAttempts++;
+      const delay = Math.min(1000 * Math.pow(2, Math.max(this.reconnectAttempts, 1)), 30000);
+      this.scheduleReconnect(delay);
+    }, WhatsAppClient.CONNECT_WATCHDOG_MS);
   }
 
   private scheduleReconnect(delay: number): void {
@@ -138,6 +187,7 @@ export class WhatsAppClient {
       const { connection, lastDisconnect, qr } = update;
 
       if (qr) {
+        this.clearConnectWatchdog();
         this.pairingState = {
           isPaired: false,
           qrCode: qr,
@@ -148,7 +198,14 @@ export class WhatsAppClient {
         console.log('\n[whatsapp] Scan the QR code above to pair WhatsApp');
       }
 
+      if (connection === 'connecting') {
+        this.noteConnectionEvent('connecting');
+        this.startConnectWatchdog();
+      }
+
       if (connection === 'close') {
+        this.clearConnectWatchdog();
+        this.noteConnectionEvent('closed');
         const statusCode = (lastDisconnect?.error as Boom)?.output?.statusCode;
 
         log.warn(
@@ -192,6 +249,8 @@ export class WhatsAppClient {
       }
 
       if (connection === 'open') {
+        this.clearConnectWatchdog();
+        this.noteConnectionEvent('open');
         const newPhoneNumber = this.socket?.user?.id?.split(':')[0]?.split('@')[0];
         const newName = this.socket?.user?.name;
         const settings = loadSettings();
@@ -487,17 +546,29 @@ export class WhatsAppClient {
     return this.pairingState.isPaired;
   }
 
+  /** Current WA connection phase for /health (#176). */
+  getConnectionPhase(): 'connecting' | 'open' | 'closed' {
+    return this.connectionPhase;
+  }
+
+  /** Epoch ms of last connection phase change, or null if never. */
+  getLastConnectionEventAt(): number | null {
+    return this.lastConnectionEventAt;
+  }
+
   async disconnect(): Promise<void> {
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
     }
+    this.clearConnectWatchdog();
 
     if (this.socket) {
       this.removeSocketListeners();
       this.socket.end(undefined);
       this.socket = null;
       this.pairingState = { isPaired: false };
+      this.noteConnectionEvent('closed');
       log.info('Disconnected from WhatsApp');
     }
   }
@@ -512,6 +583,7 @@ export class WhatsAppClient {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
     }
+    this.clearConnectWatchdog();
 
     if (this.socket) {
       this.removeSocketListeners();
@@ -520,6 +592,7 @@ export class WhatsAppClient {
     }
 
     this.pairingState = { isPaired: false };
+    this.noteConnectionEvent('closed');
     this.ownerJid = null;
     this.ownerLid = null;
     this.warnedNoLid = false;
