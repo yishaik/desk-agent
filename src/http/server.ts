@@ -258,13 +258,7 @@ async function parseBody<T>(req: IncomingMessage): Promise<T> {
 addRoute('GET', '/health', async (_req, res) => {
   // Unauthenticated liveness only. Do not probe Open Connector here — a hung
   // connector used to fail this check and restart the agent (R-01, S-17).
-  // Always HTTP 200; expose WA phase so deploy/monitors can detect stuck connecting (#176).
-  const wa = getWhatsAppClient();
-  sendJson(res, {
-    status: 'ok',
-    whatsapp: wa.getConnectionPhase(),
-    lastConnectionEventAt: wa.getLastConnectionEventAt(),
-  });
+  sendJson(res, { status: 'ok' });
 });
 
 addRoute('GET', '/api/status', async (req, res) => {
@@ -283,7 +277,8 @@ addRoute('GET', '/api/status', async (req, res) => {
   sendJson(res, {
     success: true,
     data: {
-      whatsapp: wa.isConnected() ? 'connected' : 'disconnected',
+      whatsapp: wa.getConnectionPhase(),
+      lastConnectionEventAt: wa.getLastConnectionEventAt(),
       connector: connectorHealth ? 'healthy' : 'unhealthy',
       pendingConfirmations: pending.length,
       activeProject: settings.activeProject,
