@@ -227,12 +227,12 @@
     <div><dt>מאגר</dt><dd>yishaik/desk-agent</dd></div>
     <div><dt>קומיט שנסקר</dt><dd><code>d66c92d</code> (main)</dd></div>
     <div><dt>תאריך</dt><dd>2 בספטמבר 2026</dd></div>
-    <div><dt>שיטה</dt><dd>קריאה סטטית של כל הקוד, Docker/Caddy/deploy, התיעוד; הרצת בדיקות, lint, typecheck ו‑npm audit</dd></div>
+    <div><dt>שיטה</dt><dd>קריאה סטטית של כל הקוד, Docker/Caddy/deploy, התיעוד; הרצת בדיקות, lint, typecheck ו‑npm audit; אימות דינמי מול הסוכן; סקירת ה‑fork של Open Connector</dd></div>
   </dl>
 
   <div class="counts">
-    <div class="count all"><div class="n">50</div><div class="l">ממצאים סה"כ</div></div>
-    <div class="count high"><div class="n">8</div><div class="l">חומרה גבוהה</div></div>
+    <div class="count all"><div class="n">51</div><div class="l">ממצאים סה"כ</div></div>
+    <div class="count high"><div class="n">9</div><div class="l">חומרה גבוהה</div></div>
     <div class="count med"><div class="n">25</div><div class="l">חומרה בינונית</div></div>
     <div class="count low"><div class="n">17</div><div class="l">חומרה נמוכה</div></div>
   </div>
@@ -246,10 +246,11 @@
     <a href="#docs">ד. פערים בין תיעוד למימוש</a>
     <a href="#strengths">ה. מה עובד נכון</a>
     <a href="#method">ו. שיטה ומגבלות</a>
+    <a href="#addendum">ז. אימות דינמי וסקירת Open Connector</a>
   </div>
 
   <h2 id="summary">תמצית מנהלים</h2>
-  <p>המוצר בנוי סביב שער אבטחה אחד: רק הודעות שהבעלים שולח לעצמו ב‑WhatsApp מגיעות למודל, ופעולות משנות (שליחת מייל, יצירת אירוע) מחכות ל"כן" מהבעלים. השער הזה ממומש נכון ברמת הקוד, ויש סביבו עבודה טובה: השוואת טוקנים בזמן קבוע, cookie מוקשח, בריחת HTML בצד השרת, הגבלת כלי Claude Code, ו‑422 בדיקות שעוברות. עם זאת, הסקירה מצאה שמונה בעיות בחומרה גבוהה שמערערות את מודל האבטחה המתועד ואת חוויית ההפעלה של הלקוח:</p>
+  <p>המוצר בנוי סביב שער אבטחה אחד: רק הודעות שהבעלים שולח לעצמו ב‑WhatsApp מגיעות למודל, ופעולות משנות (שליחת מייל, יצירת אירוע) מחכות ל"כן" מהבעלים. השער הזה ממומש נכון ברמת הקוד, ויש סביבו עבודה טובה: השוואת טוקנים בזמן קבוע, cookie מוקשח, בריחת HTML בצד השרת, הגבלת כלי Claude Code, ו‑422 בדיקות שעוברות. עם זאת, הסקירה מצאה תשע בעיות בחומרה גבוהה שמערערות את מודל האבטחה המתועד ואת חוויית ההפעלה של הלקוח:</p>
   <ol>
     <li><strong>טוקן הגישה לממשק (PAIR_TOKEN) שווה בפועל לטוקן הניהול של Open Connector.</strong> הדשבורד מציג את טוקן הניהול לכל מי שמחזיק PAIR_TOKEN, בניגוד למה ש‑SECURITY.md מבטיח.</li>
     <li><strong>הסוד עצמו הוא ה‑cookie</strong>, הוא מועבר ב‑URL, תקף 30 יום, ואין לו מנגנון ביטול מלבד הפעלה מחדש של הקונטיינר.</li>
@@ -259,6 +260,7 @@
     <li><strong>קישור "כלים נוספים" לקונסולה מוביל ל‑401</strong> בגלל אי‑התאמה בין דומיין ה‑cookie לבין ה‑forward_auth בסאב‑דומיין.</li>
     <li><strong>כל הודעה שאינה "כן/לא" בזמן שפעולה ממתינה מבטלת את הפעולה ונבלעת</strong> מבלי להגיע למודל.</li>
     <li><strong>צימוד דרך QR בלבד</strong>: לקוח שפותח את האשף בטלפון לא יכול לסרוק את ה‑QR שמוצג באותו טלפון, ואין דרך לנתק או לצמד מחדש מהממשק.</li>
+    <li><strong>בלי טוקן ניהול, נתיבי <code>/api/oauth/*</code> של הקונקטור פתוחים לאינטרנט ללא אימות.</strong> ה‑middleware של Open Connector מוותר על אימות לנתיבי ניהול כשהטוקן ריק, ו‑Caddy חושף אותם בדומיין הציבורי (נמצא בסקירת ה‑fork, סעיף ז).</li>
   </ol>
   <p>מעבר לאלה, יש שכבה של בעיות בינוניות סביב ניהול סודות (רוטציה שלא עובדת, root בקונטיינר, שרשרת אספקה), פרטיות נתונים במנוחה, ערבוב שפות בממשק, ונגישות. ושתי חשיפות מבניות שאינן באגים אלא הכרעות מוצר: תלות בספריית WhatsApp לא רשמית (סיכון חסימת מספר העסק) ואוטומציה של תהליך ההתחברות האינטראקטיבי של Claude Code.</p>
 
@@ -291,6 +293,7 @@
         <tr><td><a href="#S-22">S-22</a></td><td><span class="chip med">בינונית</span></td><td>סיכוני ציות: ספריית WhatsApp לא רשמית ואוטומציה של כניסת Claude Code</td><td>ציות</td></tr>
         <tr><td><a href="#S-23">S-23</a></td><td><span class="chip low">נמוכה</span></td><td>אין שובל ביקורת לפעולות, אישורים ושינויי הגדרות</td><td>ביקורת</td></tr>
         <tr><td><a href="#S-24">S-24</a></td><td><span class="chip low">נמוכה</span></td><td>"הערת מערכת" מוזרקת לתוך הודעת המשתמש וניתנת לחיקוי</td><td>AI</td></tr>
+        <tr><td><a href="#S-25">S-25</a></td><td><span class="chip high">גבוהה</span></td><td>בלי טוקן ניהול, <code>/api/oauth/*</code> של הקונקטור פתוח לאינטרנט ללא אימות</td><td>הרשאות</td></tr>
         <tr><td><a href="#U-01">U-01</a></td><td><span class="chip high">גבוהה</span></td><td>התיעוד מציג את טוקן הניהול כאופציונלי, אך בלעדיו הליבה לא עובדת</td><td>תיעוד</td></tr>
         <tr><td><a href="#U-02">U-02</a></td><td><span class="chip high">גבוהה</span></td><td>קישור "כלים נוספים" לקונסולה מוביל ל‑401</td><td>Web</td></tr>
         <tr><td><a href="#U-03">U-03</a></td><td><span class="chip high">גבוהה</span></td><td>חוויית אישור פעולות ב‑WhatsApp שבירה ובולעת הודעות</td><td>WhatsApp</td></tr>
@@ -501,7 +504,7 @@
       <dt>תיאור</dt><dd>ה‑Dockerfile אינו מגדיר <code>USER</code>, כך שהסוכן, הבינארי של Claude Code, תת‑תהליך ה‑MCP ו‑<code>script</code> רצים כ‑root. <code>python3</code>, <code>make</code> ו‑<code>g++</code> נשארים בתמונה הסופית (אין multi-stage). ב‑compose אין <code>mem_limit</code> (למרות ש‑README ממליץ), אין <code>pids_limit</code>, אין <code>cap_drop</code>, אין <code>read_only</code>, ואין <code>no-new-privileges</code>.</dd>
       <dt>השפעה</dt><dd>כל ביצוע קוד בתוך הקונטיינר (דרך תלות, דרך פלט המודל שמגיע לתהליכים, או דרך ה‑TUI של Claude Code) מתחיל מ‑root עם מהדר זמין. ללא הגבלת זיכרון, תהליך Claude Code שנתקע יכול להפיל את WhatsApp על שרת של 4GB, מה שהתיעוד עצמו מזהיר מפניו.</dd>
       <dt>ראיות</dt><dd><ul class="ev">
-        <li><code>Dockerfile:7-13, 59</code>.</li>
+        <li><code>Dockerfile:7-13, 55</code>.</li>
         <li><code>docker-compose.yml:14-46</code>; <code>README.md</code> "Production Tips: Set mem_limit".</li>
       </ul></dd>
     </dl>
@@ -647,6 +650,20 @@
       <dt>תיאור</dt><dd>אחרי ביצוע פעולה מאושרת, הפרומפט הבא למודל מתחיל בבלוק טקסט <code>[System note — not written by the user: ...]</code> בתוך הודעת המשתמש עצמה, ללא הפרדה ברמת הפרוטוקול. המודל מקבל הנחיה לסמוך על הבלוק הזה כעדות שפעולה בוצעה.</dd>
       <dt>השפעה</dt><dd>כל טקסט באותו מבנה שמגיע מהמשתמש או מתוך תוכן חיצוני יכול לשכנע את המודל שפעולה "כבר בוצעה" או להיפך. הפגיעות מוגבלת כי רק הבעלים כותב הודעות, אך היא מחלישה את ההנחיה "Never claim an action was executed unless a tool result or a system note says it ran".</dd>
       <dt>ראיות</dt><dd><ul class="ev"><li><code>src/whatsapp/handler.ts:151-165</code>; <code>src/agent/claude-code.ts:286</code>.</li></ul></dd>
+    </dl>
+  </article>
+
+  <article class="finding high" id="S-25">
+    <header><span class="id">S-25</span><span class="chip high">חומרה גבוהה</span><span class="chip area">הרשאות</span>
+      <h3>בלי CONNECTOR_ADMIN_TOKEN, נתיבי <code>/api/oauth/*</code> של הקונקטור פתוחים לאינטרנט ללא כל אימות</h3></header>
+    <dl>
+      <dt>תיאור</dt><dd>ב‑middleware האימות של Open Connector (ה‑fork בקומיט <code>6788fec</code>), כל נתיב שאינו <code>/v1/*</code> או <code>/mcp</code> מסווג כ"admin". כשטוקן הניהול ריק, הבדיקה לנתיבי admin מחזירה <code>true</code> ללא תנאי, גם כשטוקן runtime מוגדר ואוכף אימות על <code>/v1/*</code>. ה‑Caddyfile של Desk Agent מנתב את <code>/api/oauth/*</code> מהדומיין הציבורי ישירות לקונקטור (S-08), ו‑docker-compose מעביר <code>OOMOL_CONNECT_ADMIN_TOKEN=${CONNECTOR_ADMIN_TOKEN}</code>, שריק בכל פריסה שעוקבת אחרי README ו‑.env.example ("אופציונלי", U-01). ה‑SECURITY.md של Open Connector עצמו מגדיר הרצה ללא <code>OOMOL_CONNECT_ADMIN_TOKEN</code> כתצורה לא מאובטחת שמחוץ לאחריות הפרויקט. פריסה דרך <code>deploy.sh</code> מוגנת כי הסקריפט מייצר את הטוקן; פריסה ידנית לפי CREATE-AN-AGENT אינה מוגנת.</dd>
+      <dt>השפעה</dt><dd>גולש אנונימי יכול, ללא שום אישור, לקרוא <code>GET /api/oauth/configs</code> (אילו ספקים מוגדרים, client ID וסקופים), למחוק או להחליף את הגדרת ה‑OAuth של Google ב‑<code>PUT/DELETE /api/oauth/configs/google</code> (שבירת חיבור Gmail/יומן, או הסטת מסך ההסכמה של הלקוח לאפליקציית OAuth בשליטת התוקף), וליצור קישורי הרשאה עם state תקף ושם חיבור שרירותי ב‑<code>POST /api/oauth/authorizations</code> לצורכי פישינג. זהו המקרה הקונקרטי של החשיפה שתוארה ב‑S-08: שכבת ההגנה היחידה שנותרה שם היא אימות הקונקטור, והוא כבוי בתצורה המתועדת.</dd>
+      <dt>ראיות</dt><dd><ul class="ev">
+        <li>open-connector <code>src/server/api/auth.ts:147-152</code> — <code>if (!token) { if (scope === "admin") return true; ... }</code>; <code>:239-241</code> — <code>readAuthScope</code>.</li>
+        <li><code>Caddyfile:48-52</code> — חשיפת <code>/api/oauth/*</code>; <code>docker-compose.yml:69</code> — הזרקת הטוקן הריק.</li>
+        <li><code>.env.example:45-54</code>, <code>README.md</code> "Optional Variables"; open-connector <code>SECURITY.md:97-99</code> — "running without OOMOL_CONNECT_ADMIN_TOKEN" כתצורה לא מאובטחת.</li>
+      </ul></dd>
     </dl>
   </article>
 
@@ -1020,9 +1037,49 @@
   </div>
 
   <h2 id="method">ו. שיטה ומגבלות</h2>
-  <p><strong>מה נעשה.</strong> קריאה מלאה של כל קובצי המקור (כ‑14,400 שורות כולל בדיקות), Dockerfile, docker-compose.yml, Caddyfile, deploy.sh, כל קובצי ה‑Markdown וחבילות הסקילים. הרצת <code>npm ci</code>, <code>npm run typecheck</code>, <code>npm run lint</code>, <code>npx vitest run</code> ו‑<code>npm audit</code> על הקומיט <code>d66c92d</code>. סריקת היסטוריית git לקבצי סודות.</p>
-  <p><strong>מה לא נעשה.</strong> לא הופעלה פריסה חיה; לא נבדקו WhatsApp, Claude Code או Open Connector בזמן ריצה. ה‑fork של Open Connector (<code>yishaik/open-connector</code>) לא נסקר, וכל הטענות לגביו נשענות על האופן שבו הסוכן משתמש בו. ממצא U-02 מבוסס על סמנטיקת cookies סטנדרטית ולא על בדיקה בדפדפן. ניתוח הזרקת הפרומפט (S-04, S-05) הוא ניתוח מבני, ללא ניסויים מול מודל.</p>
+  <p><strong>מה נעשה.</strong> קריאה מלאה של כל קובצי המקור (כ‑14,400 שורות כולל בדיקות), Dockerfile, docker-compose.yml, Caddyfile, deploy.sh, כל קובצי ה‑Markdown וחבילות הסקילים. הרצת <code>npm ci</code>, <code>npm run typecheck</code>, <code>npm run lint</code>, <code>npx vitest run</code> ו‑<code>npm audit</code> על הקומיט <code>d66c92d</code>. סריקת היסטוריית git לקבצי סודות. בסבב שני: הרצת הסוכן מקומית עם טוקני בדיקה ואימות של ממצאים מרכזיים מול השרת החי, וקריאה של שכבת האימות, ה‑OAuth, ההצפנה ומדיניות היציאה ב‑fork של Open Connector בקומיט המוצמד (סעיף ז).</p>
+  <p><strong>מה לא נעשה.</strong> לא הופעלה פריסה מלאה עם Caddy, WhatsApp מצומד או Open Connector רץ; הבדיקות הדינמיות כיסו את שרת ה‑HTTP של הסוכן בלבד. ב‑fork של Open Connector נסקרו רק שכבת האימות, זרימת ה‑OAuth, ההצפנה במנוחה, מדיניות הפעולות והיציאה; מאות ספקי הפעולות, קונסולת ה‑Web ומסלול Cloudflare לא נסקרו. ממצא U-02 מבוסס על מאפייני ה‑cookie שנצפו בפועל ועל סמנטיקת cookies סטנדרטית, לא על בדיקה בדפדפן מול סאב‑דומיין. ניתוח הזרקת הפרומפט (S-04, S-05) הוא ניתוח מבני, ללא ניסויים מול מודל.</p>
   <p><strong>דירוג חומרה.</strong> "גבוהה": שובר את מודל האבטחה המתועד או חוסם את הזרימה המרכזית של הלקוח. "בינונית": מרחיב שטח תקיפה, פוגע בפרטיות, או פוגע משמעותית בחוויית השימוש. "נמוכה": בעיה נקודתית עם השפעה מוגבלת או תלויה בתנאים נוספים.</p>
+
+  <h2 id="addendum">ז. אימות דינמי וסקירת Open Connector</h2>
+  <p>סעיף זה נוסף בסבב שני, אחרי פרסום הדוח הראשוני, כדי לסגור שניים מהפערים שצוינו בסעיף ו.</p>
+
+  <h3 style="margin-top:28px">ז.1 אימות מול הסוכן בזמן ריצה</h3>
+  <p>הסוכן הורץ מקומית מהקומיט <code>a8b1568</code> (זהה ל‑<code>d66c92d</code> בקוד) עם טוקני בדיקה, ללא Caddy וללא קונקטור. הבקשות הבאות אימתו את הממצאים כפי שנכתבו:</p>
+  <div class="tablewrap">
+    <table>
+      <thead><tr><th>ממצא</th><th>בקשה</th><th>תוצאה שנצפתה</th></tr></thead>
+      <tbody>
+        <tr><td>S-01</td><td><code>GET /api/connector/onboarding</code> עם cookie</td><td>התשובה כוללת <code>"adminToken":"…"</code> בערך המלא של <code>CONNECTOR_ADMIN_TOKEN</code></td></tr>
+        <tr><td>S-02</td><td><code>GET /?token=…</code></td><td><code>Set-Cookie: PAIR_TOKEN=&lt;הטוקן עצמו&gt;; Path=/; HttpOnly; SameSite=Strict; Max-Age=2592000; Secure</code></td></tr>
+        <tr><td>S-02</td><td><code>GET /api/settings?token=…</code> ללא cookie</td><td>200: הטוקן ב‑URL מתקבל בכל נתיב</td></tr>
+        <tr><td>U-02</td><td>אותו <code>Set-Cookie</code></td><td>ללא מאפיין <code>Domain</code>; ה‑cookie host-only ולא יישלח ל‑<code>console.&lt;domain&gt;</code></td></tr>
+        <tr><td>S-09</td><td><code>POST /auth</code> עם טוקן שגוי</td><td>401, ואפס שורות לוג על הניסיון</td></tr>
+        <tr><td>S-10</td><td>כותרות התשובה של <code>/</code></td><td>ללא <code>Content-Security-Policy</code> (ההגנות היחידות מגיעות מ‑Caddy)</td></tr>
+        <tr><td>S-17</td><td><code>GET /health</code> ללא אימות</td><td>200 עם מצב WhatsApp ומצב הקונקטור</td></tr>
+        <tr><td>S-18</td><td><code>PUT /api/settings</code> עם <code>botName</code> כאובייקט</td><td>200; <code>settings.json</code> מכיל <code>"botName": {…}</code></td></tr>
+        <tr><td>S-03</td><td><code>GET /api/pairing</code> עם cookie</td><td>מחרוזת ה‑QR הגולמית לצימוד מוחזרת לכל מחזיק PAIR_TOKEN</td></tr>
+        <tr><td>S-11</td><td><code>GET /api/auth/login/claude-code/status</code></td><td>"pending" ללא אישורים; תופעת הלוואי מתרחשת רק אחרי התחברות, ולא נבדקה</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3 style="margin-top:28px">ז.2 סקירת ה‑fork של Open Connector</h3>
+  <p>נסקר <code>yishaik/open-connector</code> בקומיט המוצמד <code>6788fec</code> ("per-account grants and key-named run audit"). היקף: <code>src/server/api/auth.ts</code>, <code>src/server/connect-server.ts</code> (ניתוב ו‑handlers של OAuth וחיבורים), <code>src/oauth/*</code>, <code>src/server/secrets/*</code>, <code>src/server/storage/runtime-token-service.ts</code>, <code>src/core/action-policy.ts</code>, <code>src/core/request.ts</code>, <code>docker/Dockerfile</code> ו‑<code>SECURITY.md</code>. לא נסקרו: מאות ספקי הפעולות תחת <code>src/providers/</code>, קונסולת ה‑Web, מסלול Cloudflare Workers ואחסון PostgreSQL/D1.</p>
+  <p><strong>ממצא חדש.</strong> S-25 לעיל: נתיבי הניהול פתוחים ללא אימות כשטוקן הניהול ריק, וה‑Caddyfile חושף חלק מהם לאינטרנט.</p>
+  <p><strong>נבדק ונמצא תקין</strong> (אינו ממצא):</p>
+  <ul>
+    <li>השוואת טוקנים בזמן קבוע לטוקני admin ו‑runtime; טוקני runtime נשמרים כ‑SHA-256 ומושווים עם <code>timingSafeEqual</code>.</li>
+    <li>cookie ה‑admin של הקונסולה חתום HMAC-SHA256 עם nonce ותוקף, ואינו מכיל את הטוקן עצמו (בניגוד ל‑S-02 בסוכן).</li>
+    <li>זרימת OAuth: <code>state</code> אקראי (UUID) חד‑פעמי עם פקיעה אחרי 15 דקות, PKCE S256, <code>redirect_uri</code> נקבע בצד השרת; הגדרת client מותאמת בבקשה חסומה כברירת מחדל ודורשת הצפנה.</li>
+    <li>אישורים במנוחה מוצפנים ב‑AES-256-GCM עם מפתח שנגזר ב‑scrypt מ‑<code>OOMOL_CONNECT_ENCRYPTION_KEY</code>; ללא מפתח, אחסון בטקסט גלוי עם אזהרה בלבד (deploy.sh מייצר מפתח).</li>
+    <li>רשימות <code>/api/oauth/configs</code> ו‑<code>/api/connections</code> מחזירות סיכומים ללא client secret וללא אישורים.</li>
+    <li>מדיניות proxy (<code>/v1/proxy/:service</code>) היא deny-by-default; טוקן ה‑runtime של הסוכן אינו מקבל גישה גולמית ל‑API של הספקים.</li>
+    <li>בקרת יציאה (SSRF): loopback, link-local, metadata של עננים ורשתות פרטיות חסומים כברירת מחדל, וחלקם חסומים גם לאחר opt-in.</li>
+    <li>לוג הריצות עובר רדקציה של מפתחות, טוקנים, cookies ו‑URLs עם סודות.</li>
+    <li>Dockerfile רב‑שלבי על Alpine ללא כלי build בתמונה הסופית (אך, כמו הסוכן, ללא <code>USER</code>).</li>
+    <li>ל‑runtime tokens יש מנגנון allow/block לפי פעולה וחיבור, שיכול לשמש שכבת מדיניות שנייה ל‑S-06; Desk Agent אינו משתמש בו (טוקן env בודד עם <code>*</code>).</li>
+  </ul>
   <hr class="thin">
   <p class="footnote">המסמך מתאר ממצאים בלבד ואינו כולל המלצות לתיקון, בהתאם לבקשה. הפניות לשורות מתייחסות לקומיט <code>d66c92d</code>.</p>
 </div>
