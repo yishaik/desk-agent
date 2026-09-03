@@ -279,6 +279,45 @@ describe('Settings Parse Error Handling', () => {
   });
 });
 
+describe('setServiceEnabled (#166)', () => {
+  it('toggles enabled without dropping disabledActions or confirmationOverrides', async () => {
+    vi.resetModules();
+    const { addService, setServiceEnabled, getService } = await import('./settings.ts');
+
+    addService({
+      id: 'gmail',
+      name: 'Gmail',
+      enabled: true,
+      disabledActions: ['gmail.trash_email'],
+      confirmationOverrides: { 'gmail.download_attachment': 'always' },
+      connectedAt: '2026-01-01T00:00:00.000Z',
+    });
+
+    setServiceEnabled('gmail', false);
+    setServiceEnabled('gmail', true);
+
+    const service = getService('gmail');
+    expect(service?.enabled).toBe(true);
+    expect(service?.disabledActions).toEqual(['gmail.trash_email']);
+    expect(service?.confirmationOverrides).toEqual({ 'gmail.download_attachment': 'always' });
+    expect(service?.connectedAt).toBe('2026-01-01T00:00:00.000Z');
+  });
+
+  it('creates a new entry with empty disabledActions when the service is unknown', async () => {
+    vi.resetModules();
+    const { setServiceEnabled, getService } = await import('./settings.ts');
+
+    setServiceEnabled('gmail', true, 'Gmail');
+    const service = getService('gmail');
+    expect(service).toMatchObject({
+      id: 'gmail',
+      name: 'Gmail',
+      enabled: true,
+      disabledActions: [],
+    });
+  });
+});
+
 describe('setActionEnabled', () => {
   it('adds action to disabledActions when disabled', async () => {
     vi.resetModules();

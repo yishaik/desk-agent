@@ -530,11 +530,13 @@ export function clearAllSessions(): void {
  */
 export async function recreateSessionAfterCredentialChange(
   projectId: string,
-  options: { credentialsChanged?: boolean } = {}
+  options: { credentialsChanged?: boolean; inQueue?: boolean } = {}
 ): Promise<void> {
-  const idle = await waitForIdle();
-  if (!idle) {
-    log.warn({ projectId }, 'Message queue still busy after 30s — applying settings change anyway');
+  if (!options.inQueue) {
+    const idle = await waitForIdle();
+    if (!idle) {
+      log.warn({ projectId }, 'Message queue still busy after 30s — applying settings change anyway');
+    }
   }
 
   writeIdentityFiles(loadSettings(), projectId);

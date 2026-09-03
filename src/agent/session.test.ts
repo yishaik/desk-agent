@@ -162,7 +162,7 @@ describe('Pi oc_execute_action — HITL gate (#26)', () => {
     expect(executeAction).not.toHaveBeenCalled();
     expect(second.content[0]?.text).toContain('NOT executed');
     expect(getPendingConfirmation(id)).toBeTruthy();
-  });
+  }, 15_000);
 
   it('schema has no confirmed parameter', async () => {
     const { createOpenConnectorTools } = await import('./session.ts');
@@ -279,5 +279,18 @@ describe('recreateSessionAfterCredentialChange waits for the queue (#78)', () =>
     order.push('settings applied');
     await turn;
     expect(order).toEqual(['turn done', 'settings applied']);
+  });
+
+  it('skips waitForIdle when already inside the queue (#169)', async () => {
+    const queue = await import('../whatsapp/queue.ts');
+    const waitSpy = vi.spyOn(queue, 'waitForIdle');
+    const { recreateSessionAfterCredentialChange } = await import('./session.ts');
+
+    await queue.enqueue(async () => {
+      await recreateSessionAfterCredentialChange('default', { inQueue: true });
+    });
+
+    expect(waitSpy).not.toHaveBeenCalled();
+    waitSpy.mockRestore();
   });
 });

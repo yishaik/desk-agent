@@ -44,6 +44,8 @@ export interface MessageKey {
   id: string;
   fromMe: boolean;
   participant?: string;
+  /** Original inbound body, used as the quoted bubble (not the reply text). */
+  conversation?: string;
 }
 
 export interface Message {

@@ -502,6 +502,17 @@ describe('Tool enabled/disabled state', () => {
     expect(enabled).toBe(false);
   });
 
+  it('#166 PATCH /api/connector/tools/:service/enabled uses setServiceEnabled', async () => {
+    const fs = await import('node:fs');
+    const path = await import('node:path');
+    const serverCode = fs.readFileSync(path.join(__dirname, 'server.ts'), 'utf8');
+    const match = serverCode.match(
+      /addRoute\('PATCH', '\/api\/connector\/tools\/:service\/enabled'[\s\S]*?addRoute\(/
+    );
+    expect(match?.[0]).toContain('setServiceEnabled');
+    expect(match?.[0]).not.toMatch(/addService\s*\(/);
+  });
+
   it('PATCH /api/connector/tools/:service/enabled only works for real connections', () => {
     interface Connection {
       service: string;

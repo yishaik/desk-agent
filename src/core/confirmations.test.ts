@@ -110,6 +110,16 @@ describe('executed-action notes', () => {
     expect(consumeExecutedActionNotes('other')).toHaveLength(1);
   });
 
+  it('peek does not consume notes (#170)', async () => {
+    const { recordExecutedAction, peekExecutedActionNotes, consumeExecutedActionNotes } = await import('./confirmations.ts');
+    recordExecutedAction({ projectId: 'default', actionId: 'gmail.send_email', success: true, summary: '{"id":"m1"}' });
+
+    expect(peekExecutedActionNotes('default')).toHaveLength(1);
+    expect(peekExecutedActionNotes('default')).toHaveLength(1);
+    expect(consumeExecutedActionNotes('default')).toHaveLength(1);
+    expect(peekExecutedActionNotes('default')).toHaveLength(0);
+  });
+
   it('truncates oversized summaries', async () => {
     const { recordExecutedAction, consumeExecutedActionNotes } = await import('./confirmations.ts');
     recordExecutedAction({ projectId: 'p', actionId: 'x.create_thing', success: true, summary: 'a'.repeat(5000) });
@@ -244,14 +254,15 @@ describe('S-06 (#110) — confirmation=never must NOT skip send/create/update/de
 });
 
 describe('Confirmation TTL', () => {
-  it('MAX_AGE_MS is 3 minutes (180000ms)', async () => {
-    const { MAX_AGE_MS } = await import('./confirmations.ts');
+  it('MAX_AGE_MS is 3 minutes (presented window) and unpresented is 15 minutes (#168)', async () => {
+    const { MAX_AGE_MS, UNPRESENTED_MAX_AGE_MS } = await import('./confirmations.ts');
     expect(MAX_AGE_MS).toBe(3 * 60 * 1000);
+    expect(UNPRESENTED_MAX_AGE_MS).toBe(15 * 60 * 1000);
   });
 
-  it('cleanupOldConfirmations removes expired entries', async () => {
-    const { 
-      createPendingConfirmation, 
+  it('unpresented items survive the 3-minute presented window (#168)', async () => {
+    const {
+      createPendingConfirmation,
       getPendingConfirmation,
       cleanupOldConfirmations,
     } = await import('./confirmations.ts');
@@ -262,15 +273,59 @@ describe('Confirmation TTL', () => {
       projectId: 'test-project',
     });
 
-    expect(getPendingConfirmation(confirmationId)).toBeDefined();
-
     const storePath = join(TEST_DATA_DIR, 'pending-confirmations.json');
     const store = JSON.parse(readFileSync(storePath, 'utf8'));
     store[confirmationId].createdAt = Date.now() - 4 * 60 * 1000;
     writeFileSync(storePath, JSON.stringify(store), { mode: 0o600 });
 
     cleanupOldConfirmations();
+    expect(getPendingConfirmation(confirmationId)).toBeDefined();
+  });
 
+  it('unpresented items expire after 15 minutes (#168)', async () => {
+    const {
+      createPendingConfirmation,
+      getPendingConfirmation,
+      cleanupOldConfirmations,
+    } = await import('./confirmations.ts');
+
+    const confirmationId = createPendingConfirmation({
+      actionId: 'gmail.sendEmail',
+      input: { to: 'test@example.com' },
+      projectId: 'test-project',
+    });
+
+    const storePath = join(TEST_DATA_DIR, 'pending-confirmations.json');
+    const store = JSON.parse(readFileSync(storePath, 'utf8'));
+    store[confirmationId].createdAt = Date.now() - 16 * 60 * 1000;
+    writeFileSync(storePath, JSON.stringify(store), { mode: 0o600 });
+
+    cleanupOldConfirmations();
+    expect(getPendingConfirmation(confirmationId)).toBeUndefined();
+  });
+
+  it('presented items expire 3 minutes after payloadPresentedAt (#168)', async () => {
+    const {
+      createPendingConfirmation,
+      markPayloadPresented,
+      getPendingConfirmation,
+      cleanupOldConfirmations,
+    } = await import('./confirmations.ts');
+
+    const confirmationId = createPendingConfirmation({
+      actionId: 'gmail.sendEmail',
+      input: { to: 'test@example.com' },
+      projectId: 'test-project',
+    });
+    markPayloadPresented(confirmationId);
+
+    const storePath = join(TEST_DATA_DIR, 'pending-confirmations.json');
+    const store = JSON.parse(readFileSync(storePath, 'utf8'));
+    store[confirmationId].createdAt = Date.now() - 10 * 60 * 1000;
+    store[confirmationId].payloadPresentedAt = Date.now() - 4 * 60 * 1000;
+    writeFileSync(storePath, JSON.stringify(store), { mode: 0o600 });
+
+    cleanupOldConfirmations();
     expect(getPendingConfirmation(confirmationId)).toBeUndefined();
   });
 });
@@ -404,6 +459,19 @@ describe('S-04 (#108) — payloadPresentedAt tracking', () => {
     const pending = getPendingConfirmation(confirmationId);
     expect(pending?.payloadPresentedAt).toBeDefined();
     expect(typeof pending?.payloadPresentedAt).toBe('number');
+  });
+
+  it('does not rewrite createdAt when marking presented (#168)', async () => {
+    const { createPendingConfirmation, markPayloadPresented, getPendingConfirmation } = await import('./confirmations.ts');
+
+    const confirmationId = createPendingConfirmation({
+      actionId: 'gmail.send_email',
+      input: { to: 'test@example.com' },
+      projectId: 'default',
+    });
+    const createdAt = getPendingConfirmation(confirmationId)!.createdAt;
+    markPayloadPresented(confirmationId);
+    expect(getPendingConfirmation(confirmationId)!.createdAt).toBe(createdAt);
   });
 });
 

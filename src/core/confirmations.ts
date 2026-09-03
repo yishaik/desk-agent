@@ -9,7 +9,10 @@ const log = createChildLogger('confirmations');
 // File-backed so the WhatsApp handler (agent process) and the connector MCP
 // server (a Claude Code subprocess) share one pending-confirmation store.
 const STORE_PATH = join(config.dataDir, 'pending-confirmations.json');
+/** Window from payload presentation → execute (the owner has seen what will run). */
 const MAX_AGE_MS = 3 * 60 * 1000;
+/** Cap on unpresented items so a tool-call that never reached the owner is still pruned. */
+const UNPRESENTED_MAX_AGE_MS = 15 * 60 * 1000;
 
 export interface PendingConfirmation {
   actionId: string;
@@ -192,6 +195,13 @@ export function markPayloadPresented(confirmationId: string): boolean {
   return true;
 }
 
+function isConfirmationExpired(pending: PendingConfirmation, now: number): boolean {
+  if (pending.payloadPresentedAt !== undefined) {
+    return now - pending.payloadPresentedAt > MAX_AGE_MS;
+  }
+  return now - pending.createdAt > UNPRESENTED_MAX_AGE_MS;
+}
+
 /**
  * S-04 (#108): Check if the handler has shown the payload for this pending item.
  */
@@ -238,6 +248,13 @@ export function recordExecutedAction(note: Omit<ExecutedActionNote, 'at'>): void
   saveExecuted(notes);
 }
 
+/** Peek notes without consuming them — consume only after the prompt is sent. */
+export function peekExecutedActionNotes(projectId: string): ExecutedActionNote[] {
+  return loadExecuted()
+    .filter((n) => Date.now() - n.at < EXECUTED_MAX_AGE_MS)
+    .filter((n) => n.projectId === projectId);
+}
+
 /** Returns (and clears) the notes for a project; expired notes are dropped. */
 export function consumeExecutedActionNotes(projectId: string): ExecutedActionNote[] {
   const all = loadExecuted().filter((n) => Date.now() - n.at < EXECUTED_MAX_AGE_MS);
@@ -261,12 +278,11 @@ export function consumeExpiredConfirmations(
   const expired: Array<PendingConfirmation & { confirmationId: string }> = [];
   let changed = false;
   for (const [id, pending] of Object.entries(store)) {
-    if (now - pending.createdAt > MAX_AGE_MS) {
-      if (projectId === undefined || pending.projectId === projectId) {
-        expired.push({ confirmationId: id, ...pending });
-        delete store[id];
-        changed = true;
-      }
+    if (!isConfirmationExpired(pending, now)) continue;
+    if (projectId === undefined || pending.projectId === projectId) {
+      expired.push({ confirmationId: id, ...pending });
+      delete store[id];
+      changed = true;
     }
   }
   if (changed) save(store);
@@ -356,4 +372,4 @@ export function formatPendingForUser(pending: PendingConfirmation): string {
   return lines.join('\n');
 }
 
-export { MAX_AGE_MS };
+export { MAX_AGE_MS, UNPRESENTED_MAX_AGE_MS };

@@ -269,6 +269,52 @@ describe('getSelfChatJid — LID preferred, phone JID fallback (#73)', () => {
   });
 });
 
+describe('quoted replies and reactions (#167)', () => {
+  it('quotes the original inbound conversation, not the reply text', async () => {
+    const { WhatsAppClient } = await import('./client.ts');
+    const client = new WhatsAppClient();
+    const sendMessage = vi.fn().mockResolvedValue(undefined);
+    (client as unknown as { socket: { sendMessage: typeof sendMessage } }).socket = { sendMessage };
+
+    await client.sendMessage('abc@lid', 'reply text', {
+      remoteJid: 'abc@lid',
+      id: 'orig',
+      fromMe: true,
+      conversation: 'original inbound',
+    });
+
+    expect(sendMessage).toHaveBeenCalledWith(
+      'abc@lid',
+      { text: 'reply text' },
+      expect.objectContaining({
+        quoted: expect.objectContaining({
+          message: { conversation: 'original inbound' },
+        }),
+      })
+    );
+  });
+
+  it('sends reactions to the inbound chat JID, not getSelfChatJid', async () => {
+    const { WhatsAppClient } = await import('./client.ts');
+    const client = new WhatsAppClient();
+    const sendMessage = vi.fn().mockResolvedValue(undefined);
+    (client as unknown as { socket: { sendMessage: typeof sendMessage } }).socket = { sendMessage };
+    (client as unknown as { ownerLid: string | null }).ownerLid = '987654321@lid';
+
+    await client.sendReaction(
+      { remoteJid: '123456789@s.whatsapp.net', id: 'm1', fromMe: true },
+      '👀'
+    );
+
+    expect(sendMessage).toHaveBeenCalledWith(
+      '123456789@s.whatsapp.net',
+      expect.objectContaining({
+        react: expect.objectContaining({ text: '👀' }),
+      })
+    );
+  });
+});
+
 describe('S-05: Link preview security', () => {
   it('Baileys client must NOT be constructed with generateHighQualityLinkPreview: true', async () => {
     const fs = await import('node:fs');

@@ -2,7 +2,7 @@ import { createChildLogger } from '../core/logger.ts';
 import { loadSettings, updateSettings, getActiveConnectorToken } from '../core/settings.ts';
 import { saveMessage, listProjects, createProject, getProject, getMessage } from '../core/memory.ts';
 import { slugifyProjectName, ProjectIdValidationError } from '../core/projects.ts';
-import { recordExecutedAction, consumeExecutedActionNotes } from '../core/confirmations.ts';
+import { recordExecutedAction, consumeExecutedActionNotes, peekExecutedActionNotes } from '../core/confirmations.ts';
 import type { Message, MessageKey, Settings } from '../core/types.ts';
 import { getWhatsAppClient, WhatsAppClient } from './client.ts';
 import { OpenConnectorClient } from '../open-connector/client.ts';
@@ -31,7 +31,6 @@ import {
 import {
   isClaudeCodeConnected,
   runClaudeCodePrompt,
-  clearClaudeCodeSession,
 } from '../agent/claude-code.ts';
 import { 
   type ReactionState, 
@@ -58,7 +57,9 @@ const STALE_SKIP_HE = 'דילגתי על הודעות ישנות שנשלחו ב
 
 function quoteArg(message: Message, force = false): MessageKey | undefined {
   if (!message.messageKey) return undefined;
-  if (force || shouldQuoteInbound(message.timestamp)) return message.messageKey;
+  if (force || shouldQuoteInbound(message.timestamp)) {
+    return { ...message.messageKey, conversation: message.body };
+  }
   return undefined;
 }
 
@@ -105,6 +106,13 @@ async function updateReaction(
 
   recordTransition(tracker, newState);
   await safeReaction(tracker.messageKey, newState);
+}
+
+function providerIdFromModel(modelId: string): string {
+  if (modelId.includes('/')) return modelId.split('/')[0]!;
+  if (modelId.startsWith('claude')) return 'anthropic';
+  if (modelId.startsWith('gpt') || modelId.startsWith('o1') || modelId.startsWith('o3')) return 'openai-codex';
+  return 'anthropic';
 }
 
 function describeSelfChat(mode: 'lid' | 'phone' | 'none' | undefined): string {
@@ -168,7 +176,7 @@ async function executePendingAction(
 const EXECUTED_NOTE_MARK = '⟦desk-agent-executed⟧';
 
 export function withExecutedActionNotes(projectId: string, text: string): string {
-  const notes = consumeExecutedActionNotes(projectId);
+  const notes = peekExecutedActionNotes(projectId);
   const safeText = text.replaceAll(EXECUTED_NOTE_MARK, '');
   if (notes.length === 0) return safeText;
   const lines = notes.map((n) => `- ${n.actionId}: ${n.success ? 'executed successfully' : 'FAILED'} — ${n.summary}`);
@@ -214,21 +222,23 @@ function publicActionError(message: string | undefined): string {
 
 async function checkForConfirmationResponse(text: string, projectId: string): Promise<CommandResult> {
   const expired = consumeExpiredConfirmations(projectId);
+  const allPending = getAllPendingConfirmations(projectId);
   const trimmedPreview = text.trim();
   const looksLikeConfirmOrCancel =
     CONFIRM_PATTERNS.some((p) => p.test(trimmedPreview)) ||
     CANCEL_PATTERNS.some((p) => p.test(trimmedPreview)) ||
     /^\d+$/.test(trimmedPreview);
 
-  if (expired.length > 0 && looksLikeConfirmOrCancel) {
+  // Only tell the owner about expiry when nothing valid remains; otherwise
+  // they may be picking a still-live item from the numbered list (#168).
+  if (expired.length > 0 && looksLikeConfirmOrCancel && allPending.length === 0) {
     const names = expired.map((p) => p.actionId).join(', ');
     return {
       handled: true,
-      response: `⏱️ תוקף האישור פג (3 דקות): ${names}. בקש מהסוכן לבצע שוב.`,
+      response: `⏱️ תוקף האישור פג: ${names}. בקש מהסוכן לבצע שוב.`,
     };
   }
 
-  const allPending = getAllPendingConfirmations(projectId);
   if (allPending.length === 0) {
     return { handled: false };
   }
@@ -602,7 +612,8 @@ async function handleCommand(text: string, settings: Settings): Promise<CommandR
 
 /help - הצג עזרה
 /status - סטטוס חיבור
-/project [name] - החלף/צור פרויקט (שיחה נפרדת לכל פרויקט)
+/project [name] - החלף פרויקט קיים (שיחה נפרדת לכל פרויקט)
+/project-new [name] - צור פרויקט
 /projects - רשימת פרויקטים
 /services - רשימת שירותים מחוברים
 /settings - הצג הגדרות
@@ -665,7 +676,7 @@ _שלח הודעה לעצמך כדי לדבר עם הסוכן_`,
       if (args.length === 0) {
         return {
           handled: true,
-          response: `פרויקט פעיל: *${settings.activeProject}*\n\nלהחלפה: /project <שם>\n\n_החלפת פרויקט מחליפה את ה-Pi session, cwd, ו-AGENTS.md_`,
+          response: `פרויקט פעיל: *${settings.activeProject}*\n\nלהחלפה: /project <שם>\nליצירה: /project-new <שם>`,
         };
       }
       
@@ -673,7 +684,9 @@ _שלח הודעה לעצמך כדי לדבר עם הסוכן_`,
       
       let projectId: string;
       try {
-        projectId = slugifyProjectName(projectName);
+        projectId = projectName.trim().toLowerCase() === 'default'
+          ? 'default'
+          : slugifyProjectName(projectName);
       } catch (err) {
         if (err instanceof ProjectIdValidationError) {
           return {
@@ -686,20 +699,53 @@ _שלח הודעה לעצמך כדי לדבר עם הסוכן_`,
       
       let project = getProject(projectId);
       if (!project) {
-        project = createProject({ id: projectId, name: projectName });
+        return {
+          handled: true,
+          response: `❌ אין פרויקט בשם "${projectName}". ליצירה: /project-new ${projectName}`,
+        };
       }
       
+      if (projectId === settings.activeProject) {
+        return {
+          handled: true,
+          response: `פרויקט פעיל: *${project.name}*`,
+        };
+      }
+
+      // Keep per-project Claude Code --resume ids. Pi sessions are persisted on disk.
       clearSession(settings.activeProject);
-      clearClaudeCodeSession(settings.activeProject);
-      
+
       updateSettings({ activeProject: projectId });
-      
-      await getOrCreateSession(projectId);
-      
+
+      if (!isClaudeCodeConnected()) {
+        await getOrCreateSession(projectId);
+      }
+
       return {
         handled: true,
-        response: `✅ הוחלף לפרויקט: *${project.name}*\n\n_Pi session חדש נוצר עם cwd ו-AGENTS.md נפרדים._`,
+        response: `✅ הוחלף לפרויקט: *${project.name}*\n\n_שיחה נפרדת לכל פרויקט._`,
       };
+    }
+
+    case 'project-new': {
+      if (args.length === 0) {
+        return { handled: true, response: 'שימוש: /project-new <שם>' };
+      }
+      const projectName = args.join(' ');
+      let projectId: string;
+      try {
+        projectId = slugifyProjectName(projectName);
+      } catch (err) {
+        if (err instanceof ProjectIdValidationError) {
+          return { handled: true, response: `❌ שם פרויקט לא תקין: ${err.message}` };
+        }
+        throw err;
+      }
+      if (getProject(projectId)) {
+        return { handled: true, response: `הפרויקט *${projectName}* כבר קיים. להחלפה: /project ${projectName}` };
+      }
+      const created = createProject({ id: projectId, name: projectName });
+      return { handled: true, response: `✅ נוצר פרויקט: *${created.name}*\nלהחלפה: /project ${created.name}` };
     }
 
     case 'projects': {
@@ -772,26 +818,76 @@ _היכנס לממשק הניהול לשינוי הגדרות_`,
         }
         return {
           handled: true,
-          response: `מודל נוכחי: *${settings.model}*\n\nלהחלפה: /model <שם-מודל>\n\nדוגמאות:\n- /model claude-code/opus\n- /model gpt-5.3-codex`,
+          response: `מודל נוכחי: *${settings.model}*\n\nלהחלפה: /model <שם-מודל>\n\nדוגמה: /model gpt-5.3-codex`,
         };
       }
-      
-      const model = args.join(' ');
-      
+
+      const model = args.join(' ').trim();
+
+      if (isClaudeCodeConnected()) {
+        if (model === 'default' || model === 'claude-code/default') {
+          updateSettings({ model: 'claude-code/default' });
+          return {
+            handled: true,
+            response: '✅ Claude Code ישתמש במודל ברירת המחדל של המנוי',
+          };
+        }
+        if (!model.startsWith('claude-code/')) {
+          return {
+            handled: true,
+            response: `המנוע הפעיל הוא Claude Code. להחלפת מודל: /model claude-code/<שם>\nלמשל: /model claude-code/opus`,
+          };
+        }
+        updateSettings({ model });
+        return {
+          handled: true,
+          response: `✅ מודל Claude Code שונה ל: *${model.slice('claude-code/'.length)}*`,
+        };
+      }
+
+      if (model.startsWith('claude-code/')) {
+        return {
+          handled: true,
+          response: 'Claude Code אינו מחובר. התחבר דרך ההגדרות, או בחר מודל של הספק המחובר.',
+        };
+      }
+
+      const credentials = await listRuntimeCredentials();
+      if (credentials.length === 0) {
+        return {
+          handled: true,
+          response: '❌ לא מחובר ספק AI.\n\nהיכנס להגדרות וחבר ספק AI.',
+        };
+      }
+
+      const provider = providerIdFromModel(model);
+      if (provider === 'openai-codex' && model.includes('spark')) {
+        return {
+          handled: true,
+          response: 'מודלי spark אינם זמינים לחשבון ChatGPT. בחר מודל אחר, למשל gpt-5.3-codex.',
+        };
+      }
+      if (!credentials.some((c) => c.providerId === provider)) {
+        const connected = credentials.map((c) => c.providerId).join(', ');
+        return {
+          handled: true,
+          response: `הספק של "${model}" (${provider}) אינו מחובר. מחוברים: ${connected}`,
+        };
+      }
+
       const success = await setSessionModel(settings.activeProject, model);
-      
+
       if (success) {
         return {
           handled: true,
           response: `✅ מודל שונה ל: *${model}*\n\n_Pi session נוצר מחדש עם המודל החדש._`,
         };
-      } else {
-        updateSettings({ model });
-        return {
-          handled: true,
-          response: `✅ מודל שונה ל: *${model}* (ישתנה בהודעה הבאה)`,
-        };
       }
+      updateSettings({ model });
+      return {
+        handled: true,
+        response: `✅ מודל שונה ל: *${model}* (ישתנה בהודעה הבאה)`,
+      };
     }
 
     default:
@@ -807,11 +903,13 @@ async function processWithPi(
 ): Promise<string | null> {
   await updateReaction(tracker, 'processing');
 
+  const prompt = withExecutedActionNotes(settings.activeProject, message.body);
+
   // Claude Code (customer's own subscription login) takes precedence — it is
   // the only path that draws on Pro/Max plan limits.
   if (isClaudeCodeConnected()) {
     log.info({ projectId: settings.activeProject, message: message.body.slice(0, 50) }, 'Processing with Claude Code');
-    const response = await runClaudeCodePrompt(settings.activeProject, withExecutedActionNotes(settings.activeProject, message.body), {
+    const response = await runClaudeCodePrompt(settings.activeProject, prompt, {
       onToolStart: (toolName) => {
         log.debug({ toolName }, 'Claude Code tool started');
         updateReaction(tracker, 'using_tools').catch(() => {});
@@ -821,6 +919,7 @@ async function processWithPi(
       },
     });
     if (response) {
+      consumeExecutedActionNotes(settings.activeProject);
       saveMessage({
         id: `bot_${Date.now()}`,
         from: 'bot',
@@ -852,7 +951,7 @@ async function processWithPi(
     );
     
     try {
-      await recreateSessionAfterCredentialChange(settings.activeProject);
+      await recreateSessionAfterCredentialChange(settings.activeProject, { inQueue: true });
     } catch (err) {
       log.error({ err }, 'Failed to recreate session after model adjustment');
     }
@@ -863,7 +962,7 @@ async function processWithPi(
   try {
     const response = await runPromptWithCallbacks(
       settings.activeProject,
-      withExecutedActionNotes(settings.activeProject, message.body),
+      prompt,
       {
         onTurnStart: () => {
           updateReaction(tracker, 'processing').catch(() => {});
@@ -885,6 +984,7 @@ async function processWithPi(
     );
     
     if (response) {
+      consumeExecutedActionNotes(settings.activeProject);
       const botMessage: Message = {
         id: `bot_${Date.now()}`,
         from: 'bot',
