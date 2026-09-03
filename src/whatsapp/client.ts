@@ -546,7 +546,7 @@ export class WhatsAppClient {
     return this.pairingState.isPaired;
   }
 
-  /** Current WA connection phase for /health (#176). */
+  /** Current WA connection phase for /api/status (#176). */
   getConnectionPhase(): 'connecting' | 'open' | 'closed' {
     return this.connectionPhase;
   }
