@@ -72,6 +72,143 @@ describe('WhatsAppClient reconnect behavior', () => {
   });
 });
 
+describe('Connect watchdog (#176)', () => {
+  it('fires when socket only emits connecting — ends socket, sets Hebrew error, schedules reconnect', async () => {
+    vi.useFakeTimers();
+
+    const { WhatsAppClient } = await import('./client.ts');
+    const client = new WhatsAppClient();
+
+    const mockSocket = {
+      end: vi.fn(),
+      ev: {
+        on: vi.fn(),
+        removeAllListeners: vi.fn(),
+      },
+    };
+
+    (client as unknown as { socket: typeof mockSocket }).socket = mockSocket;
+
+    const mockScheduleReconnect = vi.fn();
+    (client as unknown as { scheduleReconnect: typeof mockScheduleReconnect }).scheduleReconnect =
+      mockScheduleReconnect;
+
+    const saveCreds = vi.fn();
+    (client as unknown as { setupEventHandlers: (saveCreds: () => Promise<void>) => void })
+      .setupEventHandlers(saveCreds);
+
+    const onCalls = mockSocket.ev.on.mock.calls as [string, unknown][];
+    const connectionUpdateHandler = onCalls.find(
+      (call) => call[0] === 'connection.update'
+    )?.[1] as ((update: { connection?: string; qr?: string }) => Promise<void>) | undefined;
+
+    expect(connectionUpdateHandler).toBeDefined();
+
+    await connectionUpdateHandler!({ connection: 'connecting' });
+    expect(client.getConnectionPhase()).toBe('connecting');
+    expect(client.getPairingState().error).toBeUndefined();
+    expect(mockScheduleReconnect).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(30_000);
+
+    expect(mockSocket.end).toHaveBeenCalled();
+    expect(mockSocket.ev.removeAllListeners).toHaveBeenCalled();
+    expect(mockScheduleReconnect).toHaveBeenCalled();
+    expect(client.getPairingState().error).toBe(
+      'לא ניתן להתחבר ל-WhatsApp — בדוק חיבור/חומת אש'
+    );
+    expect(client.getConnectionPhase()).toBe('closed');
+
+    vi.useRealTimers();
+  });
+
+  it('cancels watchdog when QR arrives before timeout', async () => {
+    vi.useFakeTimers();
+
+    const { WhatsAppClient } = await import('./client.ts');
+    const client = new WhatsAppClient();
+
+    const mockSocket = {
+      end: vi.fn(),
+      ev: {
+        on: vi.fn(),
+        removeAllListeners: vi.fn(),
+      },
+    };
+
+    (client as unknown as { socket: typeof mockSocket }).socket = mockSocket;
+
+    const mockScheduleReconnect = vi.fn();
+    (client as unknown as { scheduleReconnect: typeof mockScheduleReconnect }).scheduleReconnect =
+      mockScheduleReconnect;
+
+    (client as unknown as { setupEventHandlers: (saveCreds: () => Promise<void>) => void })
+      .setupEventHandlers(vi.fn());
+
+    const onCalls = mockSocket.ev.on.mock.calls as [string, unknown][];
+    const connectionUpdateHandler = onCalls.find(
+      (call) => call[0] === 'connection.update'
+    )?.[1] as ((update: { connection?: string; qr?: string }) => Promise<void>) | undefined;
+
+    await connectionUpdateHandler!({ connection: 'connecting' });
+    await connectionUpdateHandler!({ qr: 'test-qr-payload' });
+
+    await vi.advanceTimersByTimeAsync(30_000);
+
+    expect(mockSocket.end).not.toHaveBeenCalled();
+    expect(mockScheduleReconnect).not.toHaveBeenCalled();
+    expect(client.getPairingState().qrCode).toBe('test-qr-payload');
+    expect(client.getPairingState().error).toBeUndefined();
+
+    vi.useRealTimers();
+  });
+
+  it('cancels watchdog when connection opens before timeout', async () => {
+    vi.useFakeTimers();
+
+    const { updateSettings } = await import('../core/settings.ts');
+    updateSettings({ ownerPhone: '972501234567' });
+
+    const { WhatsAppClient } = await import('./client.ts');
+    const client = new WhatsAppClient();
+
+    const mockSocket = {
+      user: { id: '972501234567:0@s.whatsapp.net', name: 'Owner' },
+      end: vi.fn(),
+      ev: {
+        on: vi.fn(),
+        removeAllListeners: vi.fn(),
+      },
+    };
+
+    (client as unknown as { socket: typeof mockSocket }).socket = mockSocket;
+
+    const mockScheduleReconnect = vi.fn();
+    (client as unknown as { scheduleReconnect: typeof mockScheduleReconnect }).scheduleReconnect =
+      mockScheduleReconnect;
+
+    (client as unknown as { setupEventHandlers: (saveCreds: () => Promise<void>) => void })
+      .setupEventHandlers(vi.fn());
+
+    const onCalls = mockSocket.ev.on.mock.calls as [string, unknown][];
+    const connectionUpdateHandler = onCalls.find(
+      (call) => call[0] === 'connection.update'
+    )?.[1] as ((update: { connection?: string; qr?: string }) => Promise<void>) | undefined;
+
+    await connectionUpdateHandler!({ connection: 'connecting' });
+    await connectionUpdateHandler!({ connection: 'open' });
+
+    await vi.advanceTimersByTimeAsync(30_000);
+
+    expect(mockSocket.end).not.toHaveBeenCalled();
+    expect(mockScheduleReconnect).not.toHaveBeenCalled();
+    expect(client.getPairingState().isPaired).toBe(true);
+    expect(client.getConnectionPhase()).toBe('open');
+
+    vi.useRealTimers();
+  });
+});
+
 describe('Disconnect reason handling', () => {
   it('exports DisconnectReason values correctly', async () => {
     const baileys = await import('@whiskeysockets/baileys');

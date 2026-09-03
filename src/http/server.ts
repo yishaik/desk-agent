@@ -277,7 +277,8 @@ addRoute('GET', '/api/status', async (req, res) => {
   sendJson(res, {
     success: true,
     data: {
-      whatsapp: wa.isConnected() ? 'connected' : 'disconnected',
+      whatsapp: wa.getConnectionPhase(),
+      lastConnectionEventAt: wa.getLastConnectionEventAt(),
       connector: connectorHealth ? 'healthy' : 'unhealthy',
       pendingConfirmations: pending.length,
       activeProject: settings.activeProject,
