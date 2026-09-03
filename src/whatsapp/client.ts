@@ -418,7 +418,7 @@ export class WhatsAppClient {
               fromMe: quoted.fromMe,
               participant: quoted.participant,
             },
-            message: { conversation: text },
+            message: { conversation: quoted.conversation ?? '' },
           } as proto.IWebMessageInfo,
         }
       : undefined;
@@ -466,7 +466,7 @@ export class WhatsAppClient {
       throw new Error('WhatsApp client not connected');
     }
 
-    const targetJid = this.getSelfChatJid();
+    const targetJid = messageKey.remoteJid || this.getSelfChatJid();
     if (!targetJid) {
       log.debug({ messageId: messageKey.id }, 'Skipping reaction: no self-chat available');
       return;

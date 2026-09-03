@@ -68,9 +68,11 @@ For other integrations, operators can open the Open Connector console at `https:
 - **515 error handling** after scan reconnects with existing creds (no wipe)
 
 **Not implemented:**
-- Quoted replies (parameter exists but unused)
 - Composing/typing indicators
 - Read receipts
+
+Replies to delayed or stale WhatsApp messages include the original message as
+a quoted bubble.
 
 ## Web UI
 
@@ -92,11 +94,12 @@ Send these to yourself in WhatsApp:
 |---------|-------------|
 | `/help` | Show available commands |
 | `/status` | Check system status |
-| `/project [name]` | Switch or create a project |
+| `/project [name]` | Switch to an existing project |
+| `/project-new [name]` | Create a project |
 | `/projects` | List all projects |
 | `/services` | List connected services |
 | `/settings` | View current settings |
-| `/model [name]` | Switch AI model |
+| `/model [name]` | Switch AI model (must match the active engine) |
 
 ## AI Provider Login
 

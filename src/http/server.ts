@@ -13,8 +13,8 @@ import {
   removeProjectToken,
   markSetupComplete,
   isSetupRequired,
-  addService,
   removeService,
+  setServiceEnabled,
   setActionEnabled,
   setActionConfirmation,
   getActionConfirmationOverride,
@@ -1307,11 +1307,7 @@ addRoute('PATCH', '/api/connector/tools/:service/enabled', async (req, res) => {
     }
 
     const overlay = SERVICE_HEBREW_OVERLAY[service];
-    addService({
-      id: service,
-      name: overlay?.name ?? service,
-      enabled: body.enabled,
-    });
+    setServiceEnabled(service, body.enabled, overlay?.name ?? service);
 
     sendJson(res, {
       success: true,

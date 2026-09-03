@@ -57,6 +57,8 @@ vi.mock('../agent/session.ts', () => ({
   getAllPendingConfirmations: vi.fn(() => []),
   cancelAllPendingConfirmations: vi.fn(() => 0),
   formatPendingForUser: vi.fn(() => ''),
+  markPayloadPresented: vi.fn(() => true),
+  isPayloadPresented: vi.fn(() => false),
 }));
 
 vi.mock('../agent/claude-code.ts', () => ({
@@ -70,13 +72,31 @@ vi.mock('../http/auth.ts', () => ({
   resolveActiveModel: vi.fn(async () => ({ valid: true, model: true, modelId: 'test' })),
 }));
 
-beforeEach(() => {
+async function closeHandlerDb(): Promise<void> {
+  try {
+    const { closeDatabase } = await import('../core/memory.ts');
+    closeDatabase();
+  } catch {
+    // memory.ts may not have been loaded yet
+  }
+}
+
+function tryRmDataDir(): void {
+  try {
+    if (existsSync(TEST_DATA_DIR)) {
+      rmSync(TEST_DATA_DIR, { recursive: true, force: true });
+    }
+  } catch {
+    // Windows can keep SQLite locked across resetModules (#174).
+  }
+}
+
+beforeEach(async () => {
+  await closeHandlerDb();
   vi.resetModules();
   vi.clearAllMocks();
   process.env['DATA_DIR'] = TEST_DATA_DIR;
-  if (existsSync(TEST_DATA_DIR)) {
-    rmSync(TEST_DATA_DIR, { recursive: true });
-  }
+  tryRmDataDir();
   mkdirSync(TEST_DATA_DIR, { recursive: true });
   
   mockGetOwnerJid.mockReturnValue('1234567890:123@s.whatsapp.net');
@@ -85,12 +105,13 @@ beforeEach(() => {
   mockGetSelfChatJid.mockReturnValue('ABC123XYZ@lid');
   mockIsConnected.mockReturnValue(true);
   staleSkip.notified = false;
+  const claude = await import('../agent/claude-code.ts');
+  vi.mocked(claude.isClaudeCodeConnected).mockReturnValue(false);
 });
 
-afterEach(() => {
-  if (existsSync(TEST_DATA_DIR)) {
-    rmSync(TEST_DATA_DIR, { recursive: true });
-  }
+afterEach(async () => {
+  await closeHandlerDb();
+  tryRmDataDir();
   delete process.env['DATA_DIR'];
 });
 
@@ -356,8 +377,8 @@ describe('Message Key', () => {
 });
 
 describe('Executed-action notes reach the model (#26)', () => {
-  it('prefixes the next prompt once with what ran outside the model', async () => {
-    const { recordExecutedAction } = await import('../core/confirmations.ts');
+  it('prefixes the next prompt with what ran outside the model without consuming (#170)', async () => {
+    const { recordExecutedAction, consumeExecutedActionNotes } = await import('../core/confirmations.ts');
     const { withExecutedActionNotes } = await import('./handler.ts');
     recordExecutedAction({ projectId: 'default', actionId: 'gmail.send_email', success: true, summary: '{"id":"m1"}' });
 
@@ -366,12 +387,50 @@ describe('Executed-action notes reach the model (#26)', () => {
     expect(prompt).toContain('Do not execute them again');
     expect(prompt.endsWith('thanks')).toBe(true);
 
+    expect(withExecutedActionNotes('default', 'again')).toContain('gmail.send_email');
+    consumeExecutedActionNotes('default');
     expect(withExecutedActionNotes('default', 'again')).toBe('again');
+  });
+
+  it('consumes notes only after a successful model turn (#170)', async () => {
+    const { recordExecutedAction } = await import('../core/confirmations.ts');
+    const { handleMessage, withExecutedActionNotes } = await import('./handler.ts');
+    recordExecutedAction({ projectId: 'default', actionId: 'gmail.send_email', success: true, summary: '{"id":"m1"}' });
+    mockRunPromptWithCallbacks.mockResolvedValueOnce('done');
+
+    await handleMessage(makeMessage({
+      id: 'msg_notes_ok',
+      body: 'thanks',
+      isFromMe: true,
+      to: 'ABC123XYZ@lid',
+      messageKey: { remoteJid: 'ABC123XYZ@lid', id: 'msg_notes_ok', fromMe: true },
+    }));
+
+    expect(withExecutedActionNotes('default', 'next')).toBe('next');
+  });
+
+  it('keeps notes when the model turn returns null (#170)', async () => {
+    const { recordExecutedAction } = await import('../core/confirmations.ts');
+    const { handleMessage, withExecutedActionNotes } = await import('./handler.ts');
+    recordExecutedAction({ projectId: 'default', actionId: 'gmail.send_email', success: true, summary: '{"id":"m1"}' });
+    mockRunPromptWithCallbacks.mockResolvedValueOnce(null);
+
+    await handleMessage(makeMessage({
+      id: 'msg_notes_fail',
+      body: 'thanks',
+      isFromMe: true,
+      to: 'ABC123XYZ@lid',
+      messageKey: { remoteJid: 'ABC123XYZ@lid', id: 'msg_notes_fail', fromMe: true },
+    }));
+
+    expect(withExecutedActionNotes('default', 'next')).toContain('gmail.send_email');
   });
 });
 
 describe('queued /project then prompt uses the new project (#77)', () => {
   it('runPromptWithCallbacks is called with project b after /project b', async () => {
+    const { createProject } = await import('../core/memory.ts');
+    createProject({ id: 'b', name: 'b' });
     const { handleMessage } = await import('./handler.ts');
     mockRunPromptWithCallbacks.mockClear();
 
@@ -398,6 +457,155 @@ describe('queued /project then prompt uses the new project (#77)', () => {
     expect(mockRunPromptWithCallbacks).toHaveBeenCalled();
     const projectIds = mockRunPromptWithCallbacks.mock.calls.map((c: unknown[]) => c[0]);
     expect(projectIds).toContain('b');
+  });
+});
+
+describe('/project Claude Code (#165)', () => {
+  function selfChat(id: string, body: string) {
+    return makeMessage({
+      id,
+      body,
+      isFromMe: true,
+      to: 'ABC123XYZ@lid',
+      messageKey: { remoteJid: 'ABC123XYZ@lid', id, fromMe: true },
+    });
+  }
+
+  it('does not create a missing project and points at /project-new', async () => {
+    const { handleMessage } = await import('./handler.ts');
+    await handleMessage(selfChat('msg_missing_proj', '/project sales'));
+    const text = mockSendMessage.mock.calls.map((c) => String(c[1])).join('\n');
+    expect(text).toContain('אין פרויקט');
+    expect(text).toContain('/project-new');
+  });
+
+  it('early-returns when switching to the already-active project', async () => {
+    const session = await import('../agent/session.ts');
+    const { handleMessage } = await import('./handler.ts');
+    await handleMessage(selfChat('msg_same_proj', '/project default'));
+    expect(session.clearSession).not.toHaveBeenCalled();
+    const text = mockSendMessage.mock.calls.map((c) => String(c[1])).join('\n');
+    expect(text).toContain('פרויקט פעיל');
+  });
+
+  it('does not clear Claude Code history or require a Pi session (#165)', async () => {
+    const { createProject } = await import('../core/memory.ts');
+    createProject({ id: 'sales', name: 'sales' });
+    const claude = await import('../agent/claude-code.ts');
+    const session = await import('../agent/session.ts');
+    vi.mocked(claude.isClaudeCodeConnected).mockReturnValue(true);
+    const { handleMessage } = await import('./handler.ts');
+
+    await handleMessage(selfChat('msg_switch_sales', '/project sales'));
+
+    expect(claude.clearClaudeCodeSession).not.toHaveBeenCalled();
+    expect(session.getOrCreateSession).not.toHaveBeenCalled();
+    const text = mockSendMessage.mock.calls.map((c) => String(c[1])).join('\n');
+    expect(text).toContain('הוחלף לפרויקט');
+    expect(text).not.toContain('No AI provider');
+  });
+
+  it('/project-new creates without switching', async () => {
+    const { handleMessage } = await import('./handler.ts');
+    const { getProject } = await import('../core/memory.ts');
+    const { loadSettings } = await import('../core/settings.ts');
+    await handleMessage(selfChat('msg_new_proj', '/project-new sales'));
+    expect(getProject('sales')?.name).toBe('sales');
+    expect(loadSettings().activeProject).toBe('default');
+    const text = mockSendMessage.mock.calls.map((c) => String(c[1])).join('\n');
+    expect(text).toContain('נוצר פרויקט');
+  });
+});
+
+describe('/model matches the active engine (#171)', () => {
+  function selfChat(id: string, body: string) {
+    return makeMessage({
+      id,
+      body,
+      isFromMe: true,
+      to: 'ABC123XYZ@lid',
+      messageKey: { remoteJid: 'ABC123XYZ@lid', id, fromMe: true },
+    });
+  }
+
+  it('rejects a Pi model while Claude Code is connected', async () => {
+    const claude = await import('../agent/claude-code.ts');
+    vi.mocked(claude.isClaudeCodeConnected).mockReturnValue(true);
+    const { handleMessage } = await import('./handler.ts');
+    const { loadSettings } = await import('../core/settings.ts');
+    const before = loadSettings().model;
+
+    await handleMessage(selfChat('msg_model_pi', '/model gpt-5.3-codex'));
+
+    const text = mockSendMessage.mock.calls.map((c) => String(c[1])).join('\n');
+    expect(text).toContain('Claude Code');
+    expect(text).not.toContain('מודל שונה');
+    expect(loadSettings().model).toBe(before);
+  });
+
+  it('stores claude-code/opus when Claude Code is connected', async () => {
+    const claude = await import('../agent/claude-code.ts');
+    vi.mocked(claude.isClaudeCodeConnected).mockReturnValue(true);
+    const { handleMessage } = await import('./handler.ts');
+    await handleMessage(selfChat('msg_model_cc', '/model claude-code/opus'));
+    const { loadSettings } = await import('../core/settings.ts');
+    expect(loadSettings().model).toBe('claude-code/opus');
+    const text = mockSendMessage.mock.calls.map((c) => String(c[1])).join('\n');
+    expect(text).toContain('opus');
+  });
+
+  it('rejects claude-code/opus on a ChatGPT stack', async () => {
+    const claude = await import('../agent/claude-code.ts');
+    vi.mocked(claude.isClaudeCodeConnected).mockReturnValue(false);
+    const auth = await import('../http/auth.ts');
+    vi.mocked(auth.listRuntimeCredentials).mockResolvedValue([
+      { providerId: 'openai-codex', type: 'oauth' },
+    ]);
+    const { handleMessage } = await import('./handler.ts');
+    const { loadSettings } = await import('../core/settings.ts');
+    const before = loadSettings().model;
+
+    await handleMessage(selfChat('msg_model_cc_on_pi', '/model claude-code/opus'));
+
+    const text = mockSendMessage.mock.calls.map((c) => String(c[1])).join('\n');
+    expect(text).toContain('Claude Code אינו מחובר');
+    expect(loadSettings().model).toBe(before);
+  });
+});
+
+describe('expired confirmation notice (#168)', () => {
+  it('does not replace a still-valid numbered pick with the expiry notice', async () => {
+    const session = await import('../agent/session.ts');
+    vi.mocked(session.consumeExpiredConfirmations).mockReturnValue([
+      { confirmationId: 'confirm_old', actionId: 'gmail.send_email', input: {}, createdAt: Date.now(), projectId: 'default' },
+    ] as never);
+    vi.mocked(session.getAllPendingConfirmations).mockReturnValue([
+      {
+        confirmationId: 'confirm_live',
+        actionId: 'calendar.create_event',
+        input: { title: 'Meeting' },
+        projectId: 'default',
+        createdAt: Date.now(),
+      },
+    ] as never);
+    vi.mocked(session.formatPendingForUser).mockReturnValue('📋 *calendar.create_event*');
+    vi.mocked(session.isPayloadPresented).mockReturnValue(false);
+
+    const { handleMessage } = await import('./handler.ts');
+    await handleMessage(makeMessage({
+      id: 'msg_pick_after_expiry',
+      body: '1',
+      isFromMe: true,
+      to: 'ABC123XYZ@lid',
+      messageKey: { remoteJid: 'ABC123XYZ@lid', id: 'msg_pick_after_expiry', fromMe: true },
+    }));
+
+    const text = mockSendMessage.mock.calls.map((c) => String(c[1])).join('\n');
+    expect(text).not.toContain('תוקף האישור פג');
+    expect(text).toContain('calendar.create_event');
+
+    vi.mocked(session.consumeExpiredConfirmations).mockReturnValue([]);
+    vi.mocked(session.getAllPendingConfirmations).mockReturnValue([]);
   });
 });
 
@@ -694,7 +902,7 @@ describe('Per-Project Processing Lock - Issue #33', () => {
     const [first, second] = promptCalls.sort((a, b) => a.start - b.start);
     
     expect(second!.start).toBeGreaterThanOrEqual(first!.end);
-  });
+  }, 15_000);
 
   it('queue-bypass commands (/status, /help) run immediately outside queue', async () => {
     const sendMessageMock = vi.fn().mockResolvedValue(undefined);

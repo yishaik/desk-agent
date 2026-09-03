@@ -216,14 +216,21 @@ export function getService(serviceId: string): ServiceConfig | undefined {
   return settings.services.find((s) => s.id === serviceId);
 }
 
-export function setServiceEnabled(serviceId: string, enabled: boolean): Settings {
+export function setServiceEnabled(serviceId: string, enabled: boolean, name?: string): Settings {
   const settings = loadSettings();
   const service = settings.services.find((s) => s.id === serviceId);
   if (service) {
     service.enabled = enabled;
-    saveSettings(settings);
-    log.info({ serviceId, enabled }, 'Set service enabled state');
+  } else {
+    settings.services.push({
+      id: serviceId,
+      name: name ?? serviceId,
+      enabled,
+      disabledActions: [],
+    });
   }
+  saveSettings(settings);
+  log.info({ serviceId, enabled }, 'Set service enabled state');
   return settings;
 }
 
