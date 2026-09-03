@@ -113,15 +113,21 @@ Open Connector adds the authentication and executes the action.
 1. Open Connector Web Console → Access → Create new token
 2. Delete the old token
 3. Update `.env` with new `OPEN_CONNECTOR_TOKEN`
-4. Restart: `docker compose restart agent`
+4. Restart: `docker compose restart agent` — the agent copies the env token into `settings.json` on load, so rotation takes effect without a manual settings edit.
 
-### Admin Token (Optional — Operators Only)
+### Admin Token (Required in production)
 
-`CONNECTOR_ADMIN_TOKEN` is an optional credential for accessing the Open Connector console at `https://console.{DOMAIN}`. Operators set it in `.env` before deployment if they need the console for additional integrations beyond Gmail/Calendar.
+`CONNECTOR_ADMIN_TOKEN` is required in production. Open Connector treats admin-scope routes (including `/api/oauth/*`) as open when this token is empty. The agent refuses to start in production without it.
 
-**Security boundary:** The admin token is never exposed to PAIR_TOKEN holders. Even an authenticated customer cannot see, retrieve, or acknowledge the admin token through the Web UI or API. This ensures that a leaked PAIR_TOKEN does not grant Open Connector admin access.
+It is used for:
+- Open Connector console login at `https://console.{DOMAIN}` (the PAIR_TOKEN cookie is host-only on the agent domain and is not sent to the console)
+- Server-side fallback if the runtime token is rejected on `/api/*`
 
-The admin token is for operators who need to configure extra tools or manage OAuth apps. Gmail and Calendar connect directly from Settings without the console.
+**Security boundary:** The admin token is never exposed to PAIR_TOKEN holders. Even an authenticated customer cannot see, retrieve, or acknowledge the admin token through the Web UI or API.
+
+Gmail and Calendar still connect from Settings using the runtime token first. The console is extra tools.
+
+`/api/oauth/*` is not published on the agent domain. The agent talks to the connector on the Docker network.
 
 ### CONNECTOR_ENCRYPTION_KEY
 
@@ -156,6 +162,15 @@ Gmail and Google Calendar connect via OAuth from the Settings page:
 - Callback returns to the agent; tokens are stored in Open Connector (encrypted)
 
 The agent never sees raw Google credentials — only action metadata and execution results. If the OAuth session expires, Settings shows a reconnect prompt.
+
+## Data at rest
+
+Open Connector encrypts stored OAuth credentials with `CONNECTOR_ENCRYPTION_KEY`. Agent files under `data/` (`settings.json`, WhatsApp auth, SQLite, pending confirmations) are mode `0600` on a per-customer volume, not application-encrypted. Protect the host and back up the Docker volumes. There is no retention or customer-facing delete UI; wipe the volume to erase a stack.
+
+## Compliance notes
+
+- WhatsApp access uses the unofficial Baileys library, not the WhatsApp Business API. That can break without notice and may violate WhatsApp terms.
+- Claude Code login automates the official CLI's interactive login so usage draws on the customer's subscription. Keep `CLAUDE_CODE_VERSION` pinned and re-verify the TUI driver after bumps.
 
 ## WhatsApp Session Security
 
@@ -316,9 +331,9 @@ If the server is compromised:
 Before going live:
 
 - [ ] Strong PAIR_TOKEN (32+ random bytes)
+- [ ] CONNECTOR_ADMIN_TOKEN set (required in production)
 - [ ] HTTPS enabled with valid certificate
 - [ ] Firewall blocks internal ports
-- [ ] (Optional) CONNECTOR_ADMIN_TOKEN set if console access is needed
 - [ ] Encryption key is set and backed up securely
 - [ ] Action allow/block policies configured
 - [ ] WhatsApp session working (test message to yourself)

@@ -69,6 +69,15 @@ export function loadSettings(): Settings {
       projectTokens: parsed.projectTokens ?? DEFAULT_SETTINGS.projectTokens,
     };
     
+    // S-12: env OPEN_CONNECTOR_TOKEN wins over a stale copy in settings.json.
+    if (
+      config.openConnectorToken &&
+      settings.sharedConnectorToken !== config.openConnectorToken
+    ) {
+      settings.sharedConnectorToken = config.openConnectorToken;
+      saveSettings(settings);
+    }
+
     log.debug({ setupComplete: settings.setupComplete }, 'Loaded settings');
     lastSuccessfulLoad = settings;
     settingsCache = { settings, mtimeMs: currentMtime };

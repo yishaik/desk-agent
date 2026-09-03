@@ -22,29 +22,29 @@ afterEach(() => {
 
 describe('Confirmation Patterns', () => {
   const CONFIRM_PATTERNS = [
-    /^(yes|כן|אשר|confirm)$/i,
+    /^(yes|y|ok|okay|sure|confirm|כן|אשר|אוקיי|אוקי|בסדר|יאללה)$/i,
   ];
 
   const CANCEL_PATTERNS = [
     /^(no|לא|בטל|cancel|ביטול)$/i,
   ];
 
-  it('ok does NOT match confirm patterns', () => {
+  it('ok DOES match confirm patterns', () => {
     const text = 'ok';
     const matches = CONFIRM_PATTERNS.some((p) => p.test(text.trim()));
-    expect(matches).toBe(false);
+    expect(matches).toBe(true);
   });
 
-  it('אוקיי does NOT match confirm patterns', () => {
+  it('אוקיי DOES match confirm patterns', () => {
     const text = 'אוקיי';
     const matches = CONFIRM_PATTERNS.some((p) => p.test(text.trim()));
-    expect(matches).toBe(false);
+    expect(matches).toBe(true);
   });
 
-  it('בסדר does NOT match confirm patterns', () => {
+  it('בסדר DOES match confirm patterns', () => {
     const text = 'בסדר';
     const matches = CONFIRM_PATTERNS.some((p) => p.test(text.trim()));
-    expect(matches).toBe(false);
+    expect(matches).toBe(true);
   });
 
   it('כן DOES match confirm patterns', () => {

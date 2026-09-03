@@ -11,8 +11,8 @@ export function getThemeCss(): string {
       --bg-tertiary: #27272a;
       --text-primary: #fafafa;
       --text-secondary: #a1a1aa;
-      --text-muted: #71717a;
-      --accent: #6366f1;
+      --text-muted: #a1a1aa;
+      --accent: #818cf8;
       --accent-hover: #4f46e5;
       --success: #22c55e;
       --error: #ef4444;

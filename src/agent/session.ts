@@ -55,6 +55,7 @@ export {
   confirmAction,
   cancelConfirmation,
   cleanupOldConfirmations,
+  consumeExpiredConfirmations,
   getAllPendingConfirmations,
   cancelAllPendingConfirmations,
   formatPendingForUser,

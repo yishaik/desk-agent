@@ -100,7 +100,7 @@ export const DEFAULT_SETTINGS: Settings = {
   businessDescription: '',
   agentVoice: '',
   agentBoundaries: '',
-  timezone: 'UTC',
+  timezone: 'Asia/Jerusalem',
   model: 'claude-3-5-sonnet-20241022',
   apiKeyMode: 'shared',
   projectTokens: {},

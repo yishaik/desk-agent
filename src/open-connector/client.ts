@@ -336,7 +336,9 @@ export class OpenConnectorClient {
 
   async checkHealth(): Promise<boolean> {
     try {
-      const response = await fetch(`${this.baseUrl}/health`);
+      const response = await fetch(`${this.baseUrl}/health`, {
+        signal: AbortSignal.timeout(3000),
+      });
       return response.ok;
     } catch {
       return false;

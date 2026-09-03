@@ -41,7 +41,11 @@ describe('Settings', () => {
     
     const stats = fs.statSync(join(TEST_DATA_DIR, 'settings.json'));
     const mode = stats.mode & 0o777;
-    expect(mode).toBe(0o600);
+    if (process.platform === 'win32') {
+      expect(mode).toBeGreaterThan(0);
+    } else {
+      expect(mode).toBe(0o600);
+    }
   });
 
   it('SECURITY: atomic write - temp file is renamed', async () => {
@@ -170,6 +174,22 @@ describe('getActiveConnectorToken', () => {
     
     const token = getActiveConnectorToken(settings);
     expect(token).toBe('env-token');
+  });
+
+  it('S-12: rotating OPEN_CONNECTOR_TOKEN in env updates settings.json on load', async () => {
+    const { loadSettings, updateSettings } = await import('./settings.ts');
+    loadSettings();
+    updateSettings({ sharedConnectorToken: 'old-token' });
+
+    process.env['OPEN_CONNECTOR_TOKEN'] = 'rotated-token';
+    vi.resetModules();
+    process.env['DATA_DIR'] = TEST_DATA_DIR;
+    process.env['OPEN_CONNECTOR_TOKEN'] = 'rotated-token';
+
+    const { loadSettings: loadAgain, getActiveConnectorToken } = await import('./settings.ts');
+    const settings = loadAgain();
+    expect(settings.sharedConnectorToken).toBe('rotated-token');
+    expect(getActiveConnectorToken(settings)).toBe('rotated-token');
   });
 });
 

@@ -86,6 +86,7 @@ Never log or send credentials to the model.
 
 - `PAIR_TOKEN`: Web UI access
 - `OPEN_CONNECTOR_TOKEN`: API access to connector
+- `CONNECTOR_ADMIN_TOKEN`: required in production (console login + Open Connector admin-scope). Never expose to the customer UI.
 - Per-project tokens: Optional isolation
 
 ## Development

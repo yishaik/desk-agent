@@ -235,7 +235,7 @@ describe('getSettingsHtml', () => {
     const html = getSettingsHtml(createTestData());
     
     expect(html).toContain('--bg-primary: #09090b');
-    expect(html).toContain('--accent: #6366f1');
+    expect(html).toContain('--accent: #818cf8');
   });
 
   it('includes connected tools section', () => {
