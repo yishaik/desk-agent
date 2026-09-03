@@ -3,7 +3,15 @@ import { existsSync, rmSync, mkdirSync } from 'node:fs';
 
 const TEST_DATA_DIR = './test-data-memory';
 
-beforeEach(() => {
+beforeEach(async () => {
+  // better-sqlite3 keeps the database file open across resetModules(); close
+  // the previous module instance before replacing the test data directory.
+  try {
+    const { closeDatabase } = await import('./memory.ts');
+    closeDatabase();
+  } catch {
+    // The first test has no prior database instance.
+  }
   vi.resetModules();
   process.env['DATA_DIR'] = TEST_DATA_DIR;
   if (existsSync(TEST_DATA_DIR)) {
@@ -12,7 +20,9 @@ beforeEach(() => {
   mkdirSync(TEST_DATA_DIR, { recursive: true });
 });
 
-afterEach(() => {
+afterEach(async () => {
+  const { closeDatabase } = await import('./memory.ts');
+  closeDatabase();
   if (existsSync(TEST_DATA_DIR)) {
     rmSync(TEST_DATA_DIR, { recursive: true });
   }

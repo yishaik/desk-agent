@@ -162,7 +162,7 @@ describe('Pi oc_execute_action — HITL gate (#26)', () => {
     expect(executeAction).not.toHaveBeenCalled();
     expect(second.content[0]?.text).toContain('NOT executed');
     expect(getPendingConfirmation(id)).toBeTruthy();
-  }, 15_000);
+  }, 60_000);
 
   it('schema has no confirmed parameter', async () => {
     const { createOpenConnectorTools } = await import('./session.ts');

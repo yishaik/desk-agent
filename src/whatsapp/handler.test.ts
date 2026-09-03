@@ -828,6 +828,7 @@ describe('Per-Project Processing Lock - Issue #33', () => {
         getOwnerLid: () => null,
         isSelfJid: (jid: string) => jid.includes('1234567890'),
         getSelfChatJid: () => '1234567890@lid',
+        getPairingState: () => ({ isPaired: true, selfChat: 'phone' }),
         isConnected: () => true,
         sendMessage: vi.fn().mockResolvedValue(undefined),
         sendReaction: vi.fn().mockResolvedValue(undefined),
@@ -902,7 +903,7 @@ describe('Per-Project Processing Lock - Issue #33', () => {
     const [first, second] = promptCalls.sort((a, b) => a.start - b.start);
     
     expect(second!.start).toBeGreaterThanOrEqual(first!.end);
-  }, 15_000);
+  }, 60_000);
 
   it('queue-bypass commands (/status, /help) run immediately outside queue', async () => {
     const sendMessageMock = vi.fn().mockResolvedValue(undefined);

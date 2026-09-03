@@ -329,7 +329,14 @@ export async function runClaudeCodePrompt(
       if (modelSuffix && modelSuffix !== 'default') args.push('--model', modelSuffix);
       if (resumeId) args.push('--resume', resumeId);
 
-      const child = spawn(CLAUDE_BIN, args, {
+      // Windows cannot execute a .mjs file directly. Supporting the local
+      // script form keeps the runner testable on Windows while production
+      // still invokes the pinned Claude Code executable normally.
+      const command = process.platform === 'win32' && CLAUDE_BIN.toLowerCase().endsWith('.mjs')
+        ? process.execPath
+        : CLAUDE_BIN;
+      const commandArgs = command === process.execPath ? [CLAUDE_BIN, ...args] : args;
+      const child = spawn(command, commandArgs, {
         cwd: projectCwd,
         env: buildClaudeCodeEnv(),
         stdio: ['pipe', 'pipe', 'pipe'],
