@@ -83,6 +83,7 @@ export class WhatsAppClient {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
     }
+    this.clearConnectWatchdog();
 
     if (this.socket) {
       this.removeSocketListeners();
@@ -146,6 +147,10 @@ export class WhatsAppClient {
 
     this.connectWatchdog = setTimeout(() => {
       this.connectWatchdog = null;
+      if (this.pairingState.qrCode || this.pairingState.isPaired || this.connectionPhase === 'open') {
+        return;
+      }
+
       log.warn('WhatsApp connect watchdog: stuck on connecting without QR/open');
       this.pairingState = {
         isPaired: false,
@@ -160,7 +165,7 @@ export class WhatsAppClient {
       }
 
       this.reconnectAttempts++;
-      const delay = Math.min(1000 * Math.pow(2, Math.max(this.reconnectAttempts, 1)), 30000);
+      const delay = Math.min(1000 * Math.pow(2, this.reconnectAttempts), 30000);
       this.scheduleReconnect(delay);
     }, WhatsAppClient.CONNECT_WATCHDOG_MS);
   }
@@ -200,7 +205,9 @@ export class WhatsAppClient {
 
       if (connection === 'connecting') {
         this.noteConnectionEvent('connecting');
-        this.startConnectWatchdog();
+        if (!this.pairingState.qrCode && !this.pairingState.isPaired) {
+          this.startConnectWatchdog();
+        }
       }
 
       if (connection === 'close') {
@@ -546,7 +553,7 @@ export class WhatsAppClient {
     return this.pairingState.isPaired;
   }
 
-  /** Current WA connection phase for /api/status (#176). */
+  /** Current WA connection phase for auth-gated GET /api/status (#176). */
   getConnectionPhase(): 'connecting' | 'open' | 'closed' {
     return this.connectionPhase;
   }

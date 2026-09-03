@@ -74,6 +74,15 @@ describe('WhatsAppClient reconnect behavior', () => {
 
 describe('Connect watchdog (#176)', () => {
   it('fires when socket only emits connecting — ends socket, sets Hebrew error, schedules reconnect', async () => {
+    const rmSyncMock = vi.fn();
+    vi.doMock('node:fs', async (importOriginal) => {
+      const actual = await importOriginal<typeof import('node:fs')>();
+      return {
+        ...actual,
+        rmSync: rmSyncMock,
+      };
+    });
+
     vi.useFakeTimers();
 
     const { WhatsAppClient } = await import('./client.ts');
@@ -81,6 +90,7 @@ describe('Connect watchdog (#176)', () => {
 
     const mockSocket = {
       end: vi.fn(),
+      logout: vi.fn(),
       ev: {
         on: vi.fn(),
         removeAllListeners: vi.fn(),
@@ -112,6 +122,11 @@ describe('Connect watchdog (#176)', () => {
     await vi.advanceTimersByTimeAsync(30_000);
 
     expect(mockSocket.end).toHaveBeenCalled();
+    const endArg = mockSocket.end.mock.calls[0]?.[0] as Error | undefined;
+    expect(endArg).toBeInstanceOf(Error);
+    expect(endArg?.message).toBe('connect watchdog');
+    expect(mockSocket.logout).not.toHaveBeenCalled();
+    expect(rmSyncMock).not.toHaveBeenCalled();
     expect(mockSocket.ev.removeAllListeners).toHaveBeenCalled();
     expect(mockScheduleReconnect).toHaveBeenCalled();
     expect(client.getPairingState().error).toBe(
@@ -152,6 +167,7 @@ describe('Connect watchdog (#176)', () => {
 
     await connectionUpdateHandler!({ connection: 'connecting' });
     await connectionUpdateHandler!({ qr: 'test-qr-payload' });
+    await connectionUpdateHandler!({ connection: 'connecting' });
 
     await vi.advanceTimersByTimeAsync(30_000);
 
