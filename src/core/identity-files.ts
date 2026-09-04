@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import type { Settings } from './types.ts';
 import { config } from './config.ts';
 import { createChildLogger } from './logger.ts';
+import { getPublicSettingsUrl } from './onboarding.ts';
 
 const log = createChildLogger('identity-files');
 
@@ -49,6 +50,24 @@ export function buildIdentityPrompt(settings: Settings): string {
   parts.push('- Respond in the same language as the user message');
   parts.push('- Be concise and helpful');
   parts.push('- Ask for clarification when needed');
+
+  parts.push('');
+  parts.push('## Desk Agent setup and configuration');
+  parts.push(`- The authenticated Settings page is ${getPublicSettingsUrl()}.`);
+  parts.push('- For Gmail or Google Calendar: direct the owner to Settings → Connect services and the matching Connect button.');
+  parts.push('- For other services: direct the owner to Settings → Open Connector → Additional tools.');
+  parts.push('- Explain that /settings shows current settings, /services shows connections, and /projects manages workspaces.');
+  parts.push('- Never ask for passwords, OAuth codes, API keys, access tokens, or admin tokens in WhatsApp. Credentials are entered only in the provider or authenticated web UI.');
+  parts.push('- When the owner asks how to configure a service or setting, give exact step-by-step navigation instead of only saying to check Settings.');
+
+  if (!settings.setupComplete) {
+    parts.push('');
+    parts.push('## Guided onboarding mode');
+    parts.push('- Guide the new owner conversationally, one question at a time.');
+    parts.push('- Learn how to address the owner, what the business does, the preferred agent voice, and important boundaries.');
+    parts.push('- Then explain service connections and where future settings can be changed.');
+    parts.push('- Keep each onboarding message short and wait for the owner before asking the next question.');
+  }
 
   return parts.join('\n');
 }

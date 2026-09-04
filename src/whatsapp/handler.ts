@@ -2,6 +2,7 @@ import { createChildLogger } from '../core/logger.ts';
 import { loadSettings, updateSettings, getActiveConnectorToken } from '../core/settings.ts';
 import { saveMessage, listProjects, createProject, getProject, getMessage } from '../core/memory.ts';
 import { slugifyProjectName, ProjectIdValidationError } from '../core/projects.ts';
+import { getPublicSettingsUrl } from '../core/onboarding.ts';
 import { recordExecutedAction, consumeExecutedActionNotes, peekExecutedActionNotes } from '../core/confirmations.ts';
 import type { Message, MessageKey, Settings } from '../core/types.ts';
 import { getWhatsAppClient, WhatsAppClient } from './client.ts';
@@ -617,6 +618,7 @@ async function handleCommand(text: string, settings: Settings): Promise<CommandR
 /projects - רשימת פרויקטים
 /services - רשימת שירותים מחוברים
 /settings - הצג הגדרות
+/setup - הדרכה לחיבור שירותים ושינוי הגדרות
 /model [name] - החלף מודל
 
 *אישור פעולות:*
@@ -772,7 +774,13 @@ _שלח הודעה לעצמך כדי לדבר עם הסוכן_`,
         if (connections.length === 0) {
           return {
             handled: true,
-            response: 'אין שירותים מחוברים.\n\nהיכנס לממשק Open Connector כדי לחבר שירותים.',
+            response: `אין שירותים מחוברים.
+
+לחיבור Gmail או Google Calendar: פתח ${getPublicSettingsUrl()} → חיבור שירותים → התחבר.
+
+לשירותים נוספים: באותו עמוד פתח Open Connector → כלים נוספים.
+
+אל תשלח סיסמאות או טוקנים ב-WhatsApp.`,
           };
         }
         
@@ -804,9 +812,25 @@ _שלח הודעה לעצמך כדי לדבר עם הסוכן_`,
 🔑 מצב מפתחות: ${settings.apiKeyMode}
 📁 פרויקט פעיל: ${settings.activeProject}
 
-_היכנס לממשק הניהול לשינוי הגדרות_`,
+לשינוי ההגדרות: ${getPublicSettingsUrl()}
+
+_אפשר לכתוב /setup לקבלת הדרכה_`,
       };
     }
+
+    case 'setup':
+      return {
+        handled: true,
+        response: `*הגדרת הסוכן*
+
+1. פרטי העסק, שם הסוכן, סגנון וגבולות: ${getPublicSettingsUrl()}
+2. Gmail ו-Google Calendar: הגדרות → חיבור שירותים
+3. שירותים נוספים: הגדרות → Open Connector → כלים נוספים
+4. לבדיקת החיבורים: /services
+5. לפרויקטים נפרדים: /project-new <שם>
+
+אפשר גם לשאול אותי בשפה חופשית איך להגדיר שירות מסוים. אל תשלח סיסמאות, קודי OAuth או טוקנים בצ'אט.`,
+      };
 
     case 'model': {
       if (args.length === 0) {

@@ -118,9 +118,24 @@ interface SetupState {
 
 let setupState: SetupState | null = null;
 
+export function getClaudeCodeLoginStatus(): { status: 'pending' | 'success' | 'failed'; error?: string } {
+  if (isClaudeCodeConnected()) return { status: 'success' };
+  if (setupState?.error) return { status: 'failed', error: setupState.error };
+  if (setupState?.done) {
+    return { status: 'failed', error: 'Claude נסגר לפני שההתחברות הושלמה. נסה שוב.' };
+  }
+  return { status: 'pending' };
+}
+
+const ANSI_ESCAPE_PATTERN = new RegExp(
+  `${String.fromCharCode(27)}(?:\\[[0-?]*[ -/]*[@-~]|[78])`,
+  'g'
+);
+
 function stripAnsi(s: string): string {
-  // eslint-disable-next-line no-control-regex
-  return s.replace(/\x1b\[[0-9;?]*[a-zA-Z]/g, '').replace(/\r/g, '');
+  return s
+    .replace(ANSI_ESCAPE_PATTERN, '')
+    .replace(/\r/g, '');
 }
 
 // One-shot answers to the first-run TUI prompts, whichever of them appear.
@@ -128,6 +143,9 @@ function stripAnsi(s: string): string {
 // CLAUDE_CODE_VERSION after verifying new TUI strings still match.
 function driveOnboarding(state: SetupState): void {
   const out = state.output;
+  // Claude's full-screen TUI positions words with cursor escape sequences, so
+  // prompt text may arrive as "Choosethetextstyle" rather than normal prose.
+  const compact = out.replace(/\s+/g, '').toLowerCase();
   const press = (key: string, tag: string) => {
     if (state.handled.has(tag)) return;
     state.handled.add(tag);
@@ -135,11 +153,11 @@ function driveOnboarding(state: SetupState): void {
     log.debug({ tag }, 'Answered onboarding prompt');
   };
 
-  if (/text style|theme|looks best/i.test(out)) press('\r', 'theme');
+  if (compact.includes('textstyle') || compact.includes('looksbest') || compact.includes('syntaxtheme')) press('\r', 'theme');
   // Option 1 is "Claude account with subscription" — the default selection.
-  if (/log ?in method|subscription|Console account/i.test(out)) press('\r', 'method');
-  if (/security notes|press enter to continue/i.test(out) && state.handled.has('method')) press('\r', 'continue');
-  if (/trust the files|do you trust/i.test(out)) press('\r', 'trust');
+  if (compact.includes('loginmethod') || compact.includes('subscription') || compact.includes('consoleaccount')) press('\r', 'method');
+  if ((compact.includes('securitynotes') || compact.includes('pressentertocontinue')) && state.handled.has('method')) press('\r', 'continue');
+  if (compact.includes('trustthefiles') || compact.includes('doyoutrust')) press('\r', 'trust');
 }
 
 export async function startClaudeCodeLogin(): Promise<{ authorizeUrl?: string; error?: string }> {
@@ -177,7 +195,7 @@ export async function startClaudeCodeLogin(): Promise<{ authorizeUrl?: string; e
 
   const start = Date.now();
   while (Date.now() - start < 45_000) {
-    const match = state.output.match(/https:\/\/[^\s"']*oauth[^\s"']*/);
+    const match = stripAnsi(state.output).match(/https:\/\/claude\.ai\/oauth\/authorize\?[^\s"']+/);
     if (match) {
       state.authorizeUrl = match[0];
       log.info('Claude Code login authorize URL ready');

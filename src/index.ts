@@ -3,6 +3,7 @@ import { handleMessage } from './whatsapp/handler.ts';
 import { startServer } from './http/server.ts';
 import { createChildLogger } from './core/logger.ts';
 import { closeDatabase, pruneMessages } from './core/memory.ts';
+import { ensureUsableActiveProject } from './core/onboarding.ts';
 
 const log = createChildLogger('main');
 
@@ -22,6 +23,9 @@ async function main(): Promise<void> {
 ║   Personal WhatsApp agent for your business   ║
 ╚═══════════════════════════════════════════════╝
 `);
+
+  const activeProject = ensureUsableActiveProject();
+  log.info({ projectId: activeProject.id }, 'Active project ready');
 
   startServer();
 

@@ -196,6 +196,19 @@ describe('Self-Chat Gate', () => {
 });
 
 describe('Auth Module', () => {
+  it('selects device-code login for ChatGPT so no localhost callback is needed', async () => {
+    const { selectOAuthLoginMethod } = await import('./auth.ts');
+
+    expect(selectOAuthLoginMethod('openai-codex', [
+      { id: 'browser' },
+      { id: 'device_code' },
+    ])).toBe('device_code');
+    expect(selectOAuthLoginMethod('other-provider', [
+      { id: 'browser' },
+      { id: 'device_code' },
+    ])).toBe('browser');
+  });
+
   it('listProviders returns provider info structure', async () => {
     const { listProviders } = await import('./auth.ts');
     

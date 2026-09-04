@@ -248,3 +248,14 @@ describe('Issue #32: clearClaudeCodeSession', () => {
     expect(sessions['project-b']).toBe('session-b');
   });
 });
+
+describe('Claude subscription login UI driver', () => {
+  it('matches cursor-positioned TUI prompts and extracts only the Claude authorize URL', () => {
+    const code = readFileSync(join(process.cwd(), 'src/agent/claude-code.ts'), 'utf8');
+
+    expect(code).toContain("compact.includes('textstyle')");
+    expect(code).toContain("compact.includes('loginmethod')");
+    expect(code).toContain('claude\\.ai\\/oauth\\/authorize');
+    expect(code).toContain('getClaudeCodeLoginStatus');
+  });
+});

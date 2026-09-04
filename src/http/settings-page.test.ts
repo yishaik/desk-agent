@@ -231,6 +231,25 @@ describe('getSettingsHtml', () => {
     expect(html).toContain('קוד ש-Claude מציג');
   });
 
+  it('uses the visible Claude launcher instead of an empty provider popup', () => {
+    const html = getSettingsHtml(createTestData());
+
+    expect(html).toContain("window.open('/auth/launch?provider=claude-code'");
+    expect(html).toContain('אפשר חלונות קופצים');
+  });
+
+  it('shows ChatGPT device code UI without requiring a localhost callback', () => {
+    const html = getSettingsHtml(createTestData());
+
+    expect(html).toContain('id="deviceCodeModal"');
+    expect(html).toContain('id="deviceCodeDisplay"');
+    expect(html).toContain('id="deviceCodeLink"');
+    expect(html).toContain('showDeviceCodeModal(json.userCode, json.verificationUri)');
+    expect(html).toContain('החיבור יושלם כאן אוטומטית');
+    expect(html).not.toContain('window.open(json.authorizeUrl');
+    expect(html).not.toContain('localhost:1455');
+  });
+
   it('includes zinc/indigo theme colors', () => {
     const html = getSettingsHtml(createTestData());
     

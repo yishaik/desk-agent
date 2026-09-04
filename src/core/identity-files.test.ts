@@ -19,6 +19,7 @@ afterEach(() => {
     rmSync(TEST_DATA_DIR, { recursive: true });
   }
   delete process.env['DATA_DIR'];
+  delete process.env['DOMAIN'];
 });
 
 describe('buildIdentityPrompt', () => {
@@ -81,6 +82,22 @@ describe('buildIdentityPrompt', () => {
     expect(content).not.toContain('## About the Business');
     expect(content).not.toContain('## Voice & Personality');
     expect(content).not.toContain('## Boundaries');
+  });
+
+  it('teaches the agent how to guide onboarding, services, and settings safely', async () => {
+    process.env['DOMAIN'] = 'agent.example.com';
+    vi.resetModules();
+    const { buildIdentityPrompt } = await import('./identity-files.ts');
+    const { DEFAULT_SETTINGS } = await import('./types.ts');
+
+    const content = buildIdentityPrompt({ ...DEFAULT_SETTINGS, setupComplete: false });
+
+    expect(content).toContain('## Guided onboarding mode');
+    expect(content).toContain('one question at a time');
+    expect(content).toContain('Settings → Connect services');
+    expect(content).toContain('Open Connector → Additional tools');
+    expect(content).toContain('https://agent.example.com/settings');
+    expect(content).toContain('Never ask for passwords');
   });
 });
 

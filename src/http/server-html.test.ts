@@ -68,13 +68,16 @@ describe('HTML Escape Security', () => {
     expect(serverCode).toContain("const safePhone = escapeHtml(pairingState.phoneNumber)");
   });
 
-  it('SECURITY: XSS in wizard form values is escaped', async () => {
+  it('SECURITY: guided wizard does not interpolate editable identity fields', async () => {
     const fs = await import('node:fs');
     const serverCode = fs.readFileSync(path.join(__dirname, 'server.ts'), 'utf8');
-    
-    expect(serverCode).toContain('escapeHtml(settings.ownerName)');
-    expect(serverCode).toContain('escapeHtml(settings.businessName)');
-    expect(serverCode).toContain('escapeHtml(settings.businessDescription)');
+
+    const guidedStart = serverCode.indexOf('<h2>💬 ממשיכים יחד ב-WhatsApp</h2>');
+    const guidedEnd = serverCode.indexOf('` : `', guidedStart);
+    const guidedHtml = serverCode.slice(guidedStart, guidedEnd);
+    expect(guidedHtml).not.toContain('${settings.ownerName}');
+    expect(guidedHtml).not.toContain('${settings.businessName}');
+    expect(guidedHtml).not.toContain('${settings.businessDescription}');
   });
 });
 
@@ -131,10 +134,10 @@ describe('Server HTML Source Code Requirements', () => {
       expect(serverCode).toContain('pollPairing');
     });
 
-    it('wizard steps include WhatsApp, AI, and Identity (no Open Connector)', () => {
+    it('wizard steps include WhatsApp, AI, and guided onboarding (no Open Connector)', () => {
       expect(serverCode).toContain('>AI<');
       expect(serverCode).toContain('>WhatsApp<');
-      expect(serverCode).toContain('>זהות<');
+      expect(serverCode).toContain('>הדרכה<');
     });
 
     it('wizard does NOT show Open Connector step (admin token not required)', () => {
@@ -193,10 +196,11 @@ describe('Server HTML Source Code Requirements', () => {
       expect(serverCode).not.toContain('extra usage');
     });
 
-    it('claude-code uses popup-first pattern with about:blank', () => {
-      expect(serverCode).toContain("window.open('about:blank'");
-      expect(serverCode).toContain("providerId === 'claude-code'");
-      expect(serverCode).toContain('currentPopup.location = json.authorizeUrl');
+    it('claude-code opens a visible same-origin launcher instead of a blank page', () => {
+      expect(serverCode).toContain("window.open('/auth/launch?provider=claude-code'");
+      expect(serverCode).toContain("addRoute('GET', '/auth/launch'");
+      expect(serverCode).toContain('מכין התחברות ל-Claude');
+      expect(serverCode).not.toContain("window.open('about:blank'");
     });
 
     it('claude-code paste fallback shows קוד not callback URL', () => {
@@ -214,6 +218,7 @@ describe('Server HTML Source Code Requirements', () => {
       expect(serverCode).toContain('id="verificationLink"');
       expect(serverCode).toContain('json.userCode');
       expect(serverCode).toContain('json.verificationUri');
+      expect(serverCode).not.toContain('callback URL שחזר מ-ChatGPT');
     });
 
     it('loadProviders skips anthropic provider when updating UI', () => {
@@ -233,14 +238,8 @@ describe('Server HTML Source Code Requirements', () => {
       expect(serverCode).toContain('loginPollTicks >= maxPollTicks');
     });
 
-    it('wizard timeout shows hint for paste callback, not error banner', () => {
-      expect(serverCode).toContain('pasteHint');
-      expect(serverCode).toContain('הדבק את ה-callback URL');
-      expect(serverCode).not.toContain('poll-timeout-error');
-    });
-
-    it('wizard openai-codex timeout shows paste hint not failure', () => {
-      expect(serverCode).toContain("hint.textContent = 'הזמן עבר. נסה להזין את הקוד שוב או הדבק callback URL למטה.'");
+    it('wizard openai-codex timeout asks for a new device code, not a localhost callback', () => {
+      expect(serverCode).toContain("hint.textContent = 'תוקף הקוד פג. לחץ שוב על התחבר לקבלת קוד חדש.'");
       expect(serverCode).not.toContain("alert('timeout')");
     });
 
@@ -252,6 +251,18 @@ describe('Server HTML Source Code Requirements', () => {
     it('wizard allows reconnect for already-connected providers', () => {
       expect(serverCode).toContain("btnEl.textContent = 'התחבר מחדש'");
       expect(serverCode).toContain('connectedProviders.has(providerId)');
+    });
+
+    it('starts AI-guided onboarding through WhatsApp after provider pairing', () => {
+      expect(serverCode).toContain("fetch('/api/setup/start-guided'");
+      expect(serverCode).toContain("addRoute('POST', '/api/setup/start-guided'");
+      expect(serverCode).toContain('buildGuidedOnboardingPrompt');
+      expect(serverCode).toContain('wa.sendMessage(selfChatJid, message)');
+    });
+
+    it('creates a usable project before recreating a provider session', () => {
+      expect(serverCode).toContain('const project = ensureUsableActiveProject()');
+      expect(serverCode).toContain('recreateSessionAfterCredentialChange(project.id');
     });
   });
 

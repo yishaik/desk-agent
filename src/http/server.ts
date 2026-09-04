@@ -22,6 +22,10 @@ import {
 import { requiresConfirmation } from '../core/confirmations.ts';
 import { listSkillPacks, isKnownSkillPack, DEFAULT_SKILL_PACKS } from '../core/skills.ts';
 import { listProjects, createProject, getProject } from '../core/memory.ts';
+import {
+  buildGuidedOnboardingPrompt,
+  ensureUsableActiveProject,
+} from '../core/onboarding.ts';
 import { slugifyProjectName, validateProjectId, ProjectIdValidationError } from '../core/projects.ts';
 import { validateServiceId, ServiceIdValidationError } from '../open-connector/client.ts';
 import { getWhatsAppClient } from '../whatsapp/client.ts';
@@ -36,10 +40,11 @@ import {
   resolveActiveModel,
 } from './auth.ts';
 import { writeIdentityFiles } from '../core/identity-files.ts';
-import { recreateSessionAfterCredentialChange } from '../agent/session.ts';
+import { recreateSessionAfterCredentialChange, runPrompt } from '../agent/session.ts';
+import { isClaudeCodeConnected, runClaudeCodePrompt } from '../agent/claude-code.ts';
 import { getSettingsHtml, type SettingsPageData } from './settings-page.ts';
 import { getThemeCss } from './theme.ts';
-import { escapeHtml, timezoneSelectHtml } from './html.ts';
+import { escapeHtml } from './html.ts';
 
 const log = createChildLogger('http');
 
@@ -385,6 +390,22 @@ addRoute('GET', '/api/auth/session', async (req, res) => {
   }
 });
 
+addRoute('GET', '/auth/launch', async (req, res) => {
+  if (!isAuthenticated(req)) {
+    redirect(res, '/');
+    return;
+  }
+
+  const url = parseUrl(req.url ?? '', true);
+  const provider = String(url.query['provider'] ?? '');
+  if (provider !== 'claude-code') {
+    sendError(res, 'Unsupported provider', 400);
+    return;
+  }
+
+  sendHtml(res, getProviderLaunchHtml(provider));
+});
+
 addRoute('GET', '/api/auth/providers', async (req, res) => {
   if (!isAuthenticated(req)) {
     sendError(res, 'Unauthorized', 401);
@@ -417,7 +438,13 @@ addRoute('POST', '/api/auth/login', async (req, res) => {
     if (result.error) {
       sendError(res, result.error);
     } else {
-      sendJson(res, { success: true, authorizeUrl: result.authorizeUrl });
+      sendJson(res, {
+        success: true,
+        authorizeUrl: result.authorizeUrl,
+        userCode: result.userCode,
+        verificationUri: result.verificationUri,
+        loginMethod: result.loginMethod,
+      });
     }
   } catch (err) {
     log.error({ err }, 'Login error');
@@ -441,6 +468,7 @@ addRoute('GET', '/api/auth/login/:provider/status', async (req, res, params) => 
     // S-11: GET must not recreate sessions. Persist the default model only.
     const status = await getLoginStatusAsync(provider);
     if (status.status === 'success') {
+      ensureUsableActiveProject();
       const settings = loadSettings();
       const defaultModel = provider === 'claude-code'
         ? 'claude-code/default'
@@ -474,6 +502,7 @@ addRoute('POST', '/api/auth/complete', async (req, res) => {
     const result = await completeLogin(body.provider, body.codeOrRedirectUrl);
     if (result.success) {
       // On successful login, persist the model and recreate session
+      const project = ensureUsableActiveProject();
       const settings = loadSettings();
       const defaultModel = body.provider === 'claude-code' 
         ? 'claude-code/default' 
@@ -485,8 +514,7 @@ addRoute('POST', '/api/auth/complete', async (req, res) => {
         updateSettings({ model: defaultModel });
       }
       
-      const { recreateSessionAfterCredentialChange } = await import('../agent/session.ts');
-      await recreateSessionAfterCredentialChange(settings.activeProject, { credentialsChanged: true });
+      await recreateSessionAfterCredentialChange(project.id, { credentialsChanged: true });
       
       sendJson(res, { success: true });
     } else {
@@ -1026,12 +1054,49 @@ addRoute('PUT', '/api/projects/:id/activate', async (req, res, _params) => {
   sendJson(res, { success: true });
 });
 
+addRoute('POST', '/api/setup/start-guided', async (req, res) => {
+  if (!isAuthenticated(req)) {
+    sendError(res, 'Unauthorized', 401);
+    return;
+  }
+
+  const wa = getWhatsAppClient();
+  const selfChatJid = wa.getSelfChatJid();
+  if (!wa.isConnected() || !selfChatJid) {
+    sendError(res, 'WhatsApp self-chat is not available', 409);
+    return;
+  }
+
+  try {
+    const project = ensureUsableActiveProject();
+    const settings = loadSettings();
+    const prompt = buildGuidedOnboardingPrompt(settings);
+    const message = isClaudeCodeConnected()
+      ? await runClaudeCodePrompt(project.id, prompt)
+      : await runPrompt(project.id, prompt);
+
+    if (!message) {
+      sendError(res, 'The AI provider did not return an onboarding message', 502);
+      return;
+    }
+
+    await wa.sendMessage(selfChatJid, message);
+    const completedSettings = markSetupComplete();
+    writeIdentityFiles(completedSettings, project.id);
+    sendJson(res, { success: true, data: { projectId: project.id } });
+  } catch (err) {
+    log.error({ err }, 'Failed to start guided onboarding');
+    sendError(res, err instanceof Error ? err.message : 'Failed to start guided onboarding', 500);
+  }
+});
+
 addRoute('POST', '/api/setup/complete', async (req, res) => {
   if (!isAuthenticated(req)) {
     sendError(res, 'Unauthorized', 401);
     return;
   }
 
+  ensureUsableActiveProject();
   markSetupComplete();
   sendJson(res, { success: true });
 });
@@ -1706,13 +1771,60 @@ export function getLoginHtml(): string {
 </html>`;
 }
 
+export function getProviderLaunchHtml(provider: 'claude-code'): string {
+  return `<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Desk Agent - התחברות ל-Claude</title>
+  <style>
+    ${getThemeCss()}
+    body { min-height: 100vh; display: grid; place-items: center; padding: 24px; }
+    .card { width: min(460px, 100%); padding: 32px; text-align: center; background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 16px; }
+    .spinner { width: 36px; height: 36px; margin: 0 auto 20px; border: 3px solid var(--border); border-top-color: var(--accent); border-radius: 50%; animation: spin 0.8s linear infinite; }
+    .error { color: var(--error); display: none; white-space: pre-wrap; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+  </style>
+</head>
+<body>
+  <main class="card">
+    <div class="spinner" id="spinner"></div>
+    <h1>מכין התחברות ל-Claude…</h1>
+    <p id="status" style="color: var(--text-secondary); margin-top: 12px;">התהליך עשוי לקחת עד 45 שניות. העמוד יעבור אוטומטית ל-Claude.</p>
+    <p class="error" id="error"></p>
+  </main>
+  <script>
+    (async () => {
+      try {
+        const res = await fetch('/api/auth/login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ provider: ${JSON.stringify(provider)} })
+        });
+        const json = await res.json();
+        if (!res.ok || !json.authorizeUrl) throw new Error(json.error || 'לא התקבל קישור התחברות');
+        location.replace(json.authorizeUrl);
+      } catch (err) {
+        document.getElementById('spinner').style.display = 'none';
+        document.getElementById('status').style.display = 'none';
+        const error = document.getElementById('error');
+        error.textContent = err instanceof Error ? err.message : 'ההתחברות נכשלה';
+        error.style.display = 'block';
+      }
+    })();
+  </script>
+</body>
+</html>`;
+}
+
 export function getWizardHtml(settings: ReturnType<typeof loadSettings>, pairingState: { isPaired: boolean; qrCode?: string; qrDataUrl?: string; phoneNumber?: string }, hasAiProvider: boolean = false): string {
   let step: number;
   if (!pairingState.isPaired) {
     step = 1;
   } else if (!hasAiProvider) {
     step = 2;
-  } else if (!settings.ownerName) {
+  } else if (!settings.setupComplete) {
     step = 3;
   } else {
     step = 4;
@@ -1846,7 +1958,7 @@ export function getWizardHtml(settings: ReturnType<typeof loadSettings>, pairing
       </div>
       <div class="step ${step >= 3 ? (step > 3 ? 'done' : 'active') : ''}">
         <span class="step-num">${step > 3 ? '✓' : '3'}</span>
-        <span>זהות</span>
+        <span>הדרכה</span>
       </div>
     </div>
 
@@ -1941,7 +2053,7 @@ export function getWizardHtml(settings: ReturnType<typeof loadSettings>, pairing
       let connectedProviders = new Set();
 
       function getMaxPollTicks(providerId) {
-        return providerId === 'openai-codex' ? 45 : 45;
+        return providerId === 'openai-codex' ? 450 : 90;
       }
 
       async function loadProviders() {
@@ -1988,7 +2100,18 @@ export function getWizardHtml(settings: ReturnType<typeof loadSettings>, pairing
         }
         
         if (providerId === 'claude-code') {
-          currentPopup = window.open('about:blank', '_blank');
+          currentPopup = window.open('/auth/launch?provider=claude-code', '_blank');
+          if (!currentPopup) {
+            if (btnEl) {
+              btnEl.disabled = false;
+              btnEl.textContent = connectedProviders.has(providerId) ? 'התחבר מחדש' : 'התחבר';
+            }
+            alert('הדפדפן חסם את חלון ההתחברות. אפשר חלונות קופצים ונסה שוב.');
+            return;
+          }
+          showPasteModal();
+          startLoginPoll(providerId);
+          return;
         }
         
         try {
@@ -2000,21 +2123,7 @@ export function getWizardHtml(settings: ReturnType<typeof loadSettings>, pairing
           
           const json = await res.json();
           
-          if (providerId === 'claude-code') {
-            if (json.authorizeUrl && currentPopup) {
-              currentPopup.location = json.authorizeUrl;
-              showPasteModal('claude-code');
-              startLoginPoll(providerId);
-            } else {
-              if (currentPopup) currentPopup.close();
-              currentPopup = null;
-              if (btnEl) {
-                btnEl.disabled = false;
-                btnEl.textContent = connectedProviders.has(providerId) ? 'התחבר מחדש' : 'התחבר';
-              }
-              alert(json.error || 'לא התקבל URL להתחברות');
-            }
-          } else if (providerId === 'openai-codex') {
+          if (providerId === 'openai-codex') {
             if (json.userCode && json.verificationUri) {
               document.getElementById('userCodeDisplay').textContent = json.userCode;
               document.getElementById('verificationLink').href = json.verificationUri;
@@ -2022,16 +2131,12 @@ export function getWizardHtml(settings: ReturnType<typeof loadSettings>, pairing
               document.getElementById('deviceCodeHint').textContent = 'ממתין לאישור...';
               document.getElementById('deviceCodeHint').style.color = 'var(--text-muted)';
               startLoginPoll(providerId);
-            } else if (json.authorizeUrl) {
-              window.open(json.authorizeUrl, '_blank');
-              showPasteModal('openai-codex');
-              startLoginPoll(providerId);
             } else {
               if (btnEl) {
                 btnEl.disabled = false;
                 btnEl.textContent = connectedProviders.has(providerId) ? 'התחבר מחדש' : 'התחבר';
               }
-              alert(json.error || 'שגיאה בהתחברות');
+              alert(json.error || 'לא התקבל קוד אימות מ-ChatGPT. נסה שוב.');
             }
           } else {
             if (json.authorizeUrl) {
@@ -2056,17 +2161,11 @@ export function getWizardHtml(settings: ReturnType<typeof loadSettings>, pairing
         }
       }
 
-      function showPasteModal(providerId) {
+      function showPasteModal() {
         const pasteHint = document.getElementById('pasteHint');
         const callbackUrl = document.getElementById('callbackUrl');
-        
-        if (providerId === 'claude-code') {
-          pasteHint.textContent = 'אם החלון נסגר, הדבק את הקוד שקיבלת מ-Claude:';
-          callbackUrl.placeholder = 'הדבק קוד כאן...';
-        } else {
-          pasteHint.textContent = 'הדבק את ה-callback URL שחזר מ-ChatGPT:';
-          callbackUrl.placeholder = 'הדבק כאן...';
-        }
+        pasteHint.textContent = 'אם החלון נסגר, הדבק את הקוד שקיבלת מ-Claude:';
+        callbackUrl.placeholder = 'הדבק קוד כאן...';
         
         document.getElementById('pasteModal').style.display = 'block';
       }
@@ -2091,10 +2190,9 @@ export function getWizardHtml(settings: ReturnType<typeof loadSettings>, pairing
             if (providerId === 'openai-codex') {
               const hint = document.getElementById('deviceCodeHint');
               if (hint) {
-                hint.textContent = 'הזמן עבר. נסה להזין את הקוד שוב או הדבק callback URL למטה.';
+                hint.textContent = 'תוקף הקוד פג. לחץ שוב על התחבר לקבלת קוד חדש.';
                 hint.style.color = 'var(--accent)';
               }
-              showPasteModal('openai-codex');
             } else if (providerId === 'claude-code') {
               const pasteHint = document.getElementById('pasteHint');
               if (pasteHint) {
@@ -2189,63 +2287,48 @@ export function getWizardHtml(settings: ReturnType<typeof loadSettings>, pairing
       loadProviders();
     </script>
     ` : step === 3 ? `
-    <div class="card">
-      <h2>👤 זהות</h2>
-      <p style="color: var(--text-secondary); margin-bottom: 20px;">
-        הזן את פרטי הזהות שלך והעסק. פרטים אלו ישמשו את הסוכן.
+    <div class="card" style="text-align: center;">
+      <h2>💬 ממשיכים יחד ב-WhatsApp</h2>
+      <p style="color: var(--text-secondary); margin: 16px 0; line-height: 1.8;">
+        הסוכן ישלח לך הודעת פתיחה וידריך אותך בשיחה קצרה: פרטי העסק, סגנון העבודה,
+        חיבור Gmail ויומן דרך Open Connector, ואיפה משנים הגדרות בהמשך.
       </p>
-      <form id="identityForm">
-        <div class="form-group">
-          <label for="ownerName">שם הבעלים *</label>
-          <input type="text" id="ownerName" name="ownerName" value="${escapeHtml(settings.ownerName)}" placeholder="השם שלך" required>
-        </div>
-        <div class="form-group">
-          <label for="businessName">שם העסק</label>
-          <input type="text" id="businessName" name="businessName" value="${escapeHtml(settings.businessName)}" placeholder="שם החברה או העסק">
-        </div>
-        <div class="form-group">
-          <label for="timezone">אזור זמן</label>
-          ${timezoneSelectHtml(settings.timezone || 'Asia/Jerusalem')}
-        </div>
-        <div class="form-group">
-          <label for="businessDescription">תיאור העסק</label>
-          <textarea id="businessDescription" name="businessDescription" placeholder="תאר את העסק שלך בקצרה...">${escapeHtml(settings.businessDescription)}</textarea>
-        </div>
-        <div class="btn-group">
-          <button type="submit">סיום הגדרה</button>
-        </div>
-      </form>
+      <p style="color: var(--text-muted); margin-bottom: 20px;">
+        סיסמאות, קודי OAuth וטוקנים מזינים רק בדפי ההתחברות — לעולם לא בצ'אט.
+      </p>
+      <div class="btn-group" style="justify-content: center; flex-wrap: wrap;">
+        <button id="guidedSetupBtn" onclick="startGuidedOnboarding()">שלח לי הדרכה ב-WhatsApp</button>
+        <button class="secondary" onclick="finishWithoutGuide()">אדלג ואגדיר אחר כך</button>
+      </div>
+      <p id="guidedSetupStatus" style="display: none; margin-top: 16px; color: var(--text-secondary);"></p>
     </div>
     <script>
-      document.getElementById('identityForm').addEventListener('submit', async (e) => {
-        e.preventDefault();
-        const form = new FormData(e.target);
-        const data = Object.fromEntries(form.entries());
-
+      async function startGuidedOnboarding() {
+        const button = document.getElementById('guidedSetupBtn');
+        const status = document.getElementById('guidedSetupStatus');
+        button.disabled = true;
+        button.textContent = 'הסוכן מכין את ההודעה…';
+        status.textContent = 'זה עשוי לקחת כמה שניות.';
+        status.style.display = 'block';
         try {
-          const settingsRes = await fetch('/api/settings', {
-            method: 'PUT',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(data)
-          });
-          if (!settingsRes.ok) {
-            const err = await settingsRes.json().catch(() => ({}));
-            alert('שמירת ההגדרות נכשלה: ' + (err.error || settingsRes.status));
-            return;
-          }
-
-          const completeRes = await fetch('/api/setup/complete', { method: 'POST' });
-          if (!completeRes.ok) {
-            const err = await completeRes.json().catch(() => ({}));
-            alert('סיום ההגדרה נכשל: ' + (err.error || completeRes.status));
-            return;
-          }
-
-          location.href = '/';
+          const res = await fetch('/api/setup/start-guided', { method: 'POST' });
+          const json = await res.json();
+          if (!res.ok || !json.success) throw new Error(json.error || 'שליחת ההדרכה נכשלה');
+          status.textContent = 'ההודעה נשלחה. אפשר לעבור ל-WhatsApp ולהמשיך עם הסוכן.';
+          setTimeout(() => { location.href = '/'; }, 1200);
         } catch (err) {
-          alert('שגיאה בסיום ההגדרה: ' + err.message);
+          status.textContent = err instanceof Error ? err.message : 'שליחת ההדרכה נכשלה';
+          status.style.color = 'var(--error)';
+          button.disabled = false;
+          button.textContent = 'נסה שוב';
         }
-      });
+      }
+
+      async function finishWithoutGuide() {
+        const res = await fetch('/api/setup/complete', { method: 'POST' });
+        if (res.ok) location.href = '/';
+        else alert('סיום ההגדרה נכשל. נסה שוב.');
+      }
     </script>
     ` : `
     <div class="card" style="text-align: center;">

@@ -784,7 +784,7 @@ export function getSettingsHtml(data: SettingsPageData): string {
   <div class="modal-backdrop" id="pasteModal">
     <div class="modal">
       <h3 class="modal-title">הדבק קוד אישור</h3>
-      <p class="modal-description">אם החלון לא נפתח, העתק את הקישור מכאן והדבק את הקוד שחזר:</p>
+      <p class="modal-description">אשר בחלון שנפתח, העתק את הקוד ש-Claude מציג, והדבק אותו כאן:</p>
       <div class="form-group">
         <label for="callbackUrl">קוד או URL מלא</label>
         <input type="text" id="callbackUrl" placeholder="הדבק כאן...">
@@ -793,6 +793,20 @@ export function getSettingsHtml(data: SettingsPageData): string {
         <button type="button" onclick="submitCallback()">אשר</button>
         <button type="button" class="secondary" onclick="closeModal()">ביטול</button>
       </div>
+    </div>
+  </div>
+
+  <!-- ChatGPT device-code modal: no localhost callback or pasted URL required. -->
+  <div class="modal-backdrop" id="deviceCodeModal">
+    <div class="modal">
+      <h3 class="modal-title">התחברות ל-ChatGPT</h3>
+      <p class="modal-description">פתח את דף האימות, הזן את הקוד ואשר. החיבור יושלם כאן אוטומטית.</p>
+      <div id="deviceCodeDisplay" style="font: 700 28px monospace; letter-spacing: 3px; text-align: center; padding: 14px; margin: 16px 0; background: var(--bg-tertiary); border-radius: 8px;"></div>
+      <div class="btn-group">
+        <a id="deviceCodeLink" href="#" target="_blank" rel="noopener noreferrer"><button type="button">פתח אימות ב-ChatGPT</button></a>
+        <button type="button" class="secondary" onclick="closeDeviceCodeModal()">סגור</button>
+      </div>
+      <p id="deviceCodeStatus" style="margin-top: 14px; color: var(--text-muted);">ממתין לאישור…</p>
     </div>
   </div>
 
@@ -821,6 +835,17 @@ export function getSettingsHtml(data: SettingsPageData): string {
     function closeModal() {
       document.getElementById('pasteModal').classList.remove('active');
       currentProvider = null;
+    }
+
+    function closeDeviceCodeModal() {
+      document.getElementById('deviceCodeModal').classList.remove('active');
+    }
+
+    function showDeviceCodeModal(userCode, verificationUri) {
+      document.getElementById('deviceCodeDisplay').textContent = userCode;
+      document.getElementById('deviceCodeLink').href = verificationUri;
+      document.getElementById('deviceCodeStatus').textContent = 'ממתין לאישור…';
+      document.getElementById('deviceCodeModal').classList.add('active');
     }
 
     async function loadProviders() {
@@ -854,8 +879,21 @@ export function getSettingsHtml(data: SettingsPageData): string {
 
     async function connectProvider(providerId) {
       currentProvider = providerId;
-      
-      const popup = window.open('about:blank', '_blank');
+
+      if (providerId === 'claude-code') {
+        const popup = window.open('/auth/launch?provider=claude-code', '_blank');
+        if (!popup) {
+          showToast('הדפדפן חסם את חלון ההתחברות. אפשר חלונות קופצים ונסה שוב.', 'error');
+          return;
+        }
+        startLoginPoll(providerId);
+        setTimeout(() => {
+          const modal = document.getElementById('pasteModal');
+          modal.querySelector('.modal-description').textContent = 'אשר בחלון שנפתח, העתק את הקוד ש-Claude מציג, והדבק אותו כאן:';
+          modal.classList.add('active');
+        }, 1500);
+        return;
+      }
       
       try {
         const res = await fetch('/api/auth/login', {
@@ -866,47 +904,13 @@ export function getSettingsHtml(data: SettingsPageData): string {
         
         const json = await res.json();
         
-        if (json.authorizeUrl) {
-          if (popup && !popup.closed) {
-            popup.location = json.authorizeUrl;
-          } else {
-            window.open(json.authorizeUrl, '_blank');
-          }
-          
+        if (json.userCode && json.verificationUri) {
+          showDeviceCodeModal(json.userCode, json.verificationUri);
           startLoginPoll(providerId);
-          
-          // Show paste modal with provider-specific instructions
-          setTimeout(() => {
-            const modal = document.getElementById('pasteModal');
-            const desc = modal.querySelector('.modal-description');
-            if (providerId === 'claude-code') {
-              desc.textContent = 'אשר בחלון שנפתח, העתק את הקוד ש-Claude מציג, והדבק אותו כאן:';
-            } else {
-              desc.textContent = 'אם החלון לא נפתח, העתק את הקישור מכאן והדבק את הקוד שחזר:';
-            }
-            modal.classList.add('active');
-          }, 2000);
-        } else if (json.userCode && json.verificationUri) {
-          // device_code flow (ChatGPT/OpenAI)
-          if (popup && !popup.closed) {
-            popup.location = json.verificationUri;
-          } else {
-            window.open(json.verificationUri, '_blank');
-          }
-          
-          // Show user code for device_code flow
-          const modal = document.getElementById('pasteModal');
-          const desc = modal.querySelector('.modal-description');
-          desc.innerHTML = \`קוד האימות שלך: <strong>\${escapeHtml(json.userCode)}</strong><br>הזן אותו בדף שנפתח. אם החלון לא נפתח, עבור ל: <a href="\${escapeHtml(json.verificationUri)}" target="_blank">\${escapeHtml(json.verificationUri)}</a>\`;
-          
-          startLoginPoll(providerId);
-          modal.classList.add('active');
         } else {
-          if (popup && !popup.closed) popup.close();
-          showToast(json.error || 'שגיאה בהתחברות', 'error');
+          showToast(json.error || 'לא התקבל קוד אימות מ-ChatGPT. נסה שוב.', 'error');
         }
       } catch (err) {
-        if (popup && !popup.closed) popup.close();
         showToast('שגיאה בהתחברות', 'error');
       }
     }
@@ -925,12 +929,14 @@ export function getSettingsHtml(data: SettingsPageData): string {
             clearInterval(loginPollInterval);
             loginPollInterval = null;
             closeModal();
+            closeDeviceCodeModal();
             showToast('התחברות הצליחה!');
             loadProviders();
           } else if (data.status === 'failed') {
             clearInterval(loginPollInterval);
             loginPollInterval = null;
             closeModal();
+            closeDeviceCodeModal();
             showToast(data.error || 'ההתחברות נכשלה', 'error');
           }
         } catch (err) {
@@ -943,7 +949,7 @@ export function getSettingsHtml(data: SettingsPageData): string {
           clearInterval(loginPollInterval);
           loginPollInterval = null;
         }
-      }, 120000);
+      }, providerId === 'openai-codex' ? 900000 : 180000);
     }
 
     async function submitCallback() {
