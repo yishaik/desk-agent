@@ -648,7 +648,7 @@ describe('captionless media is delivered to handlers (#141)', () => {
   });
 });
 
-describe('pinned Baileys version (#156)', () => {
+describe('WhatsApp Web version resolution (#156, stale 405)', () => {
   it('uses hardcoded pin when no cache file exists', async () => {
     const { resolvePinnedBaileysVersion, PINNED_BAILEYS_VERSION } = await import('./client.ts');
     expect(resolvePinnedBaileysVersion()).toEqual(PINNED_BAILEYS_VERSION);
@@ -668,7 +668,7 @@ describe('pinned Baileys version (#156)', () => {
     expect(resolvePinnedBaileysVersion()).toEqual([2, 3000, 999]);
   });
 
-  it('source does not call fetchLatestBaileysVersion', async () => {
+  it('fetches the live WhatsApp Web revision without depending on GitHub', async () => {
     const fs = await import('node:fs');
     const path = await import('node:path');
     const clientSource = fs.readFileSync(
@@ -676,12 +676,17 @@ describe('pinned Baileys version (#156)', () => {
       'utf8'
     );
     expect(clientSource).not.toContain('fetchLatestBaileysVersion');
+    expect(clientSource).toContain('fetchLatestWaWebVersion');
     expect(clientSource).toContain('resolvePinnedBaileysVersion');
     expect(clientSource).not.toContain('.logout(');
   });
 
-  it('connect uses pinned version and does not invoke fetchLatestBaileysVersion', async () => {
-    const fetchLatestBaileysVersion = vi.fn();
+  it('connect uses the live WhatsApp Web revision and caches it', async () => {
+    const liveVersion: [number, number, number] = [2, 3000, 1046816453];
+    const fetchLatestWaWebVersion = vi.fn().mockResolvedValue({
+      version: liveVersion,
+      isLatest: true,
+    });
     const makeWASocket = vi.fn().mockReturnValue({
       ev: { on: vi.fn(), removeAllListeners: vi.fn() },
       end: vi.fn(),
@@ -693,7 +698,7 @@ describe('pinned Baileys version (#156)', () => {
       return {
         ...actual,
         default: makeWASocket,
-        fetchLatestBaileysVersion,
+        fetchLatestWaWebVersion,
         useMultiFileAuthState: vi.fn().mockResolvedValue({
           state: { creds: {}, keys: {} },
           saveCreds: vi.fn(),
@@ -702,17 +707,52 @@ describe('pinned Baileys version (#156)', () => {
       };
     });
 
-    const { WhatsAppClient, PINNED_BAILEYS_VERSION } = await import('./client.ts');
+    const { WhatsAppClient } = await import('./client.ts');
     const client = new WhatsAppClient();
     await client.connect();
 
-    expect(fetchLatestBaileysVersion).not.toHaveBeenCalled();
+    expect(fetchLatestWaWebVersion).toHaveBeenCalledWith(expect.objectContaining({
+      timeout: 10_000,
+      headers: expect.objectContaining({ 'sec-fetch-site': 'none' }),
+    }));
     expect(makeWASocket).toHaveBeenCalled();
     const opts = makeWASocket.mock.calls[0]![0] as {
       version: [number, number, number];
       generateHighQualityLinkPreview: boolean;
     };
-    expect(opts.version).toEqual(PINNED_BAILEYS_VERSION);
+    expect(opts.version).toEqual(liveVersion);
     expect(opts.generateHighQualityLinkPreview).toBe(false);
+
+    const fs = await import('node:fs');
+    const path = await import('node:path');
+    const { config } = await import('../core/config.ts');
+    const cached = JSON.parse(
+      fs.readFileSync(path.join(config.dataDir, 'wa-version.json'), 'utf8')
+    ) as { version: [number, number, number] };
+    expect(cached.version).toEqual(liveVersion);
+  });
+
+  it('falls back to the cached revision when the live lookup fails', async () => {
+    const fs = await import('node:fs');
+    const path = await import('node:path');
+    const { config } = await import('../core/config.ts');
+    const cachedVersion: [number, number, number] = [2, 3000, 1040000000];
+    fs.writeFileSync(
+      path.join(config.dataDir, 'wa-version.json'),
+      JSON.stringify({ version: cachedVersion, fetchedAt: '2026-09-01T00:00:00.000Z' })
+    );
+
+    const fetchLatestWaWebVersion = vi.fn().mockResolvedValue({
+      version: [2, 3000, 0],
+      isLatest: false,
+      error: new Error('network unavailable'),
+    });
+    vi.doMock('@whiskeysockets/baileys', async (importOriginal) => {
+      const actual = await importOriginal<typeof import('@whiskeysockets/baileys')>();
+      return { ...actual, fetchLatestWaWebVersion };
+    });
+
+    const { resolveBaileysVersion } = await import('./client.ts');
+    await expect(resolveBaileysVersion()).resolves.toEqual(cachedVersion);
   });
 });

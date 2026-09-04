@@ -1,5 +1,6 @@
 import makeWASocket, {
   DisconnectReason,
+  fetchLatestWaWebVersion,
   useMultiFileAuthState,
   makeCacheableSignalKeyStore,
   proto,
@@ -7,7 +8,7 @@ import makeWASocket, {
 import type { WASocket } from '@whiskeysockets/baileys';
 import { Boom } from '@hapi/boom';
 import { join } from 'node:path';
-import { existsSync, mkdirSync, rmSync, readFileSync } from 'node:fs';
+import { existsSync, mkdirSync, rmSync, readFileSync, writeFileSync } from 'node:fs';
 import qrcode from 'qrcode-terminal';
 import pino from 'pino';
 import { config } from '../core/config.ts';
@@ -20,6 +21,12 @@ import { extractMessageBody } from './inbound.ts';
 const log = createChildLogger('whatsapp');
 
 const VERSION_CACHE_PATH = join(config.dataDir, 'wa-version.json');
+const VERSION_FETCH_TIMEOUT_MS = 10_000;
+const VERSION_FETCH_HEADERS = {
+  'User-Agent':
+    'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+  'sec-fetch-site': 'none',
+};
 
 export const PINNED_BAILEYS_VERSION: [number, number, number] = [2, 3000, 1015629576];
 
@@ -28,21 +35,25 @@ interface VersionCache {
   fetchedAt: string;
 }
 
+function isValidBaileysVersion(value: unknown): value is [number, number, number] {
+  return (
+    Array.isArray(value) &&
+    value.length === 3 &&
+    value.every((part) => typeof part === 'number' && Number.isInteger(part) && part >= 0)
+  );
+}
+
 /**
- * Pin the Baileys protocol version so boot does not require GitHub (#156).
- * Prefer a previously cached file when present; otherwise the hardcoded pin.
+ * Offline fallback for the WhatsApp Web protocol version. Prefer a previously
+ * fetched live version when present; otherwise use the hardcoded last resort.
  */
 export function resolvePinnedBaileysVersion(): [number, number, number] {
   try {
     if (existsSync(VERSION_CACHE_PATH)) {
       const data = JSON.parse(readFileSync(VERSION_CACHE_PATH, 'utf8')) as VersionCache;
-      if (
-        Array.isArray(data.version) &&
-        data.version.length === 3 &&
-        data.version.every((n) => typeof n === 'number')
-      ) {
+      if (isValidBaileysVersion(data.version)) {
         log.info({ version: data.version }, 'Using cached Baileys version');
-        return data.version as [number, number, number];
+        return data.version;
       }
     }
   } catch {
@@ -51,6 +62,37 @@ export function resolvePinnedBaileysVersion(): [number, number, number] {
 
   log.info({ version: PINNED_BAILEYS_VERSION }, 'Using pinned Baileys version');
   return PINNED_BAILEYS_VERSION;
+}
+
+/**
+ * Resolve the live WhatsApp Web revision before opening the socket. Meta
+ * periodically rejects stale revisions with status 405 before emitting a QR,
+ * so a permanent hardcoded version cannot be the primary source.
+ * Cache successful lookups for the offline fallback; never depend on GitHub.
+ */
+export async function resolveBaileysVersion(): Promise<[number, number, number]> {
+  const result = await fetchLatestWaWebVersion({
+    timeout: VERSION_FETCH_TIMEOUT_MS,
+    headers: VERSION_FETCH_HEADERS,
+  });
+
+  if (result.isLatest && isValidBaileysVersion(result.version)) {
+    const version = result.version;
+    try {
+      writeFileSync(
+        VERSION_CACHE_PATH,
+        JSON.stringify({ version, fetchedAt: new Date().toISOString() } satisfies VersionCache),
+        { mode: 0o600 }
+      );
+    } catch (err) {
+      log.warn({ err }, 'Could not cache live WhatsApp Web version');
+    }
+    log.info({ version }, 'Using live WhatsApp Web version');
+    return version;
+  }
+
+  log.warn('Could not resolve live WhatsApp Web version; using cached/pinned fallback');
+  return resolvePinnedBaileysVersion();
 }
 
 function digitsOnly(value: string | undefined | null): string {
@@ -96,7 +138,7 @@ export class WhatsAppClient {
     }
 
     const { state, saveCreds } = await useMultiFileAuthState(authDir);
-    const version = resolvePinnedBaileysVersion();
+    const version = await resolveBaileysVersion();
 
     const baileysLogger = pino({ level: 'silent' });
 
