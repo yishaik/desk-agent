@@ -19,14 +19,14 @@ services:
       - DATA_DIR=/app/data
       - HOST=0.0.0.0
       - PORT=3001
-      - PAIR_TOKEN=${PAIR_TOKEN}
+      - PAIR_TOKEN=${PAIR_TOKEN:?PAIR_TOKEN is required}
       - OPEN_CONNECTOR_URL=http://connector:3000
-      - OPEN_CONNECTOR_TOKEN=${OPEN_CONNECTOR_TOKEN}
+      - OPEN_CONNECTOR_TOKEN=${OPEN_CONNECTOR_TOKEN:?OPEN_CONNECTOR_TOKEN is required}
       - CONNECTOR_ORIGIN=${CONNECTOR_ORIGIN}
       # S-07: Admin token is SERVER-SIDE ONLY for OAuth fallback if OC requires it.
       # NEVER exposed to customer UI (onboarding, dashboard, settings) or child env (Claude/Pi/MCP).
       # Required in production — an empty token opens Open Connector admin routes (S-25).
-      - CONNECTOR_ADMIN_TOKEN=${CONNECTOR_ADMIN_TOKEN}
+      - CONNECTOR_ADMIN_TOKEN=${CONNECTOR_ADMIN_TOKEN:?CONNECTOR_ADMIN_TOKEN is required}
       - DOMAIN=${DOMAIN}
       # Public console URL shown in the wizard/settings (default: https://console.${DOMAIN})
       - CONSOLE_URL=${CONSOLE_URL:-}
@@ -78,9 +78,9 @@ services:
       # CRITICAL: Origin must be the public URL (via Caddy) for OAuth callbacks to work
       # Use https://${DOMAIN} in production, or http://localhost for local dev
       - OOMOL_CONNECT_ORIGIN=${CONNECTOR_ORIGIN:-https://${DOMAIN:-localhost}}
-      - OOMOL_CONNECT_ENCRYPTION_KEY=${CONNECTOR_ENCRYPTION_KEY}
-      - OOMOL_CONNECT_ADMIN_TOKEN=${CONNECTOR_ADMIN_TOKEN}
-      - OOMOL_CONNECT_RUNTIME_TOKEN=${OPEN_CONNECTOR_TOKEN}
+      - OOMOL_CONNECT_ENCRYPTION_KEY=${CONNECTOR_ENCRYPTION_KEY:?CONNECTOR_ENCRYPTION_KEY is required}
+      - OOMOL_CONNECT_ADMIN_TOKEN=${CONNECTOR_ADMIN_TOKEN:?CONNECTOR_ADMIN_TOKEN is required}
+      - OOMOL_CONNECT_RUNTIME_TOKEN=${OPEN_CONNECTOR_TOKEN:?OPEN_CONNECTOR_TOKEN is required}
       - OOMOL_CONNECT_ALLOWED_ACTIONS=${CONNECTOR_ALLOWED_ACTIONS:-*}
       - OOMOL_CONNECT_BLOCKED_ACTIONS=${CONNECTOR_BLOCKED_ACTIONS:-}
     mem_limit: 768m
@@ -125,8 +125,10 @@ services:
     security_opt:
       - no-new-privileges:true
     depends_on:
-      - agent
-      - connector
+      agent:
+        condition: service_healthy
+      connector:
+        condition: service_healthy
     networks:
       - desk-network
 
