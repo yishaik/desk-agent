@@ -291,6 +291,8 @@ services:
 docker compose restart agent
 ```
 
+לפיתוח מקומי / bare-metal בלבד (לא נתיב הצימוד הרגיל): `PRINT_QR=1` מדפיס את ה-QR לטרמינל.
+
 ### WhatsApp מתנתק (שגיאה 515)
 
 המערכת מתחברת מחדש אוטומטית עם ה-credentials הקיימים.
