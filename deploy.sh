@@ -68,6 +68,31 @@ NODE_ENV=production
 EOF
 fi
 
+# --- 2b. Require four tokens before any service starts (#186 / S-25) ---
+# Empty CONNECTOR_ADMIN_TOKEN leaves the OC console/admin API open while the
+# agent crash-loops. Refuse to start rather than half-up the stack.
+require_env_tokens() {
+  local missing=()
+  local key val
+  for key in PAIR_TOKEN OPEN_CONNECTOR_TOKEN CONNECTOR_ENCRYPTION_KEY CONNECTOR_ADMIN_TOKEN; do
+    val="$(grep -E "^${key}=" .env 2>/dev/null | tail -n1 | cut -d= -f2- || true)"
+    val="${val%"$'\r'"}"
+    val="${val#\"}"; val="${val%\"}"
+    val="${val#\'}"; val="${val%\'}"
+    if [ -z "$val" ]; then
+      missing+=("$key")
+    fi
+  done
+  if [ "${#missing[@]}" -gt 0 ]; then
+    echo "❌ .env is missing required non-empty tokens: ${missing[*]}" >&2
+    echo "   Fill each with: openssl rand -hex 32" >&2
+    echo "   Or delete .env and re-run this script for fresh tokens." >&2
+    echo "   CONNECTOR_ADMIN_TOKEN is operator-only — never paste it into the customer UI." >&2
+    exit 1
+  fi
+}
+require_env_tokens
+
 # --- 3. Host firewall (Oracle/Ubuntu images ship a restrictive INPUT chain) -
 if command -v iptables >/dev/null 2>&1 && sudo -n true 2>/dev/null; then
   for PORT in 80 443; do
@@ -125,7 +150,9 @@ for _ in $(seq 1 60); do
   sleep 5
 done
 if [ "${STATUS:-}" != "healthy" ]; then
-  echo "agent did not become healthy — check: docker logs desk-agent" >&2
+  echo "agent did not become healthy — tearing down so the OC console is not left open (#186)" >&2
+  docker compose down
+  echo "stack stopped (volumes kept). Inspect prior output, fix .env, then re-run." >&2
   exit 1
 fi
 
@@ -137,7 +164,9 @@ for _ in $(seq 1 60); do
   sleep 5
 done
 if [ -z "$HTTP_OK" ]; then
-  echo "site is not serving 200 yet — check DNS and: docker logs desk-caddy" >&2
+  echo "site is not serving 200 yet — tearing down so the OC console is not left half-open (#186)" >&2
+  docker compose down
+  echo "stack stopped (volumes kept). Check DNS / certificates, then re-run." >&2
   exit 1
 fi
 
