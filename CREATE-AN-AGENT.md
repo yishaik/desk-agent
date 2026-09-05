@@ -283,8 +283,11 @@ services:
 
 ### QR לא נטען
 
+ה-QR **אינו** מודפס ל-stdout של הקונטיינר (אין לסרוק מ-`docker compose logs`).
+הצימוד מתבצע דרך האשף המאומת בממשק (אחרי התחברות עם PAIR_TOKEN), או דרך
+`GET /api/pairing` המאומת — שמחזיר את ה-QR לשימוש ב-wizard.
+
 ```bash
-docker compose logs agent | grep -i qr
 docker compose restart agent
 ```
 

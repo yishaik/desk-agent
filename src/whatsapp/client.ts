@@ -241,8 +241,13 @@ export class WhatsAppClient {
           qrExpiry: Date.now() + 60000,
         };
         log.info('New QR code generated');
-        qrcode.generate(qr, { small: true });
-        console.log('\n[whatsapp] Scan the QR code above to pair WhatsApp');
+        // Never print QR to container stdout by default (#188) — anyone with
+        // docker logs / log shipping could scan it and become ownerPhone.
+        // Opt-in for bare-metal local debug only.
+        if (process.env.PRINT_QR === '1') {
+          qrcode.generate(qr, { small: true });
+          console.log('\n[whatsapp] Scan the QR code above to pair WhatsApp');
+        }
       }
 
       if (connection === 'connecting') {

@@ -648,6 +648,40 @@ describe('captionless media is delivered to handlers (#141)', () => {
   });
 });
 
+describe('#188: QR must not print to container stdout', () => {
+  it('keeps printQRInTerminal false and gates qrcode.generate behind PRINT_QR === \'1\'', async () => {
+    const fs = await import('node:fs');
+    const path = await import('node:path');
+    const clientSource = fs.readFileSync(
+      path.join(process.cwd(), 'src/whatsapp/client.ts'),
+      'utf8'
+    );
+
+    expect(clientSource).toMatch(/printQRInTerminal:\s*false/);
+    expect(clientSource).not.toMatch(/printQRInTerminal:\s*true/);
+
+    const generateMatches = [...clientSource.matchAll(/qrcode\.generate\s*\(/g)];
+    expect(generateMatches.length).toBeGreaterThan(0);
+    for (const match of generateMatches) {
+      const before = clientSource.slice(Math.max(0, match.index! - 280), match.index!);
+      expect(
+        before,
+        'qrcode.generate must sit behind process.env.PRINT_QR === \'1\''
+      ).toMatch(/process\.env\.PRINT_QR\s*===\s*['"]1['"]/);
+    }
+
+    // Unconditional scan prompt must not exist outside the PRINT_QR gate
+    const scanLog = "[whatsapp] Scan the QR code above to pair WhatsApp";
+    if (clientSource.includes(scanLog)) {
+      const idx = clientSource.indexOf(scanLog);
+      const before = clientSource.slice(Math.max(0, idx - 350), idx);
+      expect(before).toMatch(/process\.env\.PRINT_QR\s*===\s*['"]1['"]/);
+    }
+
+    expect(clientSource).not.toContain('.logout(');
+  });
+});
+
 describe('WhatsApp Web version resolution (#156, stale 405)', () => {
   it('uses hardcoded pin when no cache file exists', async () => {
     const { resolvePinnedBaileysVersion, PINNED_BAILEYS_VERSION } = await import('./client.ts');
