@@ -648,6 +648,86 @@ describe('captionless media is delivered to handlers (#141)', () => {
   });
 });
 
+describe('suppress outbound self-chat echo (Message-yourself Me loop)', () => {
+  async function setupUpsertClient() {
+    const { WhatsAppClient } = await import('./client.ts');
+    const client = new WhatsAppClient();
+    const handler = vi.fn().mockResolvedValue(undefined);
+    client.onMessage(handler);
+
+    const sendMessage = vi.fn().mockResolvedValue({
+      key: { id: 'outbound-echo-1', remoteJid: '1234567890@s.whatsapp.net', fromMe: true },
+    });
+    const mockSocket = {
+      sendMessage,
+      ev: { on: vi.fn(), removeAllListeners: vi.fn() },
+      end: vi.fn(),
+    };
+    (client as unknown as { socket: typeof mockSocket }).socket = mockSocket;
+    (client as unknown as { setupEventHandlers: (s: () => Promise<void>) => void })
+      .setupEventHandlers(async () => {});
+
+    const onCalls = mockSocket.ev.on.mock.calls as [string, unknown][];
+    const upsert = onCalls.find((c) => c[0] === 'messages.upsert')?.[1] as
+      | ((m: unknown) => Promise<void>)
+      | undefined;
+    expect(upsert).toBeDefined();
+    return { client, handler, upsert: upsert!, sendMessage };
+  }
+
+  it('ignores messages.upsert for an id just returned by sendMessage', async () => {
+    const { client, handler, upsert } = await setupUpsertClient();
+
+    await client.sendMessage('1234567890@s.whatsapp.net', 'agent reply');
+
+    await upsert({
+      type: 'notify',
+      messages: [{
+        key: { remoteJid: '1234567890@s.whatsapp.net', id: 'outbound-echo-1', fromMe: true },
+        messageTimestamp: Math.floor(Date.now() / 1000),
+        message: { conversation: 'agent reply' },
+      }],
+    });
+
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  it('still processes other fromMe self-chat ids (owner confirms)', async () => {
+    const { client, handler, upsert } = await setupUpsertClient();
+
+    await client.sendMessage('1234567890@s.whatsapp.net', 'agent reply');
+
+    await upsert({
+      type: 'notify',
+      messages: [{
+        key: { remoteJid: '1234567890@s.whatsapp.net', id: 'owner-confirm-כן', fromMe: true },
+        messageTimestamp: Math.floor(Date.now() / 1000),
+        message: { conversation: 'כן' },
+      }],
+    });
+
+    expect(handler).toHaveBeenCalledTimes(1);
+    expect(handler.mock.calls[0]![0].body).toBe('כן');
+    expect(handler.mock.calls[0]![0].isFromMe).toBe(true);
+  });
+
+  it('does not drop all fromMe — only recorded outbound ids', async () => {
+    const fs = await import('node:fs');
+    const path = await import('node:path');
+    const clientSource = fs.readFileSync(
+      path.join(process.cwd(), 'src/whatsapp/client.ts'),
+      'utf8'
+    );
+    // Must not blanket-skip fromMe (Message-yourself needs it)
+    expect(clientSource).not.toMatch(/if\s*\(\s*!\s*isFromMe\s*\)\s*return/);
+    expect(clientSource).toContain('consumeOutboundEcho');
+    expect(clientSource).toContain('rememberOutboundId');
+    expect(clientSource).not.toContain('ALLOW_WA_REPLIES');
+    expect(clientSource).not.toContain('WA_REPLIES_HALTED');
+    expect(clientSource).not.toContain('.logout(');
+  });
+});
+
 describe('#188: QR must not print to container stdout', () => {
   it('keeps printQRInTerminal false and gates qrcode.generate behind PRINT_QR === \'1\'', async () => {
     const fs = await import('node:fs');
