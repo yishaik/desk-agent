@@ -120,6 +120,16 @@ export class WhatsAppClient {
   /** One Hebrew stale-skip notice per reconnect (PR 160 CHANGE THIS). */
   private staleSkipNotified = false;
 
+  /**
+   * Message IDs we just produced via sendMessage. Baileys echoes those back on
+   * messages.upsert with fromMe=true in Message-yourself; we must keep fromMe
+   * (owner confirms need it) but drop our own outbound echoes to break reply loops.
+   * Bounded + TTL — not a permanent filter.
+   */
+  private recentOutboundIds = new Map<string, number>();
+  private static readonly OUTBOUND_ID_TTL_MS = 10 * 60 * 1000;
+  private static readonly OUTBOUND_ID_MAX = 256;
+
   async connect(): Promise<void> {
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
@@ -379,6 +389,12 @@ export class WhatsAppClient {
   ): Promise<void> {
     if (!msg.message || !msg.key.remoteJid) return;
 
+    const inboundId = msg.key.id;
+    if (inboundId && this.consumeOutboundEcho(inboundId)) {
+      log.debug({ messageId: inboundId }, 'Suppressing outbound self-chat echo');
+      return;
+    }
+
     const isFromMe = msg.key.fromMe ?? false;
     const remoteJid = msg.key.remoteJid;
 
@@ -472,13 +488,46 @@ export class WhatsAppClient {
 
     for (let i = 0; i < parts.length; i++) {
       const part = parts[i]!;
-      await this.socket.sendMessage(jid, { text: part }, i === 0 ? quotedOpts : undefined);
+      const sent = await this.socket.sendMessage(jid, { text: part }, i === 0 ? quotedOpts : undefined);
+      this.rememberOutboundId(sent?.key?.id);
       if (parts.length > 1) {
         await new Promise((r) => setTimeout(r, 500));
       }
     }
 
     log.debug({ jid, parts: parts.length, quoted: !!quoted }, 'Message sent');
+  }
+
+  /** Record a Baileys-returned outbound message id so its upsert echo is ignored. */
+  private rememberOutboundId(id: string | null | undefined): void {
+    if (!id) return;
+    const now = Date.now();
+    this.pruneOutboundIds(now);
+    this.recentOutboundIds.set(id, now + WhatsAppClient.OUTBOUND_ID_TTL_MS);
+    while (this.recentOutboundIds.size > WhatsAppClient.OUTBOUND_ID_MAX) {
+      const oldest = this.recentOutboundIds.keys().next().value;
+      if (oldest === undefined) break;
+      this.recentOutboundIds.delete(oldest);
+    }
+  }
+
+  /**
+   * If this id was produced by a recent sendMessage, consume it (one-shot) and
+   * signal suppress. Owner fromMe self-chat (confirms, etc.) uses other ids and
+   * still reaches handlers — we do NOT drop all fromMe.
+   */
+  private consumeOutboundEcho(id: string): boolean {
+    const now = Date.now();
+    this.pruneOutboundIds(now);
+    if (!this.recentOutboundIds.has(id)) return false;
+    this.recentOutboundIds.delete(id);
+    return true;
+  }
+
+  private pruneOutboundIds(now: number): void {
+    for (const [id, expiresAt] of this.recentOutboundIds) {
+      if (expiresAt <= now) this.recentOutboundIds.delete(id);
+    }
   }
 
   private splitMessage(text: string, maxLength: number): string[] {
