@@ -281,6 +281,14 @@ export function acceptMessageJob(message: Message, chatJid: string): boolean {
       return false;
     }
 
+    // messages.project_id has an FK to projects — ensure the row exists for
+    // non-default active projects (tests and /project-new paths).
+    database
+      .prepare(
+        `INSERT OR IGNORE INTO projects (id, name, description) VALUES (?, ?, ?)`
+      )
+      .run(projectId, projectId, null);
+
     database
       .prepare(
         `INSERT OR IGNORE INTO messages (id, project_id, from_jid, to_jid, body, timestamp, is_from_me)
