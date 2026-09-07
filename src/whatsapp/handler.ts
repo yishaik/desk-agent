@@ -221,10 +221,24 @@ function publicActionError(message: string | undefined): string {
   return raw || 'שגיאה לא ידועה';
 }
 
-async function checkForConfirmationResponse(text: string, projectId: string): Promise<CommandResult> {
+async function checkForConfirmationResponse(
+  text: string,
+  projectId: string,
+  opts?: { isForwarded?: boolean; isMediaCaption?: boolean },
+): Promise<CommandResult> {
   const expired = consumeExpiredConfirmations(projectId);
   const allPending = getAllPendingConfirmations(projectId);
   const trimmedPreview = text.trim();
+
+  // #191: forwarded bubbles / media captions must not approve while pending.
+  // When nothing is pending, fall through (handled:false) so notepad forwards
+  // still reach the model (Product Goal CHANGE THIS soft).
+  if (
+    allPending.length > 0
+    && (opts?.isForwarded || opts?.isMediaCaption)
+  ) {
+    return { handled: false };
+  }
   const looksLikeConfirmOrCancel =
     CONFIRM_PATTERNS.some((p) => p.test(trimmedPreview)) ||
     CANCEL_PATTERNS.some((p) => p.test(trimmedPreview)) ||
@@ -514,7 +528,10 @@ async function processMessageQueued(
 
     // Confirmations ("yes", "כן") must be in the queue — they interact with
     // pending-confirmation state that may be mid-update by a model prompt.
-    const confirmResponse = await checkForConfirmationResponse(message.body, projectId);
+    const confirmResponse = await checkForConfirmationResponse(message.body, projectId, {
+      isForwarded: message.isForwarded,
+      isMediaCaption: message.isMediaCaption,
+    });
     if (confirmResponse.handled) {
       if (tracker) {
         await updateReaction(tracker, 'reading');

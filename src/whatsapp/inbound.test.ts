@@ -3,6 +3,9 @@ import {
   extractMessageBody,
   isStaleInbound,
   shouldQuoteInbound,
+  isInboundForwarded,
+  isInboundMediaCaption,
+  shouldDropMappedNonSelfDestination,
   MEDIA_WITHOUT_TEXT_BODY,
   MAX_INBOUND_AGE_MS,
 } from './inbound.ts';
@@ -81,5 +84,59 @@ describe('shouldQuoteInbound', () => {
     const now = Date.now();
     expect(shouldQuoteInbound(Math.floor(now / 1000) - 45, now)).toBe(true);
     expect(shouldQuoteInbound(now, now)).toBe(false);
+  });
+});
+
+describe('#191 forwarded / caption helpers', () => {
+  it('detects isForwarded and forwardingScore on extended text', () => {
+    expect(isInboundForwarded({
+      extendedTextMessage: { text: 'ok', contextInfo: { isForwarded: true } },
+    })).toBe(true);
+    expect(isInboundForwarded({
+      extendedTextMessage: { text: 'ok', contextInfo: { forwardingScore: 2 } },
+    })).toBe(true);
+    expect(isInboundForwarded({ extendedTextMessage: { text: 'ok' } })).toBe(false);
+  });
+
+  it('detects media captions vs typed conversation', () => {
+    expect(isInboundMediaCaption({ imageMessage: { caption: '1' } })).toBe(true);
+    expect(isInboundMediaCaption({ conversation: 'כן' })).toBe(false);
+    expect(isInboundMediaCaption({
+      extendedTextMessage: { text: 'ok' },
+      imageMessage: { caption: '1' },
+    })).toBe(false);
+  });
+});
+
+describe('#187 mapped non-self destination', () => {
+  const isSelf = (jid: string) => jid === '972501234567@s.whatsapp.net' || jid.endsWith('@lid') && jid.startsWith('OWN');
+
+  it('drops @bot destinations even when remoteJid is the owner', () => {
+    expect(shouldDropMappedNonSelfDestination(
+      '972501234567@s.whatsapp.net',
+      'meta-ai@bot',
+      isSelf,
+    )).toBe(true);
+  });
+
+  it('drops when remoteJid is self but destination is another person', () => {
+    expect(shouldDropMappedNonSelfDestination(
+      '972501234567@s.whatsapp.net',
+      '972509999999@s.whatsapp.net',
+      isSelf,
+    )).toBe(true);
+  });
+
+  it('keeps real self-chat (no destination or destination is self)', () => {
+    expect(shouldDropMappedNonSelfDestination(
+      '972501234567@s.whatsapp.net',
+      undefined,
+      isSelf,
+    )).toBe(false);
+    expect(shouldDropMappedNonSelfDestination(
+      '972501234567@s.whatsapp.net',
+      '972501234567@s.whatsapp.net',
+      isSelf,
+    )).toBe(false);
   });
 });
