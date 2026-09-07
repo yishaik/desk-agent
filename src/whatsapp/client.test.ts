@@ -728,6 +728,94 @@ describe('suppress outbound self-chat echo (Message-yourself Me loop)', () => {
   });
 });
 
+
+describe('#187 Meta AI / @bot mapped destination dropped from full handler path', () => {
+  it('does not call handlers when key.destinationJid is @bot', async () => {
+    const { WhatsAppClient } = await import('./client.ts');
+    const client = new WhatsAppClient();
+    const handler = vi.fn().mockResolvedValue(undefined);
+    client.onMessage(handler);
+
+    const mockSocket = {
+      sendMessage: vi.fn(),
+      ev: { on: vi.fn(), removeAllListeners: vi.fn() },
+      end: vi.fn(),
+    };
+    (client as unknown as { socket: typeof mockSocket }).socket = mockSocket;
+    (client as unknown as { ownerJid: string }).ownerJid = '972501234567:0@s.whatsapp.net';
+    (client as unknown as { pairingState: { isPaired: boolean; phoneNumber: string } }).pairingState = {
+      isPaired: true,
+      phoneNumber: '972501234567',
+    };
+    (client as unknown as { setupEventHandlers: (s: () => Promise<void>) => void })
+      .setupEventHandlers(async () => {});
+
+    const onCalls = mockSocket.ev.on.mock.calls as [string, unknown][];
+    const upsert = onCalls.find((c) => c[0] === 'messages.upsert')?.[1] as
+      | ((m: unknown) => Promise<void>)
+      | undefined;
+    expect(upsert).toBeDefined();
+
+    await upsert!({
+      type: 'notify',
+      messages: [{
+        key: {
+          remoteJid: '972501234567@s.whatsapp.net',
+          id: 'meta-ok-1',
+          fromMe: true,
+          destinationJid: 'meta@bot',
+        },
+        messageTimestamp: Math.floor(Date.now() / 1000),
+        message: { conversation: 'ok' },
+      }],
+    });
+
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  it('still processes owner Me fromMe without destinationJid', async () => {
+    const { WhatsAppClient } = await import('./client.ts');
+    const client = new WhatsAppClient();
+    const handler = vi.fn().mockResolvedValue(undefined);
+    client.onMessage(handler);
+
+    const mockSocket = {
+      sendMessage: vi.fn(),
+      ev: { on: vi.fn(), removeAllListeners: vi.fn() },
+      end: vi.fn(),
+    };
+    (client as unknown as { socket: typeof mockSocket }).socket = mockSocket;
+    (client as unknown as { ownerJid: string }).ownerJid = '972501234567:0@s.whatsapp.net';
+    (client as unknown as { pairingState: { isPaired: boolean; phoneNumber: string } }).pairingState = {
+      isPaired: true,
+      phoneNumber: '972501234567',
+    };
+    (client as unknown as { setupEventHandlers: (s: () => Promise<void>) => void })
+      .setupEventHandlers(async () => {});
+
+    const onCalls = mockSocket.ev.on.mock.calls as [string, unknown][];
+    const upsert = onCalls.find((c) => c[0] === 'messages.upsert')?.[1] as
+      | ((m: unknown) => Promise<void>)
+      | undefined;
+
+    await upsert!({
+      type: 'notify',
+      messages: [{
+        key: {
+          remoteJid: '972501234567@s.whatsapp.net',
+          id: 'owner-me-1',
+          fromMe: true,
+        },
+        messageTimestamp: Math.floor(Date.now() / 1000),
+        message: { conversation: 'כן' },
+      }],
+    });
+
+    expect(handler).toHaveBeenCalledTimes(1);
+    expect(handler.mock.calls[0]![0].body).toBe('כן');
+  });
+});
+
 describe('#188: QR must not print to container stdout', () => {
   it('keeps printQRInTerminal false and gates qrcode.generate behind PRINT_QR === \'1\'', async () => {
     const fs = await import('node:fs');

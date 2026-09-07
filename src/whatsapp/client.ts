@@ -16,9 +16,41 @@ import { createChildLogger } from '../core/logger.ts';
 import { loadSettings, updateSettings } from '../core/settings.ts';
 import type { PairingState, Message, MessageKey } from '../core/types.ts';
 import { bareJid } from './self-chat.ts';
-import { extractMessageBody } from './inbound.ts';
+import {
+  extractMessageBody,
+  isInboundForwarded,
+  isInboundMediaCaption,
+  shouldDropMappedNonSelfDestination,
+} from './inbound.ts';
 
 const log = createChildLogger('whatsapp');
+
+/** Preserve stanza recipient on key.destinationJid before Baileys drops @bot mapping (#187). */
+let decodeDestinationPatched = false;
+async function ensureDecodePreservesDestination(): Promise<void> {
+  if (decodeDestinationPatched) return;
+  decodeDestinationPatched = true;
+  try {
+    const mod = await import('@whiskeysockets/baileys/lib/Utils/decode-wa-message.js') as {
+      decodeMessageNode: (stanza: unknown, meId: unknown, meLid: unknown) => {
+        fullMessage?: { key?: { destinationJid?: string; remoteJid?: string | null } };
+      };
+    };
+    const original = mod.decodeMessageNode;
+    if (typeof original !== 'function') return;
+    mod.decodeMessageNode = (stanza: unknown, meId: unknown, meLid: unknown) => {
+      const result = original(stanza, meId, meLid);
+      const recipient = (stanza as { attrs?: { recipient?: string } })?.attrs?.recipient;
+      if (recipient && result?.fullMessage?.key) {
+        result.fullMessage.key.destinationJid = recipient;
+      }
+      return result;
+    };
+  } catch (err) {
+    log.warn({ err }, 'Could not patch Baileys decode for @bot destination (#187)');
+  }
+}
+
 
 const VERSION_CACHE_PATH = join(config.dataDir, 'wa-version.json');
 const VERSION_FETCH_TIMEOUT_MS = 10_000;
@@ -131,6 +163,7 @@ export class WhatsAppClient {
   private static readonly OUTBOUND_ID_MAX = 256;
 
   async connect(): Promise<void> {
+    await ensureDecodePreservesDestination();
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
@@ -403,6 +436,24 @@ export class WhatsAppClient {
       return;
     }
 
+    // #187: Meta AI / @bot (and other non-self destinations Baileys remaps onto the
+    // owner JID). Drop before handlers — full path (model + tools + confirm).
+    const destinationJid =
+      (msg.key as { destinationJid?: string }).destinationJid
+      ?? msg.message?.deviceSentMessage?.destinationJid
+      ?? undefined;
+    if (
+      shouldDropMappedNonSelfDestination(remoteJid, destinationJid, (jid) =>
+        this.isSelfJid(jid)
+      )
+    ) {
+      log.debug(
+        { remoteJid, destinationJid },
+        'Dropping non-self mapped destination (e.g. Meta AI @bot) from full handler path'
+      );
+      return;
+    }
+
     const body = extractMessageBody(msg.message);
     if (!body) return;
 
@@ -423,6 +474,8 @@ export class WhatsAppClient {
       timestamp: Number(msg.messageTimestamp?.toString() ?? '') || Math.floor(Date.now() / 1000),
       isFromMe,
       messageKey,
+      isForwarded: isInboundForwarded(msg.message),
+      isMediaCaption: isInboundMediaCaption(msg.message),
     };
 
     log.debug({ messageId: message.id, isFromMe }, 'Processing message');

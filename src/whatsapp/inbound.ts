@@ -9,12 +9,18 @@ export const MAX_INBOUND_AGE_MS = 10 * 60 * 1000;
 export const QUOTE_AFTER_MS = 30 * 1000;
 
 /** Structural subset of Baileys proto.IMessage used for body extraction. */
+export interface InboundContextInfo {
+  isForwarded?: boolean | null;
+  forwardingScore?: number | null;
+}
+
 export interface InboundProtoMessage {
   conversation?: string | null;
-  extendedTextMessage?: { text?: string | null } | null;
-  imageMessage?: { caption?: string | null } | null;
-  videoMessage?: { caption?: string | null } | null;
-  documentMessage?: { caption?: string | null } | null;
+  extendedTextMessage?: { text?: string | null; contextInfo?: InboundContextInfo | null } | null;
+  imageMessage?: { caption?: string | null; contextInfo?: InboundContextInfo | null } | null;
+  videoMessage?: { caption?: string | null; contextInfo?: InboundContextInfo | null } | null;
+  documentMessage?: { caption?: string | null; contextInfo?: InboundContextInfo | null } | null;
+  deviceSentMessage?: { destinationJid?: string | null; message?: InboundProtoMessage | null } | null;
   audioMessage?: object | null;
   stickerMessage?: object | null;
   locationMessage?: object | null;
@@ -77,4 +83,58 @@ export function extractMessageBody(message: InboundProtoMessage): string | null 
   }
 
   return null;
+}
+
+/**
+ * Forwarded notepad / third-party bubbles (#191).
+ * Checks conversation-less extended text and media contextInfo.
+ */
+export function isInboundForwarded(message: InboundProtoMessage): boolean {
+  const contexts: Array<InboundContextInfo | null | undefined> = [
+    message.extendedTextMessage?.contextInfo,
+    message.imageMessage?.contextInfo,
+    message.videoMessage?.contextInfo,
+    message.documentMessage?.contextInfo,
+  ];
+  const viewOnce = message.viewOnceMessage?.message
+    ?? message.viewOnceMessageV2?.message
+    ?? message.viewOnceMessageV2Extension?.message;
+  if (viewOnce) {
+    return isInboundForwarded(viewOnce);
+  }
+  for (const ctx of contexts) {
+    if (!ctx) continue;
+    if (ctx.isForwarded) return true;
+    if ((ctx.forwardingScore ?? 0) > 0) return true;
+  }
+  return false;
+}
+
+/** Body is solely an image/video/document caption (not conversation/extended text). */
+export function isInboundMediaCaption(message: InboundProtoMessage): boolean {
+  if (message.conversation || message.extendedTextMessage?.text) return false;
+  if (message.imageMessage?.caption) return true;
+  if (message.videoMessage?.caption) return true;
+  if (message.documentMessage?.caption) return true;
+  const viewOnce = message.viewOnceMessage?.message
+    ?? message.viewOnceMessageV2?.message
+    ?? message.viewOnceMessageV2Extension?.message;
+  if (viewOnce) return isInboundMediaCaption(viewOnce);
+  return false;
+}
+
+/**
+ * #187: Baileys maps fromMe→@bot so remoteJid becomes the owner JID.
+ * If we still know the real destination and it is not self-chat, drop for the
+ * full handler path (model + tools + confirm).
+ */
+export function shouldDropMappedNonSelfDestination(
+  remoteJid: string | null | undefined,
+  destinationJid: string | null | undefined,
+  isSelf: (jid: string) => boolean,
+): boolean {
+  if (!destinationJid) return false;
+  if (destinationJid.endsWith('@bot')) return true;
+  if (remoteJid && isSelf(remoteJid) && !isSelf(destinationJid)) return true;
+  return false;
 }

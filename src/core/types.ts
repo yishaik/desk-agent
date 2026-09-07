@@ -57,6 +57,10 @@ export interface Message {
   isFromMe: boolean;
   projectId?: string;
   messageKey?: MessageKey;
+  /** True when WhatsApp contextInfo marks the inbound as forwarded (#191). */
+  isForwarded?: boolean;
+  /** True when body came only from an image/video/document caption (#191). */
+  isMediaCaption?: boolean;
 }
 
 export interface ConversationContext {
