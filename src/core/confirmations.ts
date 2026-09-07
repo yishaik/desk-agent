@@ -54,11 +54,15 @@ function save(store: Store): void {
 }
 
 // --- classification --------------------------------------------------------
-// The gate is an ALLOW-list: only actions whose leading verb is unambiguously
+// The gate is an ALLOW-list: only actions whose verbs are unambiguously
 // read-only run without the owner's approval. Everything else — including
 // verbs we have never seen — is held for a "yes". (The previous deny-list
 // missed reply/trash/modify/schedule/upload, see #27.) Open Connector's
 // catalog carries no read-only/mutating metadata, so the verb is the signal.
+//
+// #189: tokenize the FULL action name. Compound mutators such as
+// find_or_create_*, get_or_create_*, check_in_* must not classify as read-only
+// just because the first token is "find"/"get"/"check".
 const READ_ONLY_VERBS = new Set([
   'get', 'list', 'search', 'fetch', 'retrieve', 'query', 'find', 'describe', 'read',
   'lookup', 'count', 'check', 'exists', 'is', 'has', 'preview', 'download', 'validate',
@@ -66,10 +70,12 @@ const READ_ONLY_VERBS = new Set([
   'detect', 'parse', 'convert', 'ping', 'whoami',
 ]);
 
-// S-06 (#110): Hardcoded mutating verbs that ALWAYS require confirmation, even
-// if the operator sets confirmation=never. These are the real-world-impact
-// actions for the default inbox-calendar skill pack (Gmail + Calendar).
-// The verb heuristic stays as a fallback for other OC actions.
+// Bridges that join a read-only-looking prefix to a mutating suffix.
+const COMPOUND_MUTATING_BRIDGES = new Set(['or', 'and', 'in', 'out', 'upsert']);
+
+// S-06 (#110) + #189: mutating verbs that ALWAYS require confirmation, even
+// if the operator sets confirmation=never. Includes share/post/upload/grant/pay
+// so a PAIR_TOKEN holder cannot silence those via Settings.
 const ALWAYS_CONFIRM_VERBS = new Set([
   'send',
   'create',
@@ -84,39 +90,121 @@ const ALWAYS_CONFIRM_VERBS = new Set([
   'schedule',
   'cancel',
   'move',
+  'share',
+  'post',
+  'publish',
+  'upload',
+  'archive',
+  'pay',
+  'transfer',
+  'refund',
+  'charge',
+  'invite',
+  'add',
+  'set',
+  'mark',
+  'label',
+  'insert',
+  'write',
+  'execute',
+  'run',
+  'submit',
+  'approve',
+  'grant',
+  'revoke',
+  'book',
+  'accept',
+  'decline',
+  'clear',
 ]);
+
+/** Split action name into verb-like tokens: "find_or_create_dataset" → ["find","or","create","dataset"], "getMessages" → ["get","messages"]. */
+export function actionTokens(actionId: string): string[] {
+  const name = actionId.includes('.') ? actionId.slice(actionId.indexOf('.') + 1) : actionId;
+  const withSeps = name.replace(/([a-z0-9])([A-Z])/g, '$1_$2');
+  return withSeps
+    .split(/[_\-\s]+/)
+    .map((part) => {
+      const match = part.match(/^[A-Za-z][a-z]*/);
+      return (match ? match[0] : part).toLowerCase();
+    })
+    .filter((t) => t.length > 0);
+}
 
 /** Leading verb of an action name: "gmail.get_message" → "get", "getMessages" → "get". */
 export function actionVerb(actionId: string): string {
-  const name = actionId.includes('.') ? actionId.slice(actionId.indexOf('.') + 1) : actionId;
-  const first = name.split(/[_\-\s]/)[0] ?? '';
-  const match = first.match(/^[A-Za-z][a-z]*/);
-  return (match ? match[0] : first).toLowerCase();
+  return actionTokens(actionId)[0] ?? '';
 }
 
 export function isReadOnlyAction(actionId: string): boolean {
-  return READ_ONLY_VERBS.has(actionVerb(actionId));
+  const tokens = actionTokens(actionId);
+  if (tokens.length === 0) return false;
+  for (const token of tokens) {
+    if (ALWAYS_CONFIRM_VERBS.has(token) || COMPOUND_MUTATING_BRIDGES.has(token)) {
+      return false;
+    }
+  }
+  return READ_ONLY_VERBS.has(tokens[0]!);
 }
 
 /**
- * S-06 (#110): Returns true if the action's leading verb is in the hardcoded
- * list of mutating verbs that must ALWAYS require confirmation.
+ * Returns true if any verb token is in the hardcoded ALWAYS_CONFIRM set
+ * (send/create/.../share/post/upload/grant/pay/...).
  */
 export function isAlwaysConfirmAction(actionId: string): boolean {
-  return ALWAYS_CONFIRM_VERBS.has(actionVerb(actionId));
+  return actionTokens(actionId).some((token) => ALWAYS_CONFIRM_VERBS.has(token));
 }
 
-export function requiresConfirmation(actionId: string): boolean {
-  const override = getActionConfirmationOverride(actionId);
+/** #190: fetch/scrape/crawl-style actions are an unconfirmed exfil channel. */
+export function isExfilRiskAction(actionId: string): boolean {
+  const name = (actionId.includes('.') ? actionId.slice(actionId.indexOf('.') + 1) : actionId).toLowerCase();
+  return /fetch_url|fetch_html|scrape|get_html|get_page|download_url|crawl|browser_render/.test(name);
+}
 
-  // S-06 (#110): 'never' override must NOT skip confirmation for known
-  // mutating verbs (send/create/update/delete/etc). This protects against
-  // operator misconfiguration bypassing the gate for real-world writes.
-  if (isAlwaysConfirmAction(actionId)) {
+function valueContainsAbsoluteUrl(value: unknown): boolean {
+  if (typeof value === 'string') {
+    return /https?:[/][/]/i.test(value);
+  }
+  if (Array.isArray(value)) {
+    return value.some(valueContainsAbsoluteUrl);
+  }
+  if (value && typeof value === 'object') {
+    return Object.values(value as Record<string, unknown>).some(valueContainsAbsoluteUrl);
+  }
+  return false;
+}
+
+/** #190: any absolute URL in the model-supplied input needs a "yes". */
+export function inputHasExfilUrl(input?: Record<string, unknown>): boolean {
+  if (!input) return false;
+  return valueContainsAbsoluteUrl(input);
+}
+
+/**
+ * #189: mode "never" is only legal for actions that are already read-only-safe
+ * (and not exfil-risk by id). Never silences the default gate for mutators.
+ */
+export function canSetNeverOverride(actionId: string): boolean {
+  return isReadOnlyAction(actionId) && !isAlwaysConfirmAction(actionId) && !isExfilRiskAction(actionId);
+}
+
+export function requiresConfirmation(actionId: string, input?: Record<string, unknown>): boolean {
+  // Hard mutators and scrape/fetch_url-style ids always confirm (#189 / #190).
+  if (isAlwaysConfirmAction(actionId) || isExfilRiskAction(actionId)) {
     return true;
   }
 
-  if (override === 'never') return false;
+  // #190: URL in input (e.g. search_*/fetch with https://attacker) → confirm.
+  if (inputHasExfilUrl(input)) {
+    return true;
+  }
+
+  const override = getActionConfirmationOverride(actionId);
+
+  // #189: 'never' only suppresses confirmation for read-only-safe actions.
+  if (override === 'never') {
+    return !canSetNeverOverride(actionId);
+  }
   if (override === 'always') return true;
   return !isReadOnlyAction(actionId);
 }

@@ -268,7 +268,7 @@ export function createOpenConnectorTools(projectId: string): ToolDefinition[] {
         };
       }
 
-      if (requiresConfirmation(params.actionId)) {
+      if (requiresConfirmation(params.actionId, params.input as Record<string, unknown>)) {
         const confirmationId = createPendingConfirmation({
           actionId: params.actionId,
           input: params.input as Record<string, unknown>,

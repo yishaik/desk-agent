@@ -110,7 +110,7 @@ export async function callTool(name: string, args: Record<string, unknown>): Pro
       const connectionName = args['connectionName'] ? String(args['connectionName']) : undefined;
       if (!isActionEnabled(actionId)) return `Action "${actionId}" is currently disabled.`;
 
-      if (requiresConfirmation(actionId)) {
+      if (requiresConfirmation(actionId, input)) {
         const projectId = process.env['DESK_PROJECT_ID'] || undefined;
         const confirmationId = createPendingConfirmation({ actionId, input, connectionName, projectId });
         return formatConfirmationRequest(actionId, input, confirmationId);
