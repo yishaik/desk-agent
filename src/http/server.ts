@@ -19,7 +19,7 @@ import {
   setActionConfirmation,
   getActionConfirmationOverride,
 } from '../core/settings.ts';
-import { requiresConfirmation } from '../core/confirmations.ts';
+import { requiresConfirmation, canSetNeverOverride } from '../core/confirmations.ts';
 import { listSkillPacks, isKnownSkillPack, DEFAULT_SKILL_PACKS } from '../core/skills.ts';
 import { listProjects, createProject, getProject } from '../core/memory.ts';
 import {
@@ -1532,6 +1532,12 @@ addRoute('PATCH', '/api/connector/tools/:service/actions/:action/confirmation', 
   const mode = body.mode;
   if (mode !== 'auto' && mode !== 'always' && mode !== 'never') {
     sendError(res, "mode must be 'auto', 'always' or 'never'", 400);
+    return;
+  }
+
+  // #189: mode "never" is only legal for read-only-safe actions (not share/post/upload/…).
+  if (mode === 'never' && !canSetNeverOverride(action)) {
+    sendError(res, "mode 'never' is only allowed for read-only-safe actions", 400);
     return;
   }
 

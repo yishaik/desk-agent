@@ -282,6 +282,16 @@ Per-action overrides are stored in `settings.json` (`services[].confirmationOver
 
 This is enforced in the tool implementations and the message handler, not just the prompts: the model has no parameter through which it can approve an action, and a confirmed action is executed by the handler outside the model's turn.
 
+
+Compound action names are tokenized in full: `find_or_create_*`, `get_or_create_*`, and
+`check_in_*` require confirmation (they are not treated as read-only because the first
+token looks safe). `mode: "never"` is rejected unless the action is already read-only-safe,
+so `share` / `post` / `upload` / `grant` / `pay` cannot be silenced from Settings.
+
+Read-only-named actions that fetch or scrape a URL (`fetch_url`, `scrape`, `get_html`, …),
+or whose input contains an absolute `http(s)` URL, also require confirmation. Connecting
+fetch/scrape services widens the prompt-injection blast radius: treat them as gated tools.
+
 ## Logging and Audit
 
 ### Agent Logs

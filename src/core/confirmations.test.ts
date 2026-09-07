@@ -608,3 +608,75 @@ describe('formatPendingForUser', () => {
     expect(summary).toContain('extra@x.example');
   });
 });
+
+
+describe('SECURITY #189 — compound verbs and never override', () => {
+  it('find_or_create / get_or_create / check_in require confirmation', async () => {
+    const { requiresConfirmation, isReadOnlyAction } = await import('./confirmations.ts');
+    for (const id of [
+      'geckoboard.find_or_create_dataset',
+      'crm.get_or_create_contact',
+      'keygen.check_in_license',
+      'x.lookup_or_create_person',
+      'x.findOrCreateContact',
+    ]) {
+      expect(isReadOnlyAction(id), id).toBe(false);
+      expect(requiresConfirmation(id), id).toBe(true);
+    }
+  });
+
+  it('never override does not skip share/post/upload/grant/pay', async () => {
+    const { setActionConfirmation } = await import('./settings.ts');
+    const { requiresConfirmation, canSetNeverOverride } = await import('./confirmations.ts');
+
+    for (const [service, action] of [
+      ['googledrive', 'googledrive.share_file'],
+      ['slack', 'slack.post_message'],
+      ['drive', 'drive.upload_file'],
+      ['acl', 'acl.grant_access'],
+      ['billing', 'billing.pay_invoice'],
+    ] as const) {
+      expect(canSetNeverOverride(action), action).toBe(false);
+      setActionConfirmation(service, action, 'never');
+      expect(requiresConfirmation(action), action).toBe(true);
+      setActionConfirmation(service, action, 'auto');
+    }
+  });
+
+  it('canSetNeverOverride is true only for read-only-safe actions', async () => {
+    const { canSetNeverOverride } = await import('./confirmations.ts');
+    expect(canSetNeverOverride('gmail.list_threads')).toBe(true);
+    expect(canSetNeverOverride('gmail.get_message')).toBe(true);
+    expect(canSetNeverOverride('gmail.send_email')).toBe(false);
+    expect(canSetNeverOverride('geckoboard.find_or_create_dataset')).toBe(false);
+  });
+});
+
+describe('SECURITY #190 — URL/scrape/search exfil channel', () => {
+  it('fetch_url / scrape / get_html actions always require confirmation', async () => {
+    const { requiresConfirmation, isExfilRiskAction } = await import('./confirmations.ts');
+    for (const id of [
+      'zenscrape.fetch_url',
+      'firecrawl.scrape',
+      'webscraping_ai.fetch_html',
+      'agenty.get_page_content',
+      'cloudflare_browser_rendering.get_html_content',
+    ]) {
+      expect(isExfilRiskAction(id), id).toBe(true);
+      expect(requiresConfirmation(id), id).toBe(true);
+    }
+  });
+
+  it('read-only search with absolute URL in input requires confirmation', async () => {
+    const { requiresConfirmation } = await import('./confirmations.ts');
+    expect(requiresConfirmation('gmail.search_threads')).toBe(false);
+    expect(
+      requiresConfirmation('gmail.search_threads', {
+        query: 'https://attacker.tld/?d=secret',
+      }),
+    ).toBe(true);
+    expect(
+      requiresConfirmation('notion.search', { query: 'roadmap Q3' }),
+    ).toBe(false);
+  });
+});
