@@ -142,4 +142,25 @@ describe('durable message jobs (#199)', () => {
     expect(await waitForIdle(500)).toBe(true);
     expect(order).toEqual(['/project other', 'follow-up']);
   });
+
+  it('flushes pending outbound on resume without re-running the processor', async () => {
+    const memory = await import('../core/memory.ts');
+    const { acceptMessageJob, claimMessageJob, markMessageJobDone, storeOutboundReply } = memory;
+    const msg = { ...baseMessage, id: 'wa_out_1' };
+    expect(acceptMessageJob(msg, 'chat@jid')).toBe(true);
+    expect(claimMessageJob(msg.id)?.status).toBe('running');
+    markMessageJobDone(msg.id);
+    storeOutboundReply(msg.id, 'saved-reply');
+
+    const sent: string[] = [];
+    const { setOutboundSender, resumePendingJobs, waitForIdle } = await import('./queue.ts');
+    setOutboundSender(async (job) => {
+      sent.push(job.outboundReply || '');
+    });
+    resumePendingJobs(async () => {
+      throw new Error('processor must not run for outbound-only flush');
+    });
+    expect(await waitForIdle(500)).toBe(true);
+    expect(sent).toEqual(['saved-reply']);
+  });
 });

@@ -34,8 +34,35 @@ let pending = 0;
 let resumed = false;
 
 export type InboundProcessFn = (payload: MessageJobPayload) => Promise<string | null | void>;
+/** Send a previously stored model reply without re-running the model/tools (#199). */
+export type OutboundSendFn = (job: MessageJob) => Promise<void>;
 
 let inboundProcessor: InboundProcessFn | null = null;
+let outboundSender: OutboundSendFn | null = null;
+
+export function setOutboundSender(send: OutboundSendFn): void {
+  outboundSender = send;
+}
+
+async function flushOutboundJob(job: MessageJob): Promise<void> {
+  if (!job.outboundReply) {
+    return;
+  }
+  const send = outboundSender;
+  if (!send) {
+    log.warn({ jobId: job.id }, 'Pending outbound reply but no outbound sender registered');
+    return;
+  }
+  try {
+    await send(job);
+    markOutboundSent(job.id);
+    log.info({ jobId: job.id }, 'Flushed pending outbound reply');
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    markOutboundFailed(job.id, msg);
+    log.error({ err, jobId: job.id }, 'Outbound reply flush failed');
+  }
+}
 
 /** Run `task` after everything queued before it; rejections are surfaced to the caller only. */
 export function enqueue(task: () => Promise<void>): Promise<void> {
@@ -140,6 +167,14 @@ export function resumePendingJobs(process: InboundProcessFn): void {
   log.info({ count: pendingJobs.length }, 'Resuming durable message jobs');
   for (const job of pendingJobs) {
     void enqueue(() => runClaimedJob(job.id, process));
+  }
+
+  // Drain replies that were generated but not delivered (crash/send fail after model).
+  // Does not re-run the model or tools — WA send only (#199 / WA Runtime FIT).
+  const outbound = listPendingOutboundReplies();
+  log.info({ count: outbound.length }, 'Flushing pending outbound replies');
+  for (const job of outbound) {
+    void enqueue(() => flushOutboundJob(job));
   }
 }
 

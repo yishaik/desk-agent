@@ -42,7 +42,7 @@ import {
   type ReactionTracker,
 } from './reaction-state.ts';
 import { isSelfChatJid, resolveReplyJid } from './self-chat.ts';
-import { enqueueInboundJob, resumePendingJobs, MAX_QUEUE_DEPTH, type MessageJobPayload } from './queue.ts';
+import { enqueueInboundJob, resumePendingJobs, setOutboundSender, MAX_QUEUE_DEPTH, type MessageJobPayload, type MessageJob } from './queue.ts';
 import {
   MEDIA_WITHOUT_TEXT_BODY,
   isStaleInbound,
@@ -478,6 +478,13 @@ async function processDurableInbound(payload: MessageJobPayload): Promise<string
 
 /** Boot hook: re-drive pending/interrupted jobs after WhatsApp is up (#199). */
 export function startDurableMessageQueue(): void {
+  setOutboundSender(async (job: MessageJob) => {
+    const wa = getWhatsAppClient();
+    const text = job.outboundReply;
+    if (!text) return;
+    const { message, chatJid } = job.payload;
+    await sendSplitMessage(chatJid, text, quoteArg(message));
+  });
   resumePendingJobs(processDurableInbound);
 }
 
