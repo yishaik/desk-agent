@@ -13,7 +13,9 @@ import {
   getOrCreateSession,
   setSessionModel,
   getPendingConfirmation,
-  confirmAction,
+  approveConfirmation,
+  claimForExecution,
+  completeExecution,
   cancelConfirmation,
   consumeExpiredConfirmations,
   getAllPendingConfirmations,
@@ -138,10 +140,30 @@ interface CommandResult {
 // The only place a mutating action is ever executed: after the owner's "yes".
 // The model never sees this tool result, so a note is recorded and prefixed to
 // the next prompt (withExecutedActionNotes).
+/**
+ * #200: Approve → claim-once → execute → complete. Never deletes before dispatch.
+ * Provider timeout/crash → status unknown (Hebrew UX; no auto-retry).
+ */
 async function executePendingAction(
+  confirmationId: string,
   pending: { actionId: string; input: Record<string, unknown>; connectionName?: string },
   projectId: string
 ): Promise<CommandResult> {
+  if (!approveConfirmation(confirmationId)) {
+    return {
+      handled: true,
+      response: '⚠️ לא ניתן לאשר — ייתכן שהפעולה פגה או שטרם הוצג פירוט האישור.',
+    };
+  }
+
+  const claimed = claimForExecution(confirmationId);
+  if (!claimed) {
+    return {
+      handled: true,
+      response: '⚠️ הפעולה כבר בביצוע או שאושרה במקביל. לא נשלח שוב.',
+    };
+  }
+
   const client = new OpenConnectorClient(projectId);
   try {
     const result = await client.executeAction({
@@ -151,21 +173,37 @@ async function executePendingAction(
     });
 
     if (!result.success) {
-      recordExecutedAction({ projectId, actionId: pending.actionId, success: false, summary: String(result.message ?? 'unknown error') });
+      const summary = String(result.message ?? 'unknown error');
+      completeExecution(confirmationId, { outcome: 'failed', summary });
+      recordExecutedAction({ projectId, actionId: pending.actionId, success: false, summary });
       return {
         handled: true,
         response: `❌ הפעולה נכשלה: ${publicActionError(result.message)}`,
       };
     }
 
-    recordExecutedAction({ projectId, actionId: pending.actionId, success: true, summary: JSON.stringify(result.data ?? null) });
+    const summary = JSON.stringify(result.data ?? null);
+    completeExecution(confirmationId, { outcome: 'succeeded', summary });
+    recordExecutedAction({ projectId, actionId: pending.actionId, success: true, summary });
     return {
       handled: true,
       response: `✅ בוצע: ${pending.actionId}`,
     };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
+    const timedOut = /timeout|TIMEDOUT|AbortError/i.test(message);
+    completeExecution(confirmationId, {
+      outcome: timedOut ? 'unknown' : 'failed',
+      summary: message,
+    });
     recordExecutedAction({ projectId, actionId: pending.actionId, success: false, summary: message });
+    if (timedOut) {
+      return {
+        handled: true,
+        response:
+          '⚠️ לא ברור אם הפעולה בוצעה (תם הזמן אצל הספק). לא ניסיתי שוב — בדקי מייל/יומן לפני אישור נוסף.',
+      };
+    }
     return {
       handled: true,
       response: `❌ שגיאה: ${publicActionError(message)}`,
@@ -294,8 +332,7 @@ async function checkForConfirmationResponse(
             ),
           };
         }
-        confirmAction(confirmId);
-        return executePendingAction(pending, projectId);
+        return executePendingAction(confirmId, pending, projectId);
       }
     }
   }
@@ -316,8 +353,7 @@ async function checkForConfirmationResponse(
             response: showPayloadAndMarkPresented(selected, false),
           };
         }
-        confirmAction(selected.confirmationId);
-        return executePendingAction(selected, projectId);
+        return executePendingAction(selected.confirmationId, selected, projectId);
       }
     }
     return {
@@ -344,8 +380,7 @@ async function checkForConfirmationResponse(
       
       // If payload was already shown by handler, execute on כן
       if (isPayloadPresented(single.confirmationId)) {
-        confirmAction(single.confirmationId);
-        return executePendingAction(single, projectId);
+        return executePendingAction(single.confirmationId, single, projectId);
       }
       
       // First כן: show the payload and mark as presented

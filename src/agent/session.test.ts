@@ -25,7 +25,13 @@ beforeEach(() => {
   mkdirSync(TEST_DATA_DIR, { recursive: true });
 });
 
-afterEach(() => {
+afterEach(async () => {
+  try {
+    const { closeConfirmationsDb } = await import('../core/confirmations.ts');
+    closeConfirmationsDb();
+  } catch {
+    // not loaded
+  }
   if (existsSync(TEST_DATA_DIR)) {
     rmSync(TEST_DATA_DIR, { recursive: true });
   }
@@ -64,8 +70,16 @@ describe('Confirmation Gate', () => {
     expect(pending?.input).toEqual({ to: 'test@example.com', subject: 'Test' });
   });
 
-  it('confirmAction consumes the confirmation (returns true then false)', async () => {
-    const { createPendingConfirmation, confirmAction, getPendingConfirmation } = await import('../core/confirmations.ts');
+  it('approve stays open; claimForExecution consumes once (#200)', async () => {
+    const {
+      createPendingConfirmation,
+      markPayloadPresented,
+      confirmAction,
+      approveConfirmation,
+      claimForExecution,
+      getPendingConfirmation,
+      closeConfirmationsDb,
+    } = await import('../core/confirmations.ts');
 
     const confirmId = createPendingConfirmation({
       actionId: 'gmail.sendEmail',
@@ -73,14 +87,24 @@ describe('Confirmation Gate', () => {
     });
 
     expect(getPendingConfirmation(confirmId)).toBeDefined();
+    // Not presented yet — approve-only confirmAction must fail
+    expect(confirmAction(confirmId)).toBe(false);
 
-    const firstConfirm = confirmAction(confirmId);
-    expect(firstConfirm).toBe(true);
+    expect(markPayloadPresented(confirmId)).toBe(true);
+    expect(approveConfirmation(confirmId)).toBe(true);
+    // #200: row stays approved (no delete-on-approve)
+    expect(getPendingConfirmation(confirmId)).toBeDefined();
+    // Idempotent approve
+    expect(confirmAction(confirmId)).toBe(true);
 
+    const claimed = claimForExecution(confirmId);
+    expect(claimed).not.toBeNull();
+    expect(claimed?.confirmationId).toBe(confirmId);
     expect(getPendingConfirmation(confirmId)).toBeUndefined();
+    // Second claim is a no-op
+    expect(claimForExecution(confirmId)).toBeNull();
 
-    const secondConfirm = confirmAction(confirmId);
-    expect(secondConfirm).toBe(false);
+    closeConfirmationsDb();
   });
 
   it('cancelConfirmation removes pending confirmation', async () => {
@@ -294,3 +318,4 @@ describe('recreateSessionAfterCredentialChange waits for the queue (#78)', () =>
     waitSpy.mockRestore();
   });
 });
+
