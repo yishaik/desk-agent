@@ -318,3 +318,4 @@ describe('recreateSessionAfterCredentialChange waits for the queue (#78)', () =>
     waitSpy.mockRestore();
   });
 });
+
