@@ -1,10 +1,17 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { existsSync, rmSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import Database from 'better-sqlite3';
 
 const TEST_DATA_DIR = './test-data-confirmations';
 
-beforeEach(() => {
+beforeEach(async () => {
+  try {
+    const mod = await import('./confirmations.ts');
+    mod.closeConfirmationsDb();
+  } catch {
+    /* first run / module not loaded */
+  }
   vi.resetModules();
   process.env['DATA_DIR'] = TEST_DATA_DIR;
   if (existsSync(TEST_DATA_DIR)) {
@@ -19,6 +26,30 @@ afterEach(() => {
   }
   delete process.env['DATA_DIR'];
 });
+
+
+function bumpConfirmationTimes(
+  confirmationId: string,
+  patch: { createdAt?: number; payloadPresentedAt?: number },
+): void {
+  const db = new Database(join(TEST_DATA_DIR, 'memory.sqlite'));
+  try {
+    if (patch.createdAt !== undefined) {
+      db.prepare('UPDATE action_confirmations SET created_at = ? WHERE confirmation_id = ?').run(
+        patch.createdAt,
+        confirmationId,
+      );
+    }
+    if (patch.payloadPresentedAt !== undefined) {
+      db.prepare(
+        'UPDATE action_confirmations SET payload_presented_at = ? WHERE confirmation_id = ?',
+      ).run(patch.payloadPresentedAt, confirmationId);
+    }
+  } finally {
+    db.close();
+  }
+}
+
 
 describe('Confirmation Patterns', () => {
   const CONFIRM_PATTERNS = [
@@ -273,10 +304,7 @@ describe('Confirmation TTL', () => {
       projectId: 'test-project',
     });
 
-    const storePath = join(TEST_DATA_DIR, 'pending-confirmations.json');
-    const store = JSON.parse(readFileSync(storePath, 'utf8'));
-    store[confirmationId].createdAt = Date.now() - 4 * 60 * 1000;
-    writeFileSync(storePath, JSON.stringify(store), { mode: 0o600 });
+    bumpConfirmationTimes(confirmationId, { createdAt: Date.now() - 4 * 60 * 1000 });
 
     cleanupOldConfirmations();
     expect(getPendingConfirmation(confirmationId)).toBeDefined();
@@ -295,10 +323,7 @@ describe('Confirmation TTL', () => {
       projectId: 'test-project',
     });
 
-    const storePath = join(TEST_DATA_DIR, 'pending-confirmations.json');
-    const store = JSON.parse(readFileSync(storePath, 'utf8'));
-    store[confirmationId].createdAt = Date.now() - 16 * 60 * 1000;
-    writeFileSync(storePath, JSON.stringify(store), { mode: 0o600 });
+    bumpConfirmationTimes(confirmationId, { createdAt: Date.now() - 16 * 60 * 1000 });
 
     cleanupOldConfirmations();
     expect(getPendingConfirmation(confirmationId)).toBeUndefined();
@@ -319,11 +344,10 @@ describe('Confirmation TTL', () => {
     });
     markPayloadPresented(confirmationId);
 
-    const storePath = join(TEST_DATA_DIR, 'pending-confirmations.json');
-    const store = JSON.parse(readFileSync(storePath, 'utf8'));
-    store[confirmationId].createdAt = Date.now() - 10 * 60 * 1000;
-    store[confirmationId].payloadPresentedAt = Date.now() - 4 * 60 * 1000;
-    writeFileSync(storePath, JSON.stringify(store), { mode: 0o600 });
+    bumpConfirmationTimes(confirmationId, {
+      createdAt: Date.now() - 10 * 60 * 1000,
+      payloadPresentedAt: Date.now() - 4 * 60 * 1000,
+    });
 
     cleanupOldConfirmations();
     expect(getPendingConfirmation(confirmationId)).toBeUndefined();
@@ -678,5 +702,74 @@ describe('SECURITY #190 — URL/scrape/search exfil channel', () => {
     expect(
       requiresConfirmation('notion.search', { query: 'roadmap Q3' }),
     ).toBe(false);
+  });
+});
+
+describe('#200 — durable action_confirmations (no delete-before-exec)', () => {
+  it('approve + claim-once; second claim is null', async () => {
+    const {
+      createPendingConfirmation,
+      markPayloadPresented,
+      approveConfirmation,
+      claimForExecution,
+      getPendingConfirmation,
+    } = await import('./confirmations.ts');
+
+    const id = createPendingConfirmation({
+      actionId: 'gmail.send_email',
+      input: { to: 'a@x.com', subject: 'Hi', body: 'x' },
+      projectId: 'default',
+    });
+    expect(markPayloadPresented(id)).toBe(true);
+    expect(approveConfirmation(id)).toBe(true);
+    expect(getPendingConfirmation(id)?.status).toBe('approved');
+
+    const first = claimForExecution(id);
+    expect(first?.confirmationId).toBe(id);
+    expect(first?.idempotencyKey).toBe(`desk-${id}`);
+    expect(claimForExecution(id)).toBeNull();
+    expect(getPendingConfirmation(id)).toBeUndefined();
+  });
+
+  it('completeExecution records succeeded and refuses double complete', async () => {
+    const {
+      createPendingConfirmation,
+      markPayloadPresented,
+      approveConfirmation,
+      claimForExecution,
+      completeExecution,
+    } = await import('./confirmations.ts');
+
+    const id = createPendingConfirmation({
+      actionId: 'gmail.send_email',
+      input: { to: 'a@x.com' },
+      projectId: 'default',
+    });
+    markPayloadPresented(id);
+    approveConfirmation(id);
+    claimForExecution(id);
+    expect(completeExecution(id, { outcome: 'succeeded', summary: 'ok' })).toBe(true);
+    expect(completeExecution(id, { outcome: 'succeeded', summary: 'again' })).toBe(false);
+  });
+
+  it('approve without presented fails; confirmAction does not delete the row', async () => {
+    const {
+      createPendingConfirmation,
+      confirmAction,
+      markPayloadPresented,
+      getPendingConfirmation,
+      approveConfirmation,
+    } = await import('./confirmations.ts');
+
+    const id = createPendingConfirmation({
+      actionId: 'gmail.send_email',
+      input: { to: 'a@x.com' },
+      projectId: 'default',
+    });
+    expect(approveConfirmation(id)).toBe(false);
+    expect(getPendingConfirmation(id)).toBeDefined();
+    markPayloadPresented(id);
+    expect(confirmAction(id)).toBe(true);
+    expect(getPendingConfirmation(id)?.status).toBe('approved');
   });
 });
