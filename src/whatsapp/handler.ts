@@ -479,7 +479,6 @@ async function processDurableInbound(payload: MessageJobPayload): Promise<string
 /** Boot hook: re-drive pending/interrupted jobs after WhatsApp is up (#199). */
 export function startDurableMessageQueue(): void {
   setOutboundSender(async (job: MessageJob) => {
-    const wa = getWhatsAppClient();
     const text = job.outboundReply;
     if (!text) return;
     const { message, chatJid } = job.payload;
