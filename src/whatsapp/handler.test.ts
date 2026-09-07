@@ -48,6 +48,9 @@ vi.mock('../agent/session.ts', () => ({
   getPendingConfirmation: vi.fn(() => undefined),
   getLatestPendingConfirmation: vi.fn(() => null),
   confirmAction: vi.fn(() => false),
+  approveConfirmation: vi.fn(() => false),
+  claimForExecution: vi.fn(() => null),
+  completeExecution: vi.fn(() => false),
   cancelConfirmation: vi.fn(() => false),
   cleanupOldConfirmations: vi.fn(),
   consumeExpiredConfirmations: vi.fn(() => []),
@@ -1040,7 +1043,9 @@ describe('Confirmation Patterns (handler)', () => {
 describe('S-04 (#108) — handler must show payload before any execute', () => {
   it('plain כן shows payload and does NOT execute on first attempt', async () => {
     const mockFormatPendingForUser = vi.fn().mockReturnValue('📋 *gmail.send_email*\n👤 אל: test@example.com');
-    const mockConfirmAction = vi.fn().mockReturnValue(true);
+    const mockApprove = vi.fn().mockReturnValue(true);
+    const mockClaim = vi.fn().mockReturnValue(null);
+    const mockComplete = vi.fn().mockReturnValue(false);
     const mockMarkPayloadPresented = vi.fn().mockReturnValue(true);
     const mockIsPayloadPresented = vi.fn().mockReturnValue(false);
 
@@ -1056,7 +1061,10 @@ describe('S-04 (#108) — handler must show payload before any execute', () => {
           createdAt: Date.now(),
         }]),
         formatPendingForUser: mockFormatPendingForUser,
-        confirmAction: mockConfirmAction,
+        approveConfirmation: mockApprove,
+        claimForExecution: mockClaim,
+        completeExecution: mockComplete,
+        confirmAction: mockApprove,
         markPayloadPresented: mockMarkPayloadPresented,
         isPayloadPresented: mockIsPayloadPresented,
         getPendingConfirmation: vi.fn().mockReturnValue(undefined),
@@ -1132,12 +1140,15 @@ describe('S-04 (#108) — handler must show payload before any execute', () => {
     expect(mockFormatPendingForUser).toHaveBeenCalled();
     // S-04: markPayloadPresented MUST be called to track that we showed it
     expect(mockMarkPayloadPresented).toHaveBeenCalled();
-    // S-04: confirmAction must NOT be called — payload not yet shown
-    expect(mockConfirmAction).not.toHaveBeenCalled();
+    // S-04: claim/approve path must NOT run — payload not yet shown
+    expect(mockApprove).not.toHaveBeenCalled();
+    expect(mockClaim).not.toHaveBeenCalled();
   });
 
   it('confirm_xxx does NOT execute without prior handler-shown payload', async () => {
-    const mockConfirmAction = vi.fn().mockReturnValue(true);
+    const mockApprove = vi.fn().mockReturnValue(true);
+    const mockClaim = vi.fn().mockReturnValue(null);
+    const mockComplete = vi.fn().mockReturnValue(false);
     const mockMarkPayloadPresented = vi.fn().mockReturnValue(true);
     const mockIsPayloadPresented = vi.fn().mockReturnValue(false);
     const mockFormatPendingForUser = vi.fn().mockReturnValue('📋 *gmail.send_email*\n👤 אל: attacker@evil.com');
@@ -1154,7 +1165,10 @@ describe('S-04 (#108) — handler must show payload before any execute', () => {
           createdAt: Date.now(),
         }]),
         formatPendingForUser: mockFormatPendingForUser,
-        confirmAction: mockConfirmAction,
+        approveConfirmation: mockApprove,
+        claimForExecution: mockClaim,
+        completeExecution: mockComplete,
+        confirmAction: mockApprove,
         markPayloadPresented: mockMarkPayloadPresented,
         isPayloadPresented: mockIsPayloadPresented,
         getPendingConfirmation: vi.fn().mockReturnValue({
@@ -1233,14 +1247,17 @@ describe('S-04 (#108) — handler must show payload before any execute', () => {
     await handleMessage(confirmIdMessage);
 
     // S-04: confirm_xxx must NOT execute if payload was never shown by handler
-    expect(mockConfirmAction).not.toHaveBeenCalled();
+    expect(mockApprove).not.toHaveBeenCalled();
+    expect(mockClaim).not.toHaveBeenCalled();
     // S-04: instead, the handler should show the payload
     expect(mockFormatPendingForUser).toHaveBeenCalled();
     expect(mockMarkPayloadPresented).toHaveBeenCalled();
   });
 
   it('number pick does NOT execute without prior handler-shown payload', async () => {
-    const mockConfirmAction = vi.fn().mockReturnValue(true);
+    const mockApprove = vi.fn().mockReturnValue(true);
+    const mockClaim = vi.fn().mockReturnValue(null);
+    const mockComplete = vi.fn().mockReturnValue(false);
     const mockMarkPayloadPresented = vi.fn().mockReturnValue(true);
     const mockIsPayloadPresented = vi.fn().mockReturnValue(false);
     const mockFormatPendingForUser = vi.fn().mockReturnValue('📋 *gmail.send_email*\n👤 אל: test@example.com');
@@ -1254,7 +1271,10 @@ describe('S-04 (#108) — handler must show payload before any execute', () => {
           { confirmationId: 'confirm_2', actionId: 'calendar.create_event', input: { title: 'Meeting' }, projectId: 'default', createdAt: Date.now() },
         ]),
         formatPendingForUser: mockFormatPendingForUser,
-        confirmAction: mockConfirmAction,
+        approveConfirmation: mockApprove,
+        claimForExecution: mockClaim,
+        completeExecution: mockComplete,
+        confirmAction: mockApprove,
         markPayloadPresented: mockMarkPayloadPresented,
         isPayloadPresented: mockIsPayloadPresented,
         getPendingConfirmation: vi.fn().mockReturnValue(undefined),
@@ -1328,29 +1348,41 @@ describe('S-04 (#108) — handler must show payload before any execute', () => {
     await handleMessage(numberMessage);
 
     // S-04: number pick must NOT execute if payload was never shown
-    expect(mockConfirmAction).not.toHaveBeenCalled();
+    expect(mockApprove).not.toHaveBeenCalled();
+    expect(mockClaim).not.toHaveBeenCalled();
     // S-04: instead, handler shows the payload for that item
     expect(mockFormatPendingForUser).toHaveBeenCalled();
     expect(mockMarkPayloadPresented).toHaveBeenCalled();
   });
 
   it('second כן DOES execute after payload was shown', async () => {
-    const mockConfirmAction = vi.fn().mockReturnValue(true);
+    const pending = {
+      confirmationId: 'confirm_789_def',
+      actionId: 'gmail.send_email',
+      input: { to: 'legitimate@example.com', subject: 'Hello', body: 'World' },
+      projectId: 'default',
+      createdAt: Date.now(),
+    };
+    const mockApprove = vi.fn().mockReturnValue(true);
+    const mockClaim = vi.fn().mockReturnValue({
+      ...pending,
+      payloadHash: 'testhash',
+      idempotencyKey: 'desk-confirm_789_def',
+    });
+    const mockComplete = vi.fn().mockReturnValue(true);
     const mockIsPayloadPresented = vi.fn().mockReturnValue(true); // Already shown!
+    const mockExecuteAction = vi.fn().mockResolvedValue({ success: true, data: { id: 'msg_1' } });
 
     vi.doMock('../agent/session.ts', async (importOriginal) => {
       const original = await importOriginal<typeof import('../agent/session.ts')>();
       return {
         ...original,
-        getAllPendingConfirmations: vi.fn().mockReturnValue([{
-          confirmationId: 'confirm_789_def',
-          actionId: 'gmail.send_email',
-          input: { to: 'legitimate@example.com', subject: 'Hello', body: 'World' },
-          projectId: 'default',
-          createdAt: Date.now(),
-        }]),
+        getAllPendingConfirmations: vi.fn().mockReturnValue([pending]),
         formatPendingForUser: vi.fn().mockReturnValue('📋 *gmail.send_email*'),
-        confirmAction: mockConfirmAction,
+        approveConfirmation: mockApprove,
+        claimForExecution: mockClaim,
+        completeExecution: mockComplete,
+        confirmAction: mockApprove,
         markPayloadPresented: vi.fn().mockReturnValue(true),
         isPayloadPresented: mockIsPayloadPresented,
         getPendingConfirmation: vi.fn().mockReturnValue(undefined),
@@ -1373,6 +1405,7 @@ describe('S-04 (#108) — handler must show payload before any execute', () => {
         sendMessage: vi.fn().mockResolvedValue(undefined),
         sendReaction: vi.fn().mockResolvedValue(undefined),
         getPairingState: () => ({ isPaired: true, selfChat: 'lid' }),
+        takeStaleSkipNotice: () => false,
       }),
       WhatsAppClient: class {},
     }));
@@ -1410,9 +1443,7 @@ describe('S-04 (#108) — handler must show payload before any execute', () => {
 
     vi.doMock('../open-connector/client.ts', () => ({
       OpenConnectorClient: class {
-        async executeAction() {
-          return { success: true, data: { id: 'msg_1' } };
-        }
+        executeAction = mockExecuteAction;
       },
     }));
 
@@ -1431,8 +1462,11 @@ describe('S-04 (#108) — handler must show payload before any execute', () => {
 
     await handleMessage(secondConfirmMessage);
 
-    // S-04: After payload was shown, כן DOES execute
-    expect(mockConfirmAction).toHaveBeenCalled();
+    // S-04 / #200: after payload shown, כן approve → claim → execute → complete
+    expect(mockApprove).toHaveBeenCalledWith('confirm_789_def');
+    expect(mockClaim).toHaveBeenCalledWith('confirm_789_def');
+    expect(mockExecuteAction).toHaveBeenCalled();
+    expect(mockComplete).toHaveBeenCalled();
   });
 });
 
