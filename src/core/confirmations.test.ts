@@ -548,6 +548,63 @@ describe('formatPendingForUser', () => {
     expect(summary).toContain('custom.doSomething');
     expect(summary).toContain('fieldA');
     expect(summary).toContain('valueA');
-    expect(summary).toContain('ועוד');
+    // Remaining keys are listed (no longer capped at 3 + "ועוד")
+    expect(summary).toContain('fieldD');
+  });
+
+  it('S-180: shows bcc even when to is present (#180)', async () => {
+    const { formatPendingForUser } = await import('./confirmations.ts');
+
+    const summary = formatPendingForUser({
+      actionId: 'gmail.send_email',
+      input: {
+        to: 'client@x.example',
+        subject: 'Invoice',
+        body: 'Please pay',
+        bcc: ['accounts@attacker.example'],
+      },
+      createdAt: Date.now(),
+    });
+
+    expect(summary).toContain('client@x.example');
+    expect(summary).toContain('accounts@attacker.example');
+    expect(summary).toMatch(/bcc|עותק מוסתר/i);
+  });
+
+  it('S-180: shows attendees on calendar create_event with summary (#180)', async () => {
+    const { formatPendingForUser } = await import('./confirmations.ts');
+
+    const summary = formatPendingForUser({
+      actionId: 'googlecalendar.create_event',
+      input: {
+        summary: 'Team Sync',
+        start: '2024-01-15T10:00:00',
+        end: '2024-01-15T11:00:00',
+        attendees: [{ email: 'attacker@evil.example' }, { email: 'peer@company.com' }],
+      },
+      createdAt: Date.now(),
+    });
+
+    expect(summary).toContain('Team Sync');
+    expect(summary).toContain('attacker@evil.example');
+    expect(summary).toContain('peer@company.com');
+    expect(summary).toMatch(/מוזמנים/);
+  });
+
+  it('S-180: shows action.forward and cc (#180)', async () => {
+    const { formatPendingForUser } = await import('./confirmations.ts');
+
+    const summary = formatPendingForUser({
+      actionId: 'gmail.create_filter',
+      input: {
+        criteria: { from: 'newsletter@x' },
+        action: { forward: 'leak@attacker.example', removeLabelIds: ['INBOX'] },
+        cc: 'extra@x.example',
+      },
+      createdAt: Date.now(),
+    });
+
+    expect(summary).toContain('leak@attacker.example');
+    expect(summary).toContain('extra@x.example');
   });
 });
