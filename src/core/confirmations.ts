@@ -318,57 +318,183 @@ export function cancelAllPendingConfirmations(projectId?: string): number {
 }
 
 /** Format pending confirmation input as a human-readable summary. */
+/** Format a recipient-ish value (string, string[], or {email}[]) for WhatsApp. */
+function formatRecipientList(value: unknown): string {
+  if (Array.isArray(value)) {
+    return value
+      .map((item) => {
+        if (typeof item === 'string') return item;
+        if (item && typeof item === 'object' && 'email' in item) {
+          return String((item as { email: unknown }).email);
+        }
+        return JSON.stringify(item);
+      })
+      .filter(Boolean)
+      .join(', ');
+  }
+  if (value && typeof value === 'object' && 'email' in value) {
+    return String((value as { email: unknown }).email);
+  }
+  return String(value);
+}
+
+function truncateField(value: unknown, max: number): string {
+  const str = typeof value === 'string' ? value : JSON.stringify(value);
+  return str.length > max ? str.slice(0, max) + '...' : str;
+}
+
+/**
+ * Format pending confirmation input as a human-readable Hebrew summary.
+ * #180: always surface recipient-ish / exfil fields (cc, bcc, attendees, forward,
+ * scope, …). Named keys first; then any remaining top-level keys so an omitted
+ * field cannot hide a hidden recipient behind a matching `to`/`start`.
+ */
 export function formatPendingForUser(pending: PendingConfirmation): string {
   const { actionId, input } = pending;
   const lines: string[] = [];
-  
+  const consumed = new Set<string>();
+
+  const take = (key: string): unknown => {
+    if (!(key in input)) return undefined;
+    consumed.add(key);
+    return input[key];
+  };
+
   lines.push(`📋 *${actionId}*`);
-  
-  if (input['to']) lines.push(`👤 אל: ${input['to']}`);
-  if (input['recipient']) lines.push(`👤 אל: ${input['recipient']}`);
-  if (input['email']) lines.push(`👤 אל: ${input['email']}`);
-  if (input['subject']) lines.push(`📌 נושא: ${input['subject']}`);
-  if (input['title']) lines.push(`📌 כותרת: ${input['title']}`);
-  if (input['name']) lines.push(`📛 שם: ${input['name']}`);
-  
-  if (input['body']) {
-    const body = String(input['body']);
-    const truncated = body.length > 100 ? body.slice(0, 100) + '...' : body;
-    lines.push(`📝 תוכן: ${truncated}`);
+
+  const to = take('to');
+  if (to !== undefined && to !== null && to !== '') {
+    lines.push(`👤 אל: ${formatRecipientList(to)}`);
   }
-  if (input['message']) {
-    const msg = String(input['message']);
-    const truncated = msg.length > 100 ? msg.slice(0, 100) + '...' : msg;
-    lines.push(`📝 הודעה: ${truncated}`);
+  const recipient = take('recipient');
+  if (recipient !== undefined && recipient !== null && recipient !== '') {
+    lines.push(`👤 אל: ${formatRecipientList(recipient)}`);
   }
-  if (input['content']) {
-    const content = String(input['content']);
-    const truncated = content.length > 100 ? content.slice(0, 100) + '...' : content;
-    lines.push(`📝 תוכן: ${truncated}`);
+  const email = take('email');
+  if (email !== undefined && email !== null && email !== '') {
+    lines.push(`👤 אל: ${formatRecipientList(email)}`);
   }
-  
-  if (input['start'] || input['startTime'] || input['start_time']) {
-    const start = input['start'] || input['startTime'] || input['start_time'];
+
+  // #180 — exfiltration / hidden-recipient channels must always appear
+  const cc = take('cc');
+  if (cc !== undefined && cc !== null && cc !== '') {
+    lines.push(`👥 עותק (cc): ${formatRecipientList(cc)}`);
+  }
+  const bcc = take('bcc');
+  if (bcc !== undefined && bcc !== null && bcc !== '') {
+    lines.push(`🙈 עותק מוסתר (bcc): ${formatRecipientList(bcc)}`);
+  }
+  const attendees = take('attendees');
+  if (attendees !== undefined && attendees !== null && attendees !== '') {
+    lines.push(`👥 מוזמנים: ${formatRecipientList(attendees)}`);
+  }
+
+  const subject = take('subject');
+  if (subject !== undefined && subject !== null && subject !== '') {
+    lines.push(`📌 נושא: ${subject}`);
+  }
+  const title = take('title');
+  if (title !== undefined && title !== null && title !== '') {
+    lines.push(`📌 כותרת: ${title}`);
+  }
+  const summary = take('summary');
+  if (summary !== undefined && summary !== null && summary !== '') {
+    lines.push(`📌 כותרת: ${summary}`);
+  }
+  const name = take('name');
+  if (name !== undefined && name !== null && name !== '') {
+    lines.push(`📛 שם: ${name}`);
+  }
+
+  const body = take('body');
+  if (body !== undefined && body !== null && body !== '') {
+    lines.push(`📝 תוכן: ${truncateField(body, 100)}`);
+  }
+  const message = take('message');
+  if (message !== undefined && message !== null && message !== '') {
+    lines.push(`📝 הודעה: ${truncateField(message, 100)}`);
+  }
+  const content = take('content');
+  if (content !== undefined && content !== null && content !== '') {
+    lines.push(`📝 תוכן: ${truncateField(content, 100)}`);
+  }
+  const description = take('description');
+  if (description !== undefined && description !== null && description !== '') {
+    lines.push(`📝 תיאור: ${truncateField(description, 100)}`);
+  }
+
+  const start = take('start') ?? take('startTime') ?? take('start_time');
+  if (start !== undefined && start !== null && start !== '') {
     lines.push(`🕐 התחלה: ${start}`);
   }
-  if (input['end'] || input['endTime'] || input['end_time']) {
-    const end = input['end'] || input['endTime'] || input['end_time'];
+  const end = take('end') ?? take('endTime') ?? take('end_time');
+  if (end !== undefined && end !== null && end !== '') {
     lines.push(`🕐 סיום: ${end}`);
   }
-  
-  if (lines.length === 1) {
-    const keys = Object.keys(input).slice(0, 3);
-    for (const key of keys) {
-      const val = input[key];
-      const strVal = typeof val === 'string' ? val : JSON.stringify(val);
-      const truncated = strVal.length > 50 ? strVal.slice(0, 50) + '...' : strVal;
-      lines.push(`• ${key}: ${truncated}`);
-    }
-    if (Object.keys(input).length > 3) {
-      lines.push(`_...ועוד ${Object.keys(input).length - 3} שדות_`);
+
+  const attachments = take('attachments');
+  if (attachments !== undefined && attachments !== null && attachments !== '') {
+    if (Array.isArray(attachments)) {
+      const names = attachments.map((a) => {
+        if (typeof a === 'string') return a;
+        if (a && typeof a === 'object') {
+          const o = a as Record<string, unknown>;
+          return String(o['filename'] ?? o['name'] ?? o['title'] ?? JSON.stringify(a));
+        }
+        return String(a);
+      });
+      lines.push(`📎 קבצים מצורפים: ${names.join(', ') || `(${attachments.length})`}`);
+    } else {
+      lines.push(`📎 קבצים מצורפים: ${truncateField(attachments, 80)}`);
     }
   }
-  
+
+  const forwardingEmail = take('forwardingEmail');
+  if (forwardingEmail !== undefined && forwardingEmail !== null && forwardingEmail !== '') {
+    lines.push(`↪️ העברה אל: ${formatRecipientList(forwardingEmail)}`);
+  }
+  const sendUpdates = take('sendUpdates');
+  if (sendUpdates !== undefined && sendUpdates !== null && sendUpdates !== '') {
+    lines.push(`📣 עדכון מוזמנים: ${sendUpdates}`);
+  }
+
+  const scope = take('scope');
+  if (scope !== undefined && scope !== null && scope !== '') {
+    if (scope && typeof scope === 'object') {
+      const s = scope as Record<string, unknown>;
+      const value = s['value'] ?? s['email'];
+      const kind = s['type'];
+      lines.push(`🔓 היקף גישה: ${value ?? JSON.stringify(scope)}${kind ? ` (${kind})` : ''}`);
+    } else {
+      lines.push(`🔓 היקף גישה: ${scope}`);
+    }
+  }
+
+  const action = take('action');
+  if (action !== undefined && action !== null && action !== '') {
+    if (action && typeof action === 'object') {
+      const a = action as Record<string, unknown>;
+      if (a['forward'] !== undefined && a['forward'] !== null && a['forward'] !== '') {
+        lines.push(`↪️ העברה אל: ${formatRecipientList(a['forward'])}`);
+      }
+      const other = { ...a };
+      delete other['forward'];
+      if (Object.keys(other).length > 0) {
+        lines.push(`⚙️ פעולה: ${truncateField(other, 80)}`);
+      }
+    } else {
+      lines.push(`⚙️ פעולה: ${truncateField(action, 80)}`);
+    }
+  }
+
+  // Remaining top-level keys — never hide a field just because `to` already matched
+  const remaining = Object.keys(input).filter((k) => !consumed.has(k));
+  for (const key of remaining) {
+    const val = input[key];
+    if (val === undefined || val === null || val === '') continue;
+    lines.push(`• ${key}: ${truncateField(val, 80)}`);
+  }
+
   return lines.join('\n');
 }
 
