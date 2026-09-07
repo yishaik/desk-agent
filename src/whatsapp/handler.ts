@@ -455,7 +455,7 @@ export async function handleMessage(message: Message): Promise<void> {
     log.debug({ projectId, messageId: message.id }, 'Message queued behind active processing');
   }
 
-  const result = enqueueInboundJob(message, chatJid, processDurableInbound);
+  const result = await enqueueInboundJob(message, chatJid, processDurableInbound);
   if (result === 'duplicate') {
     log.debug({ messageId: message.id }, 'Duplicate message job, skipping');
     return;

@@ -103,16 +103,19 @@ describe('durable message jobs (#199)', () => {
     const { enqueueInboundJob, openJobCount, waitForIdle } = await import('./queue.ts');
     const order: string[] = [];
 
-    const r1 = enqueueInboundJob(baseMessage, 'chat@jid', async () => {
+    const p1 = enqueueInboundJob(baseMessage, 'chat@jid', async () => {
       order.push('start');
       await sleep(30);
       order.push('end');
       return 'reply-text';
     });
-    const r2 = enqueueInboundJob(baseMessage, 'chat@jid', async () => {
+    // Second call while first is in-flight must hit duplicate accept
+    await sleep(5);
+    const r2 = await enqueueInboundJob(baseMessage, 'chat@jid', async () => {
       order.push('dup');
       return null;
     });
+    const r1 = await p1;
 
     expect(r1).toBe('queued');
     expect(r2).toBe('duplicate');
@@ -130,15 +133,16 @@ describe('durable message jobs (#199)', () => {
     const order: string[] = [];
     const mk = (id: string, body: string) => ({ ...baseMessage, id, body });
 
-    enqueueInboundJob(mk('m1', '/project other'), 'chat@jid', async (p) => {
+    const a = enqueueInboundJob(mk('m1', '/project other'), 'chat@jid', async (p) => {
       order.push(p.message.body);
       await sleep(40);
       return null;
     });
-    enqueueInboundJob(mk('m2', 'follow-up'), 'chat@jid', async (p) => {
+    const b = enqueueInboundJob(mk('m2', 'follow-up'), 'chat@jid', async (p) => {
       order.push(p.message.body);
       return null;
     });
+    await Promise.all([a, b]);
     expect(await waitForIdle(500)).toBe(true);
     expect(order).toEqual(['/project other', 'follow-up']);
   });

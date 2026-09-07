@@ -123,11 +123,11 @@ async function runClaimedJob(jobId: string, process: InboundProcessFn): Promise<
  * Accept inbound message as a durable job (id = WhatsApp message id) and run it
  * on the serial queue. Duplicate WA deliveries return `duplicate`.
  */
-export function enqueueInboundJob(
+export async function enqueueInboundJob(
   message: Message,
   chatJid: string,
   process?: InboundProcessFn
-): EnqueueInboundResult {
+): Promise<EnqueueInboundResult> {
   if (countOpenMessageJobs() >= MAX_QUEUE_DEPTH) {
     log.warn({ messageId: message.id, depth: MAX_QUEUE_DEPTH }, 'Message queue full');
     return 'full';
@@ -145,9 +145,9 @@ export function enqueueInboundJob(
     return 'queued';
   }
 
-  // Schedule on the serial chain; do not await — concurrency enters via Baileys
-  // while FIFO is preserved by `enqueue` (#77 / #199).
-  void enqueue(() => runClaimedJob(message.id, runProcess));
+  // Await this job on the serial chain so callers (and tests) observe completion
+  // while FIFO across concurrent handleMessage calls is still preserved (#77 / #199).
+  await enqueue(() => runClaimedJob(message.id, runProcess));
   return 'queued';
 }
 
