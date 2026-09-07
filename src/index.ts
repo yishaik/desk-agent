@@ -1,5 +1,5 @@
 import { getWhatsAppClient } from './whatsapp/client.ts';
-import { handleMessage } from './whatsapp/handler.ts';
+import { handleMessage, startDurableMessageQueue } from './whatsapp/handler.ts';
 import { startServer } from './http/server.ts';
 import { createChildLogger } from './core/logger.ts';
 import { closeDatabase, pruneMessages } from './core/memory.ts';
@@ -49,6 +49,7 @@ async function main(): Promise<void> {
 
   try {
     await wa.connect();
+    startDurableMessageQueue();
     log.info('WhatsApp client started');
   } catch (err) {
     log.error({ err }, 'Failed to start WhatsApp client');

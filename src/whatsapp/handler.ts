@@ -1,6 +1,6 @@
 import { createChildLogger } from '../core/logger.ts';
 import { loadSettings, updateSettings, getActiveConnectorToken } from '../core/settings.ts';
-import { saveMessage, listProjects, createProject, getProject, getMessage } from '../core/memory.ts';
+import { saveMessage, listProjects, createProject, getProject } from '../core/memory.ts';
 import { slugifyProjectName, ProjectIdValidationError } from '../core/projects.ts';
 import { getPublicSettingsUrl } from '../core/onboarding.ts';
 import { recordExecutedAction, consumeExecutedActionNotes, peekExecutedActionNotes } from '../core/confirmations.ts';
@@ -42,7 +42,7 @@ import {
   type ReactionTracker,
 } from './reaction-state.ts';
 import { isSelfChatJid, resolveReplyJid } from './self-chat.ts';
-import { enqueue } from './queue.ts';
+import { enqueueInboundJob, resumePendingJobs, setOutboundSender, MAX_QUEUE_DEPTH, type MessageJobPayload, type MessageJob } from './queue.ts';
 import {
   MEDIA_WITHOUT_TEXT_BODY,
   isStaleInbound,
@@ -415,22 +415,11 @@ export async function handleMessage(message: Message): Promise<void> {
     return;
   }
 
-  // Snapshot only for enqueue bookkeeping (dedupe + queue-wait reaction).
+  // Snapshot only for enqueue bookkeeping (queue-wait reaction).
   // processMessageQueued reloads settings so /project is visible to the next prompt (#77).
   const enqueueSettings = loadSettings();
   const projectId = enqueueSettings.activeProject;
   message.projectId = projectId;
-
-  if (getMessage(message.id)) {
-    log.debug({ messageId: message.id }, 'Duplicate message, skipping');
-    return;
-  }
-
-  const saved = saveMessage(message);
-  if (!saved) {
-    log.debug({ messageId: message.id }, 'Message already processed, skipping');
-    return;
-  }
 
   if (isStaleInbound(message.timestamp)) {
     log.info({ messageId: message.id, timestamp: message.timestamp }, 'Skipping stale inbound message');
@@ -458,19 +447,44 @@ export async function handleMessage(message: Message): Promise<void> {
   }
 
   // Everything else (model prompts, confirmations, /project) goes through the
-  // serial queue so a project switch finishes before the next prompt (#77).
+  // durable serial queue so a crash cannot drop work and /project stays ordered (#199).
   const wasActive = activeProcessing.size > 0;
 
-  // If the model is already working on this project, send ⏳ immediately so
-  // the user knows their message is queued, not lost.
   if (wasActive && tracker) {
     await safeReaction(tracker.messageKey!, 'queued');
     log.debug({ projectId, messageId: message.id }, 'Message queued behind active processing');
   }
 
-  const currentTask = enqueue(() => processMessageQueued(message, wa, chatJid, tracker));
+  const result = await enqueueInboundJob(message, chatJid, processDurableInbound);
+  if (result === 'duplicate') {
+    log.debug({ messageId: message.id }, 'Duplicate message job, skipping');
+    return;
+  }
+  if (result === 'full') {
+    await wa.sendMessage(
+      chatJid,
+      `⚠️ התור מלא (עד ${MAX_QUEUE_DEPTH} הודעות). נסה שוב בעוד רגע.`,
+      quoteArg(message, true)
+    );
+  }
+}
 
-  await currentTask;
+async function processDurableInbound(payload: MessageJobPayload): Promise<string | null> {
+  const { message, chatJid } = payload;
+  const wa = getWhatsAppClient();
+  const tracker = message.messageKey ? createReactionTracker(message.messageKey) : null;
+  return processMessageQueued(message, wa, chatJid, tracker);
+}
+
+/** Boot hook: re-drive pending/interrupted jobs after WhatsApp is up (#199). */
+export function startDurableMessageQueue(): void {
+  setOutboundSender(async (job: MessageJob) => {
+    const text = job.outboundReply;
+    if (!text) return;
+    const { message, chatJid } = job.payload;
+    await sendSplitMessage(chatJid, text, quoteArg(message));
+  });
+  resumePendingJobs(processDurableInbound);
 }
 
 async function handleCommandDirect(
@@ -512,7 +526,7 @@ async function processMessageQueued(
   wa: WhatsAppClient,
   chatJid: string,
   tracker: ReactionTracker | null
-): Promise<void> {
+): Promise<string | null> {
   const settings = loadSettings();
   const projectId = settings.activeProject;
   message.projectId = projectId;
@@ -523,7 +537,7 @@ async function processMessageQueued(
     // Unknown /commands are not an error — fall through to the model prompt (#141).
     if (message.body.startsWith(COMMAND_PREFIX)) {
       const handled = await handleCommandDirect(message, settings, wa, chatJid, tracker);
-      if (handled) return;
+      if (handled) return null;
     }
 
     // Confirmations ("yes", "כן") must be in the queue — they interact with
@@ -542,7 +556,7 @@ async function processMessageQueued(
         }
         await wa.sendMessage(chatJid, confirmResponse.response, quoteArg(message));
       }
-      return;
+      return null;
     }
 
     await updateReaction(tracker, 'reading');
@@ -551,16 +565,24 @@ async function processMessageQueued(
       const response = await processWithPi(message, settings, tracker);
       if (response) {
         await updateReaction(tracker, 'finished');
-        await sendSplitMessage(chatJid, response, quoteArg(message));
-      } else {
-        // Never fail silently — the user is staring at a chat with no reply.
-        await updateReaction(tracker, 'error');
-        await wa.sendMessage(chatJid, '⚠️ לא התקבלה תשובה מהמודל. נסה שוב, ואם זה חוזר — בדוק את חיבור ה-AI בהגדרות.', quoteArg(message));
+        try {
+          await sendSplitMessage(chatJid, response, quoteArg(message));
+          return null; // sent successfully — no pending outbound
+        } catch (sendErr) {
+          // Model work finished; persist reply for WA send-retry without re-running tools (#199).
+          log.error({ err: sendErr, messageId: message.id }, 'WhatsApp send failed after model reply');
+          return response;
+        }
       }
+      // Never fail silently — the user is staring at a chat with no reply.
+      await updateReaction(tracker, 'error');
+      await wa.sendMessage(chatJid, '⚠️ לא התקבלה תשובה מהמודל. נסה שוב, ואם זה חוזר — בדוק את חיבור ה-AI בהגדרות.', quoteArg(message));
+      return null;
     } catch (err) {
       log.error({ err }, 'Error processing message');
       await updateReaction(tracker, 'error');
       await wa.sendMessage(chatJid, `שגיאה: ${err instanceof Error ? err.message : 'Unknown error'}`, quoteArg(message));
+      throw err;
     }
   } finally {
     activeProcessing.delete(projectId);

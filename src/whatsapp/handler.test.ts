@@ -854,13 +854,17 @@ describe('Per-Project Processing Lock - Issue #33', () => {
       };
     });
 
-    vi.doMock('../core/memory.ts', () => ({
+    vi.doMock('../core/memory.ts', async (importOriginal) => {
+      const actual = await importOriginal<typeof import('../core/memory.ts')>();
+      return {
+        ...actual,
       saveMessage: vi.fn().mockReturnValue(true),
       getMessage: vi.fn().mockReturnValue(null),
       listProjects: vi.fn().mockReturnValue([]),
       createProject: vi.fn(),
       getProject: vi.fn(),
-    }));
+              };
+    });
 
     vi.doMock('../agent/claude-code.ts', () => ({
       isClaudeCodeConnected: vi.fn().mockReturnValue(false),
@@ -943,10 +947,14 @@ describe('Per-Project Processing Lock - Issue #33', () => {
       };
     });
 
-    vi.doMock('../core/memory.ts', () => ({
+    vi.doMock('../core/memory.ts', async (importOriginal) => {
+      const actual = await importOriginal<typeof import('../core/memory.ts')>();
+      return {
+        ...actual,
       saveMessage: vi.fn().mockReturnValue(true),
       getMessage: vi.fn().mockReturnValue(null),
-    }));
+              };
+    });
 
     vi.doMock('../agent/claude-code.ts', () => ({
       isClaudeCodeConnected: vi.fn().mockReturnValue(false),
@@ -1100,13 +1108,17 @@ describe('S-04 (#108) — handler must show payload before any execute', () => {
       };
     });
 
-    vi.doMock('../core/memory.ts', () => ({
+    vi.doMock('../core/memory.ts', async (importOriginal) => {
+      const actual = await importOriginal<typeof import('../core/memory.ts')>();
+      return {
+        ...actual,
       saveMessage: vi.fn().mockReturnValue(true),
       getMessage: vi.fn().mockReturnValue(null),
       listProjects: vi.fn().mockReturnValue([]),
       createProject: vi.fn(),
       getProject: vi.fn(),
-    }));
+              };
+    });
 
     vi.doMock('../agent/claude-code.ts', () => ({
       isClaudeCodeConnected: vi.fn().mockReturnValue(false),
@@ -1203,13 +1215,17 @@ describe('S-04 (#108) — handler must show payload before any execute', () => {
       };
     });
 
-    vi.doMock('../core/memory.ts', () => ({
+    vi.doMock('../core/memory.ts', async (importOriginal) => {
+      const actual = await importOriginal<typeof import('../core/memory.ts')>();
+      return {
+        ...actual,
       saveMessage: vi.fn().mockReturnValue(true),
       getMessage: vi.fn().mockReturnValue(null),
       listProjects: vi.fn().mockReturnValue([]),
       createProject: vi.fn(),
       getProject: vi.fn(),
-    }));
+              };
+    });
 
     vi.doMock('../agent/claude-code.ts', () => ({
       isClaudeCodeConnected: vi.fn().mockReturnValue(false),
@@ -1298,13 +1314,17 @@ describe('S-04 (#108) — handler must show payload before any execute', () => {
       };
     });
 
-    vi.doMock('../core/memory.ts', () => ({
+    vi.doMock('../core/memory.ts', async (importOriginal) => {
+      const actual = await importOriginal<typeof import('../core/memory.ts')>();
+      return {
+        ...actual,
       saveMessage: vi.fn().mockReturnValue(true),
       getMessage: vi.fn().mockReturnValue(null),
       listProjects: vi.fn().mockReturnValue([]),
       createProject: vi.fn(),
       getProject: vi.fn(),
-    }));
+              };
+    });
 
     vi.doMock('../agent/claude-code.ts', () => ({
       isClaudeCodeConnected: vi.fn().mockReturnValue(false),
@@ -1394,13 +1414,17 @@ describe('S-04 (#108) — handler must show payload before any execute', () => {
       };
     });
 
-    vi.doMock('../core/memory.ts', () => ({
+    vi.doMock('../core/memory.ts', async (importOriginal) => {
+      const actual = await importOriginal<typeof import('../core/memory.ts')>();
+      return {
+        ...actual,
       saveMessage: vi.fn().mockReturnValue(true),
       getMessage: vi.fn().mockReturnValue(null),
       listProjects: vi.fn().mockReturnValue([]),
       createProject: vi.fn(),
       getProject: vi.fn(),
-    }));
+              };
+    });
 
     vi.doMock('../agent/claude-code.ts', () => ({
       isClaudeCodeConnected: vi.fn().mockReturnValue(false),
