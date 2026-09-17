@@ -4,6 +4,7 @@ import { createChildLogger } from '../core/logger.ts';
 import { createHumanHandoff } from '../core/memory.ts';
 import type { IntentRouter, RouteDecision } from './typesafe-router.ts';
 import { TypeSafeIntentRouter } from './typesafe-router.ts';
+import { customerAcknowledgement } from './customer-copy.ts';
 
 const log = createChildLogger('customer-routing');
 
@@ -22,19 +23,6 @@ export function isAllowedCustomerMessage(message: Message): boolean {
   const handle = customerHandleFromJid(message.from);
   if (!handle) return false; // excludes groups, broadcasts, LIDs and system chats
   return config.customerAllowlist.has('*') || config.customerAllowlist.has(handle);
-}
-
-function customerReply(decision: RouteDecision): string | null {
-  if (decision.disposition === 'human_handoff') {
-    return 'קיבלנו את ההודעה. העברנו אותה לאדם מהצוות שיחזור אליך.';
-  }
-  switch (decision.intent) {
-    case 'booking': return 'קיבלנו את בקשת התור. נחזור אליך עם הפרטים.';
-    case 'question': return 'קיבלנו את השאלה. נחזור אליך עם תשובה.';
-    case 'other': return 'קיבלנו את ההודעה ונחזור אליך.';
-    case 'spam': return null;
-    case 'complaint': return 'קיבלנו את ההודעה. העברנו אותה לאדם מהצוות שיחזור אליך.';
-  }
 }
 
 function ownerNotice(message: Message, decision: RouteDecision, handoffId?: number): string {
@@ -57,7 +45,7 @@ export async function processCustomerInbound(
   }
 
   await sender.notifyOwner(ownerNotice(message, decision, handoffId));
-  const reply = customerReply(decision);
+  const reply = customerAcknowledgement(decision);
   if (reply) await sender.sendCustomer(message.from, reply);
   log.info({ messageId: message.id, intent: decision.intent, confidence: decision.confidence, disposition: decision.disposition }, 'Customer message routed');
   return decision;
