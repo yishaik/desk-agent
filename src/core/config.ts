@@ -13,6 +13,11 @@ export interface Config {
   connectorAdminToken?: string;
   modelApiKey?: string;
   modelApiUrl?: string;
+  typeSafeApiKey?: string;
+  typeSafeConfidenceThreshold: number;
+  typeSafeTimeoutMs: number;
+  customerInboundEnabled: boolean;
+  customerAllowlist: ReadonlySet<string>;
   logLevel: string;
   isProduction: boolean;
 }
@@ -71,6 +76,11 @@ export function loadConfig(): Config {
     connectorAdminToken: process.env['CONNECTOR_ADMIN_TOKEN'],
     modelApiKey: process.env['MODEL_API_KEY'],
     modelApiUrl: process.env['MODEL_API_URL'],
+    typeSafeApiKey: process.env['TYPESAFE_API_KEY'],
+    typeSafeConfidenceThreshold: parseFloat(getEnvOrDefault('TYPESAFE_CONFIDENCE_THRESHOLD', '0.75')),
+    typeSafeTimeoutMs: parseInt(getEnvOrDefault('TYPESAFE_TIMEOUT_MS', '5000'), 10),
+    customerInboundEnabled: getEnvOrDefault('CUSTOMER_INBOUND_ENABLED', 'false') === 'true',
+    customerAllowlist: new Set(getEnvOrDefault('CUSTOMER_ALLOWLIST', '').split(',').map((value) => value.trim()).filter(Boolean)),
     logLevel: getEnvOrDefault('LOG_LEVEL', 'info'),
     isProduction,
   };

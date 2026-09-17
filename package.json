@@ -13,7 +13,8 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "lint": "oxlint --max-warnings 0",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "eval:typesafe": "node --experimental-strip-types scripts/evaluate-typesafe-routing.mts"
   },
   "keywords": [
     "whatsapp",
@@ -29,6 +30,7 @@
   "dependencies": {
     "@earendil-works/pi-coding-agent": "^0.84.3",
     "@hapi/boom": "^10.0.1",
+    "@typesafe-ai/sdk": "^0.6.0",
     "@whiskeysockets/baileys": "^6.7.16",
     "better-sqlite3": "^11.7.0",
     "pino": "^9.6.0",

@@ -4,6 +4,7 @@ import { existsSync, mkdirSync } from 'node:fs';
 import { config } from './config.ts';
 import { createChildLogger } from './logger.ts';
 import type { Message, Project } from './types.ts';
+import type { RouteDecision } from '../routing/typesafe-router.ts';
 
 const log = createChildLogger('memory');
 
@@ -76,6 +77,21 @@ function initSchema(): void {
     );
     CREATE INDEX IF NOT EXISTS idx_message_jobs_status_created
       ON message_jobs(status, created_at);
+
+    CREATE TABLE IF NOT EXISTS human_handoffs (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      message_id TEXT NOT NULL UNIQUE,
+      customer_jid TEXT NOT NULL,
+      body TEXT NOT NULL,
+      intent TEXT NOT NULL,
+      confidence REAL NOT NULL,
+      probabilities TEXT NOT NULL,
+      reason TEXT,
+      status TEXT NOT NULL DEFAULT 'open',
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_handoffs_status_created
+      ON human_handoffs(status, created_at);
   `);
 
   const defaultProject = database
@@ -487,4 +503,45 @@ export function closeDatabase(): void {
     db = null;
     log.info('Database closed');
   }
+}
+
+
+/** Persist an escalation before notifying the owner. Duplicate WA deliveries reuse the row. */
+export function createHumanHandoff(message: Message, decision: RouteDecision): number {
+  const database = getDb();
+  database.prepare(
+    `INSERT OR IGNORE INTO human_handoffs
+      (message_id, customer_jid, body, intent, confidence, probabilities, reason)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`
+  ).run(
+    message.id,
+    message.from,
+    message.body,
+    decision.intent,
+    decision.confidence,
+    JSON.stringify(decision.probabilities),
+    decision.reason ?? null,
+  );
+  const row = database.prepare('SELECT id FROM human_handoffs WHERE message_id = ?').get(message.id) as { id: number };
+  return row.id;
+}
+
+export interface HumanHandoff {
+  id: number;
+  messageId: string;
+  customerJid: string;
+  body: string;
+  intent: string;
+  confidence: number;
+  reason?: string;
+  status: 'open' | 'closed';
+  createdAt: string;
+}
+
+export function listOpenHumanHandoffs(): HumanHandoff[] {
+  const rows = getDb().prepare(
+    `SELECT id, message_id, customer_jid, body, intent, confidence, reason, status, created_at
+     FROM human_handoffs WHERE status = 'open' ORDER BY id ASC`
+  ).all() as Array<{ id: number; message_id: string; customer_jid: string; body: string; intent: string; confidence: number; reason: string | null; status: 'open' | 'closed'; created_at: string }>;
+  return rows.map((row) => ({ id: row.id, messageId: row.message_id, customerJid: row.customer_jid, body: row.body, intent: row.intent, confidence: row.confidence, reason: row.reason ?? undefined, status: row.status, createdAt: row.created_at }));
 }

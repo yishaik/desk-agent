@@ -31,13 +31,13 @@ Each customer gets their own:
 
 There is no shared database or multi-tenant architecture. A compromise of one customer's stack does not affect others.
 
-### Owner-Only Message Gate (Self-Chat)
+### Split Owner and Customer Message Gates
 
-The WhatsApp client only processes messages that are:
-1. Sent by the owner to themselves (messages to yourself / self-chat)
-2. From the phone number that paired the WhatsApp session
+The owner assistant remains restricted to messages the paired owner sends to their own self-chat. That path alone can reach the model session, Open Connector tools, commands, and action confirmations.
 
-**The agent never responds to messages from other people.** Group messages are ignored. Direct messages from others are ignored. The agent only activates when you message yourself.
+A separate customer ingress exists but is disabled by default. It is active only when `CUSTOMER_INBOUND_ENABLED=true`, and then accepts only direct `@s.whatsapp.net` senders in `CUSTOMER_ALLOWLIST`. Groups, broadcasts, LIDs, system chats, and unlisted senders are dropped. Customer messages reach only the bounded TypeSafe router and canned acknowledgements. They cannot reach owner commands, model sessions, tools, confirmations, settings, or project selection.
+
+Low-confidence results, complaints, and TypeSafe service failures fail closed into a durable SQLite human-handoff record and notify the owner in self-chat. A wildcard allowlist (`*`) admits every direct sender and requires a separate abuse/rate-limit review before production use.
 
 ### Open Connector Credential Boundary
 

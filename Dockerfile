@@ -32,6 +32,7 @@ RUN npm ci --omit=dev \
 
 # Copy source code
 COPY src/ ./src/
+COPY scripts/ ./scripts/
 COPY tsconfig.json ./
 
 # Copy Pi skills directory if present

@@ -8,7 +8,7 @@ Personal WhatsApp agent for SMBs. One isolated Docker stack per customer: agent 
 
 ## What You Get
 
-- **WhatsApp agent** responding only to messages you send to yourself (self-chat)
+- **Owner assistant** in self-chat, plus an optional allowlisted customer-receptionist ingress (disabled by default)
 - **Browser-based setup** with QR pairing, AI provider OAuth, and identity configuration
 - **Open Connector integration** for SaaS tools (Gmail, Calendar, Notion, and 1000+ more)
 - **Settings dashboard** to manage identity, AI login, services, and WhatsApp connection
@@ -62,7 +62,7 @@ For other integrations, operators can open the Open Connector console at `https:
 ## WhatsApp Features
 
 - **Baileys** client with QR code pairing
-- **LID Message-yourself** for sending (self-chat only)
+- **LID Message-yourself** for the owner channel; optional direct-customer routing is separately gated
 - **Emoji reactions** to indicate processing status (reading → processing/thinking/tools → done/error)
 - **Graceful disconnect** on restart (socket.end, not logout - preserves pairing)
 - **515 error handling** after scan reconnects with existing creds (no wipe)
@@ -99,6 +99,7 @@ Send these to yourself in WhatsApp:
 | `/projects` | List all projects |
 | `/services` | List connected services |
 | `/settings` | View current settings |
+| `/handoffs` | List customer messages waiting for a person |
 | `/model [name]` | Switch AI model (must match the active engine) |
 
 ## AI Provider Login
@@ -119,6 +120,15 @@ prompt. Switch Claude Code models with `/model claude-code/<name>` in WhatsApp.
 ## Configuration
 
 All configuration is via environment variables. See `.env.example` for the full list.
+
+
+### Optional customer ingress and TypeSafe routing
+
+Customer ingress is disabled unless `CUSTOMER_INBOUND_ENABLED=true`. The client then admits only direct phone JIDs whose digits appear in `CUSTOMER_ALLOWLIST`; groups, broadcasts, LIDs, system chats, and unlisted senders remain outside the handler. `*` allows every direct sender and is not recommended until abuse controls are reviewed.
+
+Admitted messages are classified by TypeSafe Choice as `booking`, `question`, `complaint`, `spam`, or `other`. Complaints, TypeSafe failures, and results below `TYPESAFE_CONFIDENCE_THRESHOLD` are persisted in SQLite before the owner gets a self-chat notification. `/handoffs` lists open escalations. Confident routes send bounded acknowledgement text; spam gets no customer reply. The existing owner self-chat path and its tool confirmation gate are unchanged.
+
+Required only for this optional path: `TYPESAFE_API_KEY` (server side). The default threshold is `0.75`; tune it from labeled real messages before opening the allowlist broadly.
 
 ### Required Variables
 
