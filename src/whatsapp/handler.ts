@@ -1,6 +1,6 @@
 import { createChildLogger } from '../core/logger.ts';
 import { loadSettings, updateSettings, getActiveConnectorToken } from '../core/settings.ts';
-import { saveMessage, listProjects, createProject, getProject } from '../core/memory.ts';
+import { saveMessage, listProjects, createProject, getProject, listOpenHumanHandoffs } from '../core/memory.ts';
 import { slugifyProjectName, ProjectIdValidationError } from '../core/projects.ts';
 import { getPublicSettingsUrl } from '../core/onboarding.ts';
 import { recordExecutedAction, consumeExecutedActionNotes, peekExecutedActionNotes } from '../core/confirmations.ts';
@@ -44,6 +44,7 @@ import {
   type ReactionTracker,
 } from './reaction-state.ts';
 import { isSelfChatJid, resolveReplyJid } from './self-chat.ts';
+import { isAllowedCustomerMessage, processCustomerInbound } from '../routing/customer-inbound.ts';
 import { enqueueInboundJob, resumePendingJobs, setOutboundSender, MAX_QUEUE_DEPTH, type MessageJobPayload, type MessageJob } from './queue.ts';
 import {
   MEDIA_WITHOUT_TEXT_BODY,
@@ -82,7 +83,7 @@ const activeProcessing = new Set<string>();
  * Confirmation replies must NOT be in this list — they interact with the
  * pending-confirmation state that may be mid-update.
  */
-const QUEUE_BYPASS_COMMANDS = new Set(['help', 'status', 'projects', 'services', 'settings']);
+const QUEUE_BYPASS_COMMANDS = new Set(['help', 'status', 'projects', 'services', 'settings', 'handoffs']);
 
 async function safeReaction(messageKey: MessageKey, state: ReactionState): Promise<void> {
   try {
@@ -438,7 +439,19 @@ export async function handleMessage(message: Message): Promise<void> {
   }
 
   if (!isSelfChat(message)) {
-    log.debug({ from: message.from, to: message.to, isFromMe: message.isFromMe }, 'Ignoring non-self-chat message');
+    if (!isAllowedCustomerMessage(message)) {
+      log.debug({ from: message.from, to: message.to, isFromMe: message.isFromMe }, 'Ignoring message outside customer allowlist');
+      return;
+    }
+    const ownerChatJid = wa.getSelfChatJid();
+    if (!ownerChatJid) {
+      log.warn({ messageId: message.id }, 'Cannot route customer message without owner self-chat JID');
+      return;
+    }
+    await processCustomerInbound(message, {
+      sendCustomer: (jid, text) => wa.sendMessage(jid, text, quoteArg(message, true)),
+      notifyOwner: (text) => wa.sendMessage(ownerChatJid, text),
+    });
     return;
   }
 
@@ -692,6 +705,7 @@ async function handleCommand(text: string, settings: Settings): Promise<CommandR
 /projects - רשימת פרויקטים
 /services - רשימת שירותים מחוברים
 /settings - הצג הגדרות
+/handoffs - הצג פניות שמחכות לאדם
 /setup - הדרכה לחיבור שירותים ושינוי הגדרות
 /model [name] - החלף מודל
 
@@ -705,6 +719,16 @@ async function handleCommand(text: string, settings: Settings): Promise<CommandR
 
 _שלח הודעה לעצמך כדי לדבר עם הסוכן_`,
       };
+
+    case 'handoffs': {
+      const handoffs = listOpenHumanHandoffs();
+      if (handoffs.length === 0) return { handled: true, response: 'אין כרגע פניות שמחכות לאדם.' };
+      const lines = handoffs.slice(0, 20).map((item) =>
+        `#${item.id} · ${item.customerJid.split('@')[0]} · ${item.intent} (${Math.round(item.confidence * 100)}%)\n${item.body}`
+      );
+      const more = handoffs.length > 20 ? `\n\nועוד ${handoffs.length - 20} פניות.` : '';
+      return { handled: true, response: `*פניות שמחכות לאדם*\n\n${lines.join('\n\n')}${more}` };
+    }
 
     case 'status': {
       const wa = getWhatsAppClient();

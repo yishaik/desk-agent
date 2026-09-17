@@ -70,9 +70,9 @@ Runtime settings stored in `data/settings.json`.
 
 ## Security
 
-### Owner-Only Gate
+### Split Message Gates
 
-The WhatsApp client only processes messages from the owner (messages to yourself / self-chat). This is enforced in `src/whatsapp/client.ts`. The agent never responds to messages from other people.
+The owner self-chat is the only path to the general agent, commands, tools, and confirmations. Optional customer ingress is disabled by default and uses a direct-JID allowlist. Its messages reach only `src/routing/`, bounded acknowledgements, and the durable human-handoff queue. Never merge customer input into the owner agent path.
 
 ### Credential Boundary
 

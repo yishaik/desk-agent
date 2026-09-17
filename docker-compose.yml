@@ -32,6 +32,11 @@ services:
       - CONSOLE_URL=${CONSOLE_URL:-}
       - MODEL_API_KEY=${MODEL_API_KEY:-}
       - MODEL_API_URL=${MODEL_API_URL:-https://api.anthropic.com/v1/messages}
+      - TYPESAFE_API_KEY=${TYPESAFE_API_KEY:-}
+      - TYPESAFE_CONFIDENCE_THRESHOLD=${TYPESAFE_CONFIDENCE_THRESHOLD:-0.75}
+      - TYPESAFE_TIMEOUT_MS=${TYPESAFE_TIMEOUT_MS:-5000}
+      - CUSTOMER_INBOUND_ENABLED=${CUSTOMER_INBOUND_ENABLED:-false}
+      - CUSTOMER_ALLOWLIST=${CUSTOMER_ALLOWLIST:-}
       # ANTHROPIC_API_KEY intentionally NOT passed to container.
       # Claude Code must use subscription OAuth login, not API keys.
       # This prevents MODEL_API_KEY from silently replacing the customer's plan.

@@ -431,8 +431,10 @@ export class WhatsAppClient {
     const isFromMe = msg.key.fromMe ?? false;
     const remoteJid = msg.key.remoteJid;
 
-    if (!this.isOwnerMessage(remoteJid, isFromMe)) {
-      log.debug({ remoteJid }, 'Ignoring message from non-owner');
+    const isOwner = this.isOwnerMessage(remoteJid, isFromMe);
+    const isDirectCustomerCandidate = !isFromMe && remoteJid.endsWith('@s.whatsapp.net');
+    if (!isOwner && !(config.customerInboundEnabled && isDirectCustomerCandidate)) {
+      log.debug({ remoteJid }, 'Ignoring message outside owner/customer ingress policy');
       return;
     }
 
