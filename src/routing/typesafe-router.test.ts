@@ -38,6 +38,16 @@ describe('TypeSafeIntentRouter', () => {
     expect(result).toMatchObject({ disposition: 'human_handoff', reason: 'complaint' });
   });
 
+  it('hands unsupported or unclear intents to a person even at high confidence', async () => {
+    const { TypeSafeIntentRouter } = await import('./typesafe-router.ts');
+    const client = { systemOne: vi.fn().mockResolvedValue({ answers: { intent: {
+      choice: 'other', confidence: 1,
+      probabilities: { booking: 0, question: 0, complaint: 0, spam: 0, other: 1 },
+    } } }) };
+    const result = await new TypeSafeIntentRouter(client as never).route('היי');
+    expect(result).toMatchObject({ disposition: 'human_handoff', reason: 'unsupported_intent' });
+  });
+
   it('fails closed when TypeSafe is unavailable', async () => {
     const { TypeSafeIntentRouter } = await import('./typesafe-router.ts');
     const client = { systemOne: vi.fn().mockRejectedValue(new Error('offline')) };

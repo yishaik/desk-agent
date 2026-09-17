@@ -9,7 +9,7 @@ export interface RouteDecision {
   confidence: number;
   probabilities: Record<CustomerIntent, number>;
   disposition: 'route' | 'human_handoff';
-  reason?: 'low_confidence' | 'complaint' | 'service_error';
+  reason?: 'low_confidence' | 'complaint' | 'unsupported_intent' | 'service_error';
 }
 
 export interface IntentRouter {
@@ -64,6 +64,9 @@ export class TypeSafeIntentRouter implements IntentRouter {
 
       if (intent === 'complaint') {
         return { intent, confidence: answer.confidence, probabilities, disposition: 'human_handoff', reason: 'complaint' };
+      }
+      if (intent === 'other') {
+        return { intent, confidence: answer.confidence, probabilities, disposition: 'human_handoff', reason: 'unsupported_intent' };
       }
       if (answer.confidence < config.typeSafeConfidenceThreshold) {
         return { intent, confidence: answer.confidence, probabilities, disposition: 'human_handoff', reason: 'low_confidence' };
