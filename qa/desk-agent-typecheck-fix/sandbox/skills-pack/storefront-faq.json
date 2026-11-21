@@ -1,0 +1,53 @@
+{
+  "id": "storefront-faq",
+  "name": "Storefront FAQ",
+  "description": "Answer common business questions using your knowledge base - product info, policies, hours, pricing",
+  "version": "1.0.0",
+  "requiredServices": [],
+  "optionalServices": ["notion", "google-drive"],
+  "actions": [
+    "notion.search",
+    "notion.get_page",
+    "google-drive.search_files",
+    "google-drive.get_file"
+  ],
+  "prompts": {
+    "setup_faq": "Let's set up your FAQ knowledge base. I need to know:\n1. Business name and type\n2. Operating hours\n3. Location / service area\n4. Key products or services\n5. Common customer questions\n6. Policies (returns, shipping, etc.)\n\nI'll help you organize this information.",
+    "answer_question": "When someone asks a question, I'll:\n1. Search your knowledge base\n2. Provide an accurate answer based on your info\n3. Offer to connect them with you for complex queries",
+    "update_info": "Update your business information. Tell me what changed:\n- Hours\n- Prices\n- Policies\n- Products/services\n- Contact info"
+  },
+  "confirmationRequired": [
+    "notion.create_page",
+    "notion.update_page"
+  ],
+  "knowledgeBase": {
+    "categories": [
+      "hours",
+      "location",
+      "products",
+      "services",
+      "pricing",
+      "policies",
+      "contact",
+      "faq"
+    ]
+  },
+  "examples": [
+    {
+      "user": "מתי אתם פתוחים?",
+      "assistant": "Based on your business settings, I'll provide the operating hours. Let me check...",
+      "action": null
+    },
+    {
+      "user": "כמה עולה X?",
+      "assistant": "I'll look up the pricing for X in your knowledge base...",
+      "action": "notion.search"
+    },
+    {
+      "user": "מה מדיניות ההחזרות?",
+      "assistant": "Let me find your return policy information...",
+      "action": "notion.search"
+    }
+  ],
+  "fallbackResponse": "I don't have specific information about that. Would you like me to note this question so you can add the answer later?"
+}

@@ -1,0 +1,9 @@
+{
+  "reportReadBackVerified": true,
+  "testsPassed": 194,
+  "typecheckExit": 2,
+  "lintWarnings": 32,
+  "browserVerified": false,
+  "crmUpdated": false,
+  "success": false
+}
